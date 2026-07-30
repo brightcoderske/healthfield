@@ -1,0 +1,17 @@
+{
+  "name": "Healthfield Pharmacy",
+  "short_name": "Healthfield",
+  "description": "Caring Beyond Drugs",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#8b238e",
+  "icons": [
+    {
+      "src": "/healthfield-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

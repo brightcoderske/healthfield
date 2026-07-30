@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1785439490953,
+      "tag": "0000_little_dragon_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1785441416544,
+      "tag": "0001_mature_nuke",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1785441974984,
+      "tag": "0002_lean_wind_dancer",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1785443714948,
+      "tag": "0003_gigantic_martin_li",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1785446450743,
+      "tag": "0004_broken_patch",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1785450492759,
+      "tag": "0005_hesitant_daredevil",
+      "breakpoints": true
+    }
+  ]
+}
