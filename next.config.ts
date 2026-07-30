@@ -10,6 +10,11 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["192.168.100.3"],
+  turbopack: {
+    // CloudLinux keeps node_modules in /home/<user>/nodevenv and symlinks it
+    // into the app. The cPanel home path must therefore be the filesystem root.
+    root: process.env.TURBOPACK_ROOT || process.cwd(),
+  },
   poweredByHeader: false,
   compress: true,
   async headers() {
