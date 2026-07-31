@@ -17,6 +17,7 @@
 /.next/
 /.next-stale-*/
 /.next-previous/
+/.next.previous/
 /.cpanel-release-staging/
 /.vinext/
 /out/
@@ -30,6 +31,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+stderr.log
 .dev-server*.log
 
 # env files (can opt-in for committing if needed)
