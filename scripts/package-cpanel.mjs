@@ -23,6 +23,7 @@ const result = spawnSync("tar", [
   "--exclude=.next/dev",
   "--exclude=.next/standalone",
   ".next",
+  "public",
 ], { cwd: projectRoot, stdio: "inherit" });
 
 if (result.status !== 0) process.exit(result.status ?? 1);

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { spawnSync } from "node:child_process";
@@ -10,7 +10,9 @@ const projectRoot = resolve(import.meta.dirname, "..");
 const archive = resolve(projectRoot, "deploy", "healthfield-next-production.tar.gz");
 const stagingRoot = resolve(projectRoot, ".cpanel-release-staging");
 const stagedBuild = resolve(stagingRoot, ".next");
+const stagedPublic = resolve(stagingRoot, "public");
 const activeBuild = resolve(projectRoot, ".next");
+const activePublic = resolve(projectRoot, "public");
 
 // cPanel deployment tasks do not always inherit the Node application variables.
 // Load the private server environment file without overriding variables supplied
@@ -54,6 +56,11 @@ const previousBuild = resolve(projectRoot, ".next-previous");
 rmSync(previousBuild, { recursive: true, force: true });
 if (existsSync(activeBuild)) renameSync(activeBuild, previousBuild);
 renameSync(stagedBuild, activeBuild);
+// Merge versioned storefront assets while preserving server-created uploads.
+if (existsSync(stagedPublic)) {
+  mkdirSync(activePublic, { recursive: true });
+  cpSync(stagedPublic, activePublic, { recursive: true, force: true });
+}
 rmSync(stagingRoot, { recursive: true, force: true });
 
 const restartDirectory = resolve(projectRoot, "tmp");
