@@ -31,6 +31,16 @@ export async function createSessionToken(session: Session) {
     .sign(getSecret());
 }
 
+export async function createUploadToken(session: Session) {
+  return new SignJWT(session)
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .setIssuer("healthfield-pharmacy")
+    .setAudience("healthfield-upload")
+    .sign(getSecret());
+}
+
 export async function verifySessionToken(token: string) {
   const { payload } = await jwtVerify(token, getSecret(), {
     issuer: "healthfield-pharmacy",

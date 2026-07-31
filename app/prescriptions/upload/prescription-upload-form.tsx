@@ -1,6 +1,7 @@
 "use client";
 
 import { FileCheck2, Upload } from "lucide-react";
+import Link from "next/link";
 import { FormEvent, useState } from "react";
 
 export function PrescriptionUploadForm() {
@@ -11,7 +12,18 @@ export function PrescriptionUploadForm() {
     event.preventDefault();
     setUploading(true);
     setMessage("");
-    const response = await fetch("/api/prescriptions", { method: "POST", body: new FormData(event.currentTarget) });
+    const tokenResponse = await fetch("/api/auth/upload-token", { method: "POST" });
+    const uploadSession = await tokenResponse.json().catch(() => ({}));
+    if (!tokenResponse.ok) {
+      setMessage(uploadSession.error || "Upload could not be authorised.");
+      setUploading(false);
+      return;
+    }
+    const response = await fetch(`${uploadSession.apiUrl}/v1/prescriptions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${uploadSession.token}` },
+      body: new FormData(event.currentTarget),
+    });
     const data = await response.json().catch(() => ({}));
     setMessage(response.ok ? "Prescription received for pharmacist review." : data.error || "Upload failed.");
     if (response.ok) event.currentTarget.reset();
@@ -21,7 +33,7 @@ export function PrescriptionUploadForm() {
   return (
     <main className="prescription-upload-page">
       <form onSubmit={submit}>
-        <a href="/">← Continue shopping</a>
+        <Link href="/">← Continue shopping</Link>
         <Upload />
         <h1>Upload prescription</h1>
         <p>Upload a clear PDF, PNG, JPG or JPEG file. Maximum size: 10 MB.</p>

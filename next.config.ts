@@ -18,6 +18,9 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["192.168.100.3"],
   poweredByHeader: false,
   compress: true,
+  images: {
+    remotePatterns: [{ protocol: "https", hostname: "api.healthfieldpharmacy.co.ke", pathname: "/uploads/products/**" }],
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

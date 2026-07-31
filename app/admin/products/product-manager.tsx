@@ -40,9 +40,16 @@ export function ProductManager({ initialProducts, categories, conditions }: { in
     setSavingId(targetId);
     try {
       if (imageFile) {
+        const tokenResponse = await fetch("/api/auth/upload-token", { method: "POST" });
+        const uploadSession = await tokenResponse.json();
+        if (!tokenResponse.ok) return setMessage(uploadSession.error || "Image upload could not be authorised.");
         const upload = new FormData();
         upload.set("image", imageFile);
-        const uploadResponse = await fetch("/api/products/image", { method: "POST", body: upload });
+        const uploadResponse = await fetch(`${uploadSession.apiUrl}/v1/products/image`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${uploadSession.token}` },
+          body: upload,
+        });
         const uploadData = await uploadResponse.json();
         if (!uploadResponse.ok) return setMessage(uploadData.error || "Product image could not be uploaded.");
         payload.imageUrl = uploadData.imageUrl;

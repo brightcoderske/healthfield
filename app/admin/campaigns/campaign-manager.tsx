@@ -11,7 +11,7 @@ type Campaign = {
   recipientCount: number;
   successCount: number;
   failureCount: number;
-  createdAt: Date;
+  createdAt: string;
 };
 
 export function CampaignManager({ initialCampaigns }: { initialCampaigns: Campaign[] }) {
@@ -44,7 +44,7 @@ export function CampaignManager({ initialCampaigns }: { initialCampaigns: Campai
         recipientCount: data.recipientCount,
         successCount: data.successCount,
         failureCount: data.failureCount,
-        createdAt: new Date(),
+        createdAt: new Date().toISOString(),
       }, ...current]);
       event.currentTarget.reset();
     }

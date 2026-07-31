@@ -1,4 +1,3 @@
-import { count, desc, eq, lt, sql } from "drizzle-orm";
 import {
   Boxes,
   Building2,
@@ -15,8 +14,7 @@ import {
   UserCog,
 } from "lucide-react";
 import Image from "next/image";
-import { getDb } from "@/db";
-import { branchInventory, orders, prescriptions, products, users } from "@/db/schema";
+import { backendJson } from "@/lib/backend-api";
 import { requireRole } from "@/lib/auth";
 import { AdminMobileMenu } from "./admin-mobile-menu";
 
@@ -24,22 +22,7 @@ export const dynamic = "force-dynamic";
 
 export default async function AdminPage() {
   const session = await requireRole(["ADMIN", "SUPER_ADMIN"]);
-  const db = getDb();
-  const [
-    [{ value: newOrders }],
-    [{ value: pendingPrescriptions }],
-    [{ value: activeProducts }],
-    [{ value: lowStock }],
-    [{ value: customers }],
-    recentOrders,
-  ] = await Promise.all([
-    db.select({ value: count() }).from(orders).where(eq(orders.status, "NEW")),
-    db.select({ value: count() }).from(prescriptions).where(eq(prescriptions.status, "RECEIVED")),
-    db.select({ value: count() }).from(products).where(eq(products.isActive, true)),
-    db.select({ value: count() }).from(branchInventory).where(sql`${branchInventory.quantityAvailable} <= ${branchInventory.reorderLevel}`),
-    db.select({ value: count() }).from(users).where(eq(users.role, "CUSTOMER")),
-    db.select().from(orders).orderBy(desc(orders.createdAt)).limit(8),
-  ]);
+  const {newOrders,pendingPrescriptions,activeProducts,lowStock,customers,recentOrders}=await backendJson<{newOrders:number;pendingPrescriptions:number;activeProducts:number;lowStock:number;customers:number;recentOrders:Array<{id:number;orderNumber:string;customerName:string;deliveryArea:string|null;fulfilmentMethod:string;status:string;paymentStatus:string;total:string}>}>("/v1/views/admin/dashboard");
 
   return (
     <div className="admin-shell">

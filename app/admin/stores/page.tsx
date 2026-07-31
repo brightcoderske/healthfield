@@ -1,6 +1,3 @@
-import { desc } from "drizzle-orm";
-import { getDb } from "@/db";
-import { branches } from "@/db/schema";
-import { StoreManager } from "./store-manager";
-export const dynamic="force-dynamic";
-export default async function StoresPage(){const stores=await getDb().select().from(branches).orderBy(desc(branches.createdAt));return <StoreManager initialStores={stores}/>}
+import { backendJson } from "@/lib/backend-api";import { StoreManager } from "./store-manager";export const dynamic="force-dynamic";
+type Store={id:number;name:string;code:string;phone:string;email:string|null;address:string;isActive:boolean};
+export default async function StoresPage(){const {stores}=await backendJson<{stores:Store[]}>("/v1/views/admin/stores");return <StoreManager initialStores={stores}/>}

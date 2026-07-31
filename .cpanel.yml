@@ -1,5 +1,4 @@
 ---
 deployment:
   tasks:
-    # Install the production build compiled and committed from the local machine.
-    - /home/healthfi/nodevenv/healthfield/24/bin/node /home/healthfi/healthfield/scripts/deploy-cpanel.mjs
+    - /home/healthfi/nodevenv/healthfield-api/24/bin/node /home/healthfi/healthfield/scripts/deploy-api-cpanel.mjs

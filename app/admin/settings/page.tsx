@@ -1,8 +1,3 @@
-import { getDb } from "@/db";
-import { siteSettings } from "@/db/schema";
-import { SettingsForm } from "./settings-form";
-export const dynamic = "force-dynamic";
-export default async function SettingsPage() {
-  const [settings] = await getDb().select().from(siteSettings).limit(1);
-  return <SettingsForm initial={settings ?? null} />;
-}
+import { backendJson } from "@/lib/backend-api";import { SettingsForm } from "./settings-form";export const dynamic="force-dynamic";
+type Settings={pharmacyName:string;phone:string|null;whatsapp:string|null;supportEmail:string|null;address:string|null;openingHours:string|null;deliveryMessage:string;freeDeliveryThreshold:string|null;bulkSmsApiUrl:string|null;bulkSmsApiKey:string|null;bulkSmsSenderId:string|null;emailApiUrl:string|null;emailApiKey:string|null;campaignFromEmail:string|null;facebookUrl:string|null;instagramUrl:string|null;xUrl:string|null;tiktokUrl:string|null}|null;
+export default async function SettingsPage(){const {settings}=await backendJson<{settings:Settings}>("/v1/views/admin/settings");return <SettingsForm initial={settings}/>}

@@ -1,24 +1,7 @@
-import { CartView } from "./cart-view";
-import { eq } from "drizzle-orm";
-import { getDb } from "@/db";
-import { products } from "@/db/schema";
 import { cookies } from "next/headers";
+import { backendJson } from "@/lib/backend-api";
 import { CART_COOKIE, parseCart } from "@/lib/shopping-state";
-
-export const dynamic = "force-dynamic";
-
-export default async function CartPage({ searchParams }: { searchParams: Promise<{ add?: string }> }) {
-  const catalog = await getDb().select({
-    id: products.id,
-    name: products.name,
-    price: products.price,
-    discountPrice: products.discountPrice,
-    imageUrl: products.imageUrl,
-    packSize: products.packSize,
-  }).from(products).where(eq(products.isActive, true));
-  const addProductId = Number((await searchParams).add);
-  const jar = await cookies();
-  const initialCart = parseCart(jar.get(CART_COOKIE)?.value);
-  if (Number.isInteger(addProductId) && addProductId > 0) initialCart[addProductId] = (initialCart[addProductId] || 0) + 1;
-  return <CartView initialCatalog={catalog} initialCart={initialCart} />;
-}
+import { CartView } from "./cart-view";
+export const dynamic="force-dynamic";
+type Product={id:number;name:string;price:string;discountPrice:string|null;imageUrl:string|null;packSize:string|null};
+export default async function CartPage({searchParams}:{searchParams:Promise<{add?:string}>}){const initialCart=parseCart((await cookies()).get(CART_COOKIE)?.value),addProductId=Number((await searchParams).add);if(Number.isInteger(addProductId)&&addProductId>0)initialCart[addProductId]=(initialCart[addProductId]||0)+1;const ids=Object.keys(initialCart).join(","),data=await backendJson<{products:Product[]}>(`/v1/views/catalogue?ids=${encodeURIComponent(ids)}`);return <CartView initialCatalog={data.products} initialCart={initialCart}/>}

@@ -1,20 +1,7 @@
-import { inArray } from "drizzle-orm";
 import { cookies } from "next/headers";
-import { getDb } from "@/db";
-import { products } from "@/db/schema";
-import { parseWishlist, WISHLIST_COOKIE } from "@/lib/shopping-state";
+import { backendJson } from "@/lib/backend-api";
+import { parseWishlist,WISHLIST_COOKIE } from "@/lib/shopping-state";
 import { WishlistView } from "./wishlist-view";
-
-export const dynamic = "force-dynamic";
-
-export default async function WishlistPage() {
-  const ids = parseWishlist((await cookies()).get(WISHLIST_COOKIE)?.value);
-  const items = ids.length ? await getDb().select({
-    id: products.id,
-    name: products.name,
-    price: products.price,
-    discountPrice: products.discountPrice,
-    imageUrl: products.imageUrl,
-  }).from(products).where(inArray(products.id, ids)) : [];
-  return <WishlistView items={items} />;
-}
+export const dynamic="force-dynamic";
+type Product={id:number;name:string;price:string;discountPrice:string|null;imageUrl:string|null};
+export default async function WishlistPage(){const ids=parseWishlist((await cookies()).get(WISHLIST_COOKIE)?.value);const data=ids.length?await backendJson<{products:Product[]}>(`/v1/views/catalogue?ids=${ids.join(",")}`):{products:[]};return <WishlistView items={data.products}/>}

@@ -1,17 +1,3 @@
-import { asc, desc, eq } from "drizzle-orm";
-import { getDb } from "@/db";
-import { categories, healthConditions, productHealthConditions, products } from "@/db/schema";
-import { ProductManager } from "./product-manager";
-
-export const dynamic = "force-dynamic";
-
-export default async function AdminProductsPage() {
-  const db = getDb();
-  const [catalog, categoryRows, conditions, mappings] = await Promise.all([
-    db.select().from(products).orderBy(desc(products.createdAt)),
-    db.select().from(categories).where(eq(categories.isActive, true)).orderBy(asc(categories.displayOrder)),
-    db.select().from(healthConditions).where(eq(healthConditions.isActive, true)).orderBy(asc(healthConditions.displayOrder)),
-    db.select().from(productHealthConditions),
-  ]);
-  return <ProductManager initialProducts={catalog.map((product) => ({ ...product, price: Number(product.price), discountPrice: product.discountPrice ? Number(product.discountPrice) : null, conditionIds: mappings.filter((mapping) => mapping.productId === product.id).map((mapping) => mapping.conditionId) }))} categories={categoryRows} conditions={conditions} />;
-}
+import { backendJson } from "@/lib/backend-api";import { ProductManager } from "./product-manager";export const dynamic="force-dynamic";
+type Product={id:number;categoryId:number;name:string;brand:string|null;packSize:string|null;shortDescription:string|null;price:number;discountPrice:number|null;imageUrl:string|null;isFeatured:boolean;isActive:boolean;conditionIds:number[]};type Option={id:number;name:string};
+export default async function AdminProductsPage(){const data=await backendJson<{products:Product[];categories:Option[];conditions:Option[]}>("/v1/views/admin/products");return <ProductManager initialProducts={data.products} categories={data.categories} conditions={data.conditions}/>}
