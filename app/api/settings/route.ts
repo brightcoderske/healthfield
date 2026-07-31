@@ -20,6 +20,7 @@ const settingsSchema = z.object({
   emailApiUrl: z.string().trim().url().or(z.literal("")),
   emailApiKey: z.string().trim().max(500),
   campaignFromEmail: z.string().trim().email().or(z.literal("")),
+  facebookUrl:z.string().trim().url().or(z.literal("")), instagramUrl:z.string().trim().url().or(z.literal("")), xUrl:z.string().trim().url().or(z.literal("")), tiktokUrl:z.string().trim().url().or(z.literal("")),
 });
 
 export async function GET() {
@@ -57,6 +58,7 @@ export async function PUT(request: Request) {
     emailApiUrl: parsed.data.emailApiUrl || null,
     emailApiKey: parsed.data.emailApiKey || null,
     campaignFromEmail: parsed.data.campaignFromEmail || null,
+    facebookUrl:parsed.data.facebookUrl||null, instagramUrl:parsed.data.instagramUrl||null, xUrl:parsed.data.xUrl||null, tiktokUrl:parsed.data.tiktokUrl||null,
     updatedBy: session.userId,
   };
   const db = getDb();

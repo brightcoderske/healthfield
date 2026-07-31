@@ -1,7 +1,7 @@
 "use client";
 
-import { Mail, MessageSquareText, Send } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { Mail, MessageSquareText, Search, Send } from "lucide-react";
+import { FormEvent, useMemo, useState } from "react";
 
 type Campaign = {
   id: number;
@@ -18,6 +18,8 @@ export function CampaignManager({ initialCampaigns }: { initialCampaigns: Campai
   const [campaigns, setCampaigns] = useState(initialCampaigns);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
+  const [query,setQuery]=useState("");
+  const shown=useMemo(()=>campaigns.filter(campaign=>`${campaign.name} ${campaign.channel} ${campaign.status}`.toLowerCase().includes(query.toLowerCase())),[campaigns,query]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -63,13 +65,14 @@ export function CampaignManager({ initialCampaigns }: { initialCampaigns: Campai
         </form>
         <section>
           <h2>Campaign history</h2>
-          {campaigns.length === 0 ? <div className="database-empty"><Mail /><strong>No campaigns sent</strong></div> : campaigns.map((campaign) => (
+          <label className="campaign-search"><Search/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search campaigns"/><span>{shown.length} records</span></label>
+          {shown.length === 0 ? <div className="database-empty"><Mail /><strong>{query?"No matching campaigns":"No campaigns sent"}</strong></div> : <><div className="campaign-table-head"><span>Campaign</span><span>Status</span><span>Delivery</span></div>{shown.map((campaign) => (
             <article key={campaign.id}>
               <div><strong>{campaign.name}</strong><small>{campaign.channel.replaceAll("_", " ")} · {new Date(campaign.createdAt).toLocaleDateString()}</small></div>
               <span>{campaign.status}</span>
               <b>{campaign.successCount}/{campaign.recipientCount} sent</b>
             </article>
-          ))}
+          ))}</>}
         </section>
       </div>
     </main>

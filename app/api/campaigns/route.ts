@@ -1,4 +1,4 @@
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/db";
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message || "Invalid campaign." }, { status: 400 });
   const db = getDb();
   const [settings] = await db.select().from(siteSettings).limit(1);
-  const customers = await db.select({ email: users.email, phone: users.phone }).from(users).where(and(eq(users.role, "CUSTOMER"), eq(users.isActive, true)));
+  const customers = await db.select({ email: users.email, phone: users.phone }).from(users).where(and(eq(users.role, "CUSTOMER"), eq(users.isActive, true),eq(users.marketingConsent,true)));
   const wantsEmail = parsed.data.channel !== "SMS";
   const wantsSms = parsed.data.channel !== "EMAIL";
   if (wantsEmail && (!settings?.emailApiUrl || !settings.emailApiKey || !settings.campaignFromEmail)) return NextResponse.json({ error: "Configure the email campaign API in Settings first." }, { status: 400 });

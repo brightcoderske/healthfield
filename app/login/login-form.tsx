@@ -30,7 +30,8 @@ export function LoginForm() {
         return;
       }
       const requested = searchParams.get("next");
-      window.location.assign(data.redirectTo === "/change-password" ? data.redirectTo : requested || data.redirectTo);
+      const safeRequested=requested?.startsWith("/")&&!requested.startsWith("//")?requested:null;
+      window.location.assign(data.redirectTo === "/change-password" ? data.redirectTo : data.role === "CUSTOMER" ? "/#products" : safeRequested || data.redirectTo);
     } catch {
       setError("Healthfield could not connect to the login service. Please try again.");
       setLoading(false);

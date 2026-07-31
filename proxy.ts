@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
+import { requestUrl } from "@/lib/request-url";
 
 const protectedAreas: Array<{ prefix: string; roles: string[] }> = [
   { prefix: "/admin", roles: ["ADMIN", "SUPER_ADMIN"] },
@@ -20,7 +21,7 @@ export async function proxy(request: NextRequest) {
 
   const token = request.cookies.get("healthfield_session")?.value;
   if (!token) {
-    const login = new URL("/login", request.url);
+    const login = requestUrl(request,"/login");
     login.searchParams.set("next", request.nextUrl.pathname);
     return NextResponse.redirect(login);
   }
@@ -32,11 +33,11 @@ export async function proxy(request: NextRequest) {
       audience: "healthfield-web",
     });
     if (!rule.roles.includes(String(payload.role))) {
-      return NextResponse.redirect(new URL("/unauthorized", request.url));
+      return NextResponse.redirect(requestUrl(request,"/unauthorized"));
     }
     return NextResponse.next();
   } catch {
-    const response = NextResponse.redirect(new URL("/login", request.url));
+    const response = NextResponse.redirect(requestUrl(request,"/login"));
     response.cookies.delete("healthfield_session");
     return response;
   }

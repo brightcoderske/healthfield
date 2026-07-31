@@ -41,10 +41,10 @@ export async function POST(request: Request) {
   });
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
 
-  const redirectTo = user.forcePasswordChange ? "/change-password" : roleHome(user.role);
+  const redirectTo = user.forcePasswordChange ? "/change-password" : user.role === "CUSTOMER" ? "/#products" : roleHome(user.role);
   const response = isForm
     ? NextResponse.redirect(requestUrl(request, redirectTo), 303)
-    : NextResponse.json({ ok: true, redirectTo });
+    : NextResponse.json({ ok: true, redirectTo, role:user.role });
   response.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",

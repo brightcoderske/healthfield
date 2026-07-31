@@ -1,9 +1,10 @@
-import { eq, inArray } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/db";
 import { orderItems, orders, products } from "@/db/schema";
 import { getSession } from "@/lib/auth";
+import { sendTransactionalEmail } from "@/lib/email";
 
 const orderSchema = z.object({
   fullName: z.string().trim().min(3).max(200),
@@ -67,5 +68,7 @@ export async function POST(request: Request) {
     })));
     return created.insertId;
   });
+  if (input.email) await sendTransactionalEmail({ to: input.email, subject: `Order ${orderNumber} received`, message: `Hello ${input.fullName},\n\nWe have received your Healthfield Pharmacy order ${orderNumber}.\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}\nFulfilment: ${input.fulfilmentMethod === "DELIVERY" ? "Home delivery" : "Store pickup"}\n\nWe will keep you updated as your order is processed.` }).catch(console.error);
+  if(process.env.NOTIFICATION_EMAIL) await sendTransactionalEmail({to:process.env.NOTIFICATION_EMAIL,subject:`New order ${orderNumber}`,message:`A new order has been placed by ${input.fullName} (${input.phone}).\nTotal: KES ${(subtotal+deliveryFee).toLocaleString()}\nOpen the Healthfield admin dashboard to process it.`}).catch(console.error);
   return NextResponse.json({ ok: true, orderId: result, orderNumber, total: subtotal + deliveryFee }, { status: 201 });
 }

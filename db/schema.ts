@@ -30,6 +30,9 @@ export const users = mysqlTable("users", {
   forcePasswordChange: boolean("force_password_change").default(false).notNull(),
   homeBranchId: int("home_branch_id"),
   lastLoginAt: timestamp("last_login_at"),
+  termsAcceptedAt: timestamp("terms_accepted_at"),
+  marketingConsent: boolean("marketing_consent").default(false).notNull(),
+  marketingConsentAt: timestamp("marketing_consent_at"),
   ...timestamps,
 }, (table) => [
   uniqueIndex("users_email_unique").on(table.email),
@@ -197,9 +200,30 @@ export const siteSettings = mysqlTable("site_settings", {
   emailApiUrl: varchar("email_api_url", { length: 500 }),
   emailApiKey: varchar("email_api_key", { length: 500 }),
   campaignFromEmail: varchar("campaign_from_email", { length: 190 }),
+  facebookUrl: varchar("facebook_url", { length: 500 }),
+  instagramUrl: varchar("instagram_url", { length: 500 }),
+  xUrl: varchar("x_url", { length: 500 }),
+  tiktokUrl: varchar("tiktok_url", { length: 500 }),
   updatedBy: int("updated_by").references(() => users.id),
   ...timestamps,
 });
+
+export const chatConversations = mysqlTable("chat_conversations", {
+  id: int("id").autoincrement().primaryKey(),
+  customerId: int("customer_id").notNull().references(() => users.id),
+  status: mysqlEnum("status", ["OPEN", "CLOSED"]).default("OPEN").notNull(),
+  lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
+  ...timestamps,
+}, (table) => [uniqueIndex("chat_customer_unique").on(table.customerId), index("chat_queue_idx").on(table.status, table.lastMessageAt)]);
+
+export const chatMessages = mysqlTable("chat_messages", {
+  id: int("id").autoincrement().primaryKey(),
+  conversationId: int("conversation_id").notNull().references(() => chatConversations.id),
+  senderId: int("sender_id").notNull().references(() => users.id),
+  message: text("message").notNull(),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [index("chat_messages_conversation_idx").on(table.conversationId, table.createdAt)]);
 
 export const healthConditions = mysqlTable("health_conditions", {
   id: int("id").autoincrement().primaryKey(),

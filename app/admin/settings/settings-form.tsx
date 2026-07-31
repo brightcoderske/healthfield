@@ -9,6 +9,7 @@ type SettingsValue = {
   deliveryMessage: string; freeDeliveryThreshold: string | null;
   bulkSmsApiUrl: string | null; bulkSmsApiKey: string | null; bulkSmsSenderId: string | null;
   emailApiUrl: string | null; emailApiKey: string | null; campaignFromEmail: string | null;
+  facebookUrl:string|null; instagramUrl:string|null; xUrl:string|null; tiktokUrl:string|null;
 } | null;
 
 export function SettingsForm({ initial }: { initial: SettingsValue }) {
@@ -32,6 +33,12 @@ export function SettingsForm({ initial }: { initial: SettingsValue }) {
           <label>Support email<input name="supportEmail" type="email" defaultValue={initial?.supportEmail ?? ""} /></label>
           <label className="full">Address<textarea name="address" rows={3} defaultValue={initial?.address ?? ""} /></label>
           <label className="full">Opening hours<input name="openingHours" defaultValue={initial?.openingHours ?? ""} placeholder="Mon–Sun, 8am–10pm" /></label>
+        </div></section>
+        <section><h2>Social media</h2><p>These links appear in the customer storefront footer.</p><div>
+          <label>Facebook page<input name="facebookUrl" type="url" defaultValue={initial?.facebookUrl??""}/></label>
+          <label>Instagram page<input name="instagramUrl" type="url" defaultValue={initial?.instagramUrl??""}/></label>
+          <label>X / Twitter page<input name="xUrl" type="url" defaultValue={initial?.xUrl??""}/></label>
+          <label>TikTok page<input name="tiktokUrl" type="url" defaultValue={initial?.tiktokUrl??""}/></label>
         </div></section>
         <section><h2>Delivery</h2><div>
           <label className="full">Header delivery message<input name="deliveryMessage" defaultValue={initial?.deliveryMessage ?? "Fast Delivery Across Kenya"} required /></label>

@@ -1,63 +1,14 @@
-import { and, eq, sql } from "drizzle-orm";
-import { ArrowLeft, Package, ShieldCheck, Star } from "lucide-react";
+import { and,desc,eq,inArray,ne,sql } from "drizzle-orm";
+import { ArrowLeft,Heart,Package,ShieldCheck,ShoppingCart,Star } from "lucide-react";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { getDb } from "@/db";
-import { productReviews, products } from "@/db/schema";
+import { orderItems,productHealthConditions,productReviews,products } from "@/db/schema";
 import { ProductActions } from "./product-actions";
-
-export const dynamic = "force-dynamic";
-
-async function currentOrigin() {
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("x-forwarded-host") || requestHeaders.get("host");
-  const protocol = requestHeaders.get("x-forwarded-proto") || (host?.includes("localhost") || host?.startsWith("192.168.") ? "http" : "https");
-  return host ? `${protocol}://${host}` : process.env.APP_URL ?? "http://localhost:3000";
-}
-
-export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
-  const id = Number((await params).id);
-  const [product] = await getDb().select({
-    name: products.name,
-    shortDescription: products.shortDescription,
-    imageUrl: products.imageUrl,
-    isActive: products.isActive,
-  }).from(products).where(eq(products.id, id)).limit(1);
-  if (!product?.isActive) return { title: "Product not found" };
-  const description = product.shortDescription || `Buy ${product.name} from Healthfield Pharmacy.`;
-  const origin = await currentOrigin();
-  const previewImage = product.imageUrl || `${origin}/healthfield-logo-clean.png`;
-  return {
-    title: product.name,
-    description,
-    openGraph: {
-      title: product.name,
-      description,
-      type: "website",
-      images: [{ url: previewImage, alt: product.name }],
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: product.name,
-      description,
-      images: [previewImage],
-    },
-  };
-}
-
-export default async function ProductPage({ params }: { params: Promise<{ id: string }> }) {
-  const id = Number((await params).id);
-  const db = getDb();
-  const [product] = await db.select().from(products).where(eq(products.id, id)).limit(1);
-  if (!product || !product.isActive) notFound();
-  const [reviewSummary] = await db.select({
-    rating: sql<string | null>`avg(${productReviews.rating})`,
-    count: sql<number>`count(*)`,
-  }).from(productReviews).where(and(eq(productReviews.productId, id), eq(productReviews.isApproved, true)));
-  const rating = reviewSummary?.rating === null ? null : Number(reviewSummary?.rating);
-  const reviewCount = Number(reviewSummary?.count ?? 0);
-  const price = Number(product.discountPrice ?? product.price);
-  const productUrl = `${await currentOrigin()}/products/${product.id}`;
-  return <main className="product-detail"><a href="/#products"><ArrowLeft/> Back to products</a><section><div className="product-detail-image">{product.imageUrl?<img src={product.imageUrl} alt={product.name}/>:<div><Package/><span>Product image has not been added</span></div>}</div><div className="product-detail-copy"><span>{product.brand||"Healthfield Pharmacy"}</span><h1>{product.name}</h1>{rating&&<div className="detail-rating"><Star/>{rating.toFixed(1)} <small>{reviewCount} verified {reviewCount === 1 ? "review" : "reviews"}</small></div>}{product.packSize&&<p>{product.packSize}</p>}<strong>KES {price.toLocaleString()}</strong>{product.shortDescription&&<div className="product-description"><h2>Description</h2><p>{product.shortDescription}</p></div>}{product.prescriptionRequired&&<div className="prescription-note"><ShieldCheck/>A valid prescription is required before fulfilment.</div>}<ProductActions productId={product.id} productName={product.name} productUrl={productUrl}/></div></section></main>;
-}
+export const dynamic="force-dynamic";
+async function currentOrigin(){const h=await headers(),host=h.get("x-forwarded-host")||h.get("host"),protocol=h.get("x-forwarded-proto")||(host?.includes("localhost")||host?.startsWith("192.168.")?"http":"https");return host?`${protocol}://${host}`:process.env.APP_URL??"http://localhost:3000"}
+export async function generateMetadata({params}:{params:Promise<{id:string}>}):Promise<Metadata>{const id=Number((await params).id),[product]=await getDb().select({name:products.name,shortDescription:products.shortDescription,imageUrl:products.imageUrl,isActive:products.isActive}).from(products).where(eq(products.id,id)).limit(1);if(!product?.isActive)return{title:"Product not found"};const description=product.shortDescription||`Buy ${product.name} from Healthfield Pharmacy.`,origin=await currentOrigin(),previewImage=product.imageUrl||`${origin}/healthfield-logo-clean.png`;return{title:product.name,description,openGraph:{title:product.name,description,type:"website",images:[{url:previewImage,alt:product.name}]},twitter:{card:"summary_large_image",title:product.name,description,images:[previewImage]}}}
+type Recommendation={id:number;name:string;imageUrl:string|null;price:string;discountPrice:string|null;packSize:string|null};
+function ProductRail({title,subtitle,items}:{title:string;subtitle:string;items:Recommendation[]}){if(!items.length)return null;return <section className="recommendation-section"><header><div><h2>{title}</h2><p>{subtitle}</p></div><a href="/#products">View more</a></header><div className="approved-products recommendation-products">{items.map(item=><article className="approved-product" key={item.id}><a className="approved-product-main" href={`/products/${item.id}`}><div className="approved-product-image">{item.imageUrl?<img src={item.imageUrl} alt={item.name}/>:<div className="product-image-missing"><Package/><small>Image pending</small></div>}</div><div className="approved-product-info"><h3>{item.name}</h3>{item.packSize&&<small>{item.packSize}</small>}</div></a><form action="/api/wishlist" method="post" className="product-wishlist-form"><input type="hidden" name="productId" value={item.id}/><input type="hidden" name="return" value={`/products/${item.id}`}/><button className="approved-wishlist" aria-label={`Save ${item.name}`}><Heart/></button></form><div className="product-card-footer"><strong>KES {Number(item.discountPrice??item.price).toLocaleString()}</strong><form action="/api/cart" method="post"><input type="hidden" name="productId" value={item.id}/><input type="hidden" name="action" value="add"/><input type="hidden" name="return" value={`/products/${item.id}`}/><button className="approved-cart" aria-label={`Add ${item.name} to cart`}><ShoppingCart/></button></form></div></article>)}</div></section>}
+export default async function ProductPage({params}:{params:Promise<{id:string}>}){const id=Number((await params).id),db=getDb(),[product]=await db.select().from(products).where(eq(products.id,id)).limit(1);if(!product||!product.isActive)notFound();const [reviewSummary,conditionLinks,orderLinks]=await Promise.all([db.select({rating:sql<string|null>`avg(${productReviews.rating})`,count:sql<number>`count(*)`}).from(productReviews).where(and(eq(productReviews.productId,id),eq(productReviews.isApproved,true))).then(rows=>rows[0]),db.select({conditionId:productHealthConditions.conditionId}).from(productHealthConditions).where(eq(productHealthConditions.productId,id)),db.select({orderId:orderItems.orderId}).from(orderItems).where(eq(orderItems.productId,id)).limit(100)]);const base={id:products.id,name:products.name,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice,packSize:products.packSize};const [related,similar,bought]=await Promise.all([db.select(base).from(products).where(and(eq(products.categoryId,product.categoryId),eq(products.isActive,true),ne(products.id,id))).orderBy(desc(products.isFeatured),desc(products.createdAt)).limit(10),conditionLinks.length?db.select(base).from(products).innerJoin(productHealthConditions,eq(productHealthConditions.productId,products.id)).where(and(inArray(productHealthConditions.conditionId,conditionLinks.map(row=>row.conditionId)),eq(products.isActive,true),ne(products.id,id))).groupBy(products.id).orderBy(desc(products.isFeatured)).limit(10):Promise.resolve([]),orderLinks.length?db.select({...base,purchases:sql<number>`sum(${orderItems.quantity})`}).from(orderItems).innerJoin(products,eq(products.id,orderItems.productId)).where(and(inArray(orderItems.orderId,orderLinks.map(row=>row.orderId)),ne(products.id,id),eq(products.isActive,true))).groupBy(products.id).orderBy(desc(sql<number>`sum(${orderItems.quantity})`)).limit(10):Promise.resolve([])]);const rating=reviewSummary?.rating===null?null:Number(reviewSummary?.rating),reviewCount=Number(reviewSummary?.count??0),price=Number(product.discountPrice??product.price),productUrl=`${await currentOrigin()}/products/${product.id}`,boughtItems=bought.length?bought:related.slice(0,6),similarItems=similar.filter(item=>!related.some(r=>r.id===item.id)).length?similar.filter(item=>!related.some(r=>r.id===item.id)):related.slice().reverse();return <main className="product-detail"><a href="/#products"><ArrowLeft/> Back to products</a><section className="product-primary"><div className="product-detail-image">{product.imageUrl?<img src={product.imageUrl} alt={product.name}/>:<div><Package/><span>Product image has not been added</span></div>}</div><div className="product-detail-copy"><span>{product.brand||"Healthfield Pharmacy"}</span><h1>{product.name}</h1>{rating&&<div className="detail-rating"><Star/>{rating.toFixed(1)} <small>{reviewCount} verified {reviewCount===1?"review":"reviews"}</small></div>}{product.packSize&&<p>{product.packSize}</p>}<strong>KES {price.toLocaleString()}</strong>{product.shortDescription&&<div className="product-description"><h2>Description</h2><p>{product.shortDescription}</p></div>}<div className="availability-pill">Available to order</div>{product.prescriptionRequired&&<div className="prescription-note"><ShieldCheck/>A valid prescription is required before this order can be processed. <a href="/prescriptions/upload">Upload prescription</a></div>}<ProductActions productId={product.id} productName={product.name} productUrl={productUrl}/><a className="contact-pharmacy" href="/contact">Need advice? Contact our pharmacy team</a></div></section><section className="product-information"><h2>Product information</h2><div>{product.description&&<article><h3>Details</h3><p>{product.description}</p></article>}{product.usageInformation&&<article><h3>How to use</h3><p>{product.usageInformation}</p></article>}{product.warnings&&<article><h3>Important warnings</h3><p>{product.warnings}</p></article>}{product.storageInformation&&<article><h3>Storage</h3><p>{product.storageInformation}</p></article>}</div></section><ProductRail title="Frequently bought together" subtitle="Products customers often purchase in the same order." items={boughtItems}/><ProductRail title="People also like" subtitle="Popular choices for similar health needs." items={similarItems}/><ProductRail title="More from this category" subtitle="Keep exploring products selected for you." items={related}/></main>}

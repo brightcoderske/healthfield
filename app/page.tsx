@@ -24,7 +24,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ o
     reviewCount: number;
     discountPrice: number | null;
   }> = [];
-  let contact = { phone: "", whatsapp: "", deliveryMessage: "Fast Delivery Across Kenya" };
+  let contact = { phone: "", whatsapp: "", supportEmail:"", address:"", openingHours:"", deliveryMessage: "Fast Delivery Across Kenya", facebookUrl: "", instagramUrl: "", xUrl: "", tiktokUrl: "" };
   let categoryRows: Array<{ id: number; name: string; slug: string }> = [];
   let conditionRows: Array<{ id: number; name: string; slug: string }> = [];
   try {
@@ -45,8 +45,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ o
       .leftJoin(productReviews, eq(productReviews.productId, products.id))
       .where(eq(products.isActive, true))
       .groupBy(products.id)
-      .orderBy(desc(products.isFeatured), desc(products.createdAt))
-      .limit(50);
+      .orderBy(desc(products.isFeatured), desc(products.createdAt));
     const mappings = await db.select().from(productHealthConditions);
     catalog = rows.map((row) => ({
       ...row,
@@ -60,7 +59,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ o
     if (settings) contact = {
       phone: settings.phone ?? "",
       whatsapp: settings.whatsapp ?? "",
+      supportEmail:settings.supportEmail??"", address:settings.address??"", openingHours:settings.openingHours??"",
       deliveryMessage: settings.deliveryMessage,
+      facebookUrl: settings.facebookUrl ?? "", instagramUrl: settings.instagramUrl ?? "", xUrl: settings.xUrl ?? "", tiktokUrl: settings.tiktokUrl ?? "",
     };
     categoryRows = await db.select({ id: categories.id, name: categories.name, slug: categories.slug })
       .from(categories).where(eq(categories.isActive, true)).orderBy(categories.displayOrder);
