@@ -8,6 +8,9 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
     "build": "next build --webpack",
+    "package:cpanel": "node scripts/package-cpanel.mjs",
+    "release:cpanel": "npm run build && npm run package:cpanel",
+    "deploy:cpanel": "node scripts/deploy-cpanel.mjs",
     "start": "node server.cjs",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

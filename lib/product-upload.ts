@@ -6,5 +6,5 @@ export const PRODUCT_IMAGE_TYPES: Record<string, string> = {
 };
 
 export function productUploadDirectory() {
-  return path.resolve(process.env.PRODUCT_UPLOAD_PATH || path.join(process.cwd(), "public", "uploads", "products"));
+  return path.resolve(process.cwd(), "public", "uploads", "products");
 }

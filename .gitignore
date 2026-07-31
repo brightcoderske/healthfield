@@ -16,6 +16,8 @@
 # next.js
 /.next/
 /.next-stale-*/
+/.next-previous/
+/.cpanel-release-staging/
 /.vinext/
 /out/
 
@@ -49,4 +51,6 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
-/deploy/
+/tmp/
+/deploy/*
+!/deploy/healthfield-next-production.tar.gz
