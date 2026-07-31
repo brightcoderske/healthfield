@@ -1,8 +1,9 @@
 import { randomUUID } from "crypto";
-import { mkdir, writeFile } from "fs/promises";
 import path from "path";
+import { mkdir, writeFile } from "fs/promises";
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
+import { productUploadDirectory } from "@/lib/product-upload";
 
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const allowedTypes = new Map([
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
   if (image.size <= 0 || image.size > MAX_IMAGE_BYTES) return NextResponse.json({ error: "Product images must be 2 MB or smaller." }, { status: 413 });
   const bytes = Buffer.from(await image.arrayBuffer());
   const filename = `${randomUUID()}.${extension}`;
-  const directory = path.join(process.cwd(), "public", "uploads", "products");
+  const directory = productUploadDirectory();
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, filename), bytes, { flag: "wx" });
   return NextResponse.json({ imageUrl: `/uploads/products/${filename}` }, { status: 201 });

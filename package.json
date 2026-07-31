@@ -15,7 +15,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:create": "node scripts/create-database.mjs",
     "db:seed": "node scripts/seed-admin.mjs"
-    ,"db:sync-inventory": "node --env-file=.env.local scripts/sync-inventory.mjs"
+    ,"db:sync-inventory": "node scripts/sync-inventory.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
