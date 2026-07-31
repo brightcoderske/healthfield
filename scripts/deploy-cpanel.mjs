@@ -1,12 +1,34 @@
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { loadEnvFile } from "node:process";
 import { spawnSync } from "node:child_process";
+import { drizzle } from "drizzle-orm/mysql2";
+import { migrate } from "drizzle-orm/mysql2/migrator";
+import mysql from "mysql2/promise";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const archive = resolve(projectRoot, "deploy", "healthfield-next-production.tar.gz");
 const stagingRoot = resolve(projectRoot, ".cpanel-release-staging");
 const stagedBuild = resolve(stagingRoot, ".next");
 const activeBuild = resolve(projectRoot, ".next");
+
+// cPanel deployment tasks do not always inherit the Node application variables.
+// Load the private server environment file without overriding variables supplied
+// by the hosting platform, then migrate before changing the active build.
+const environmentFile = resolve(projectRoot, ".env");
+if (existsSync(environmentFile)) loadEnvFile(environmentFile);
+if (!process.env.DATABASE_URL) {
+  console.error("DATABASE_URL is required to run production migrations.");
+  process.exit(1);
+}
+
+const pool = mysql.createPool({ uri: process.env.DATABASE_URL, connectionLimit: 1 });
+try {
+  await migrate(drizzle(pool), { migrationsFolder: resolve(projectRoot, "drizzle") });
+  console.log("Database migrations completed.");
+} finally {
+  await pool.end();
+}
 
 if (!existsSync(archive)) {
   console.error("Compiled cPanel archive is missing. Pull the latest Git release first.");

@@ -1,8 +1,5 @@
 ---
 deployment:
   tasks:
-    # Apply tracked schema changes before exposing code that depends on them.
-    # A migration failure stops the release and leaves the current site running.
-    - cd /home/healthfi/healthfield && /home/healthfi/nodevenv/healthfield/24/bin/npm run db:migrate
     # Install the production build compiled and committed from the local machine.
     - /home/healthfi/nodevenv/healthfield/24/bin/node /home/healthfi/healthfield/scripts/deploy-cpanel.mjs
