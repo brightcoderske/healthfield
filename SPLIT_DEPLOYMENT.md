@@ -33,17 +33,19 @@ Do not commit the real `.env` file or paste secrets into Vercel build logs.
 
 ## 3. NovaHost API application
 
-The repository deployment installs the compiled archive at `/home/healthfi/healthfield-api`. Create the cPanel **Setup Node.js App** entry with:
+Clone the Git repository at `/home/healthfi/health_field`. Create the cPanel **Setup Node.js App** entry with:
 
 - Node version: 24 (22.13 or newer is supported)
 - Application mode: Production
-- Application root: `healthfield-api`
+- Application root: `health_field/api-service`
 - Application URL: `https://api.healthfieldpharmacy.co.ke`
 - Startup file: `server.cjs`
 
-The release is already bundled; cPanel does not need to run `npm install` or discover an npm script. Git deployment uses `.cpanel.yml` and the tracked `deploy/healthfield-api-production.tar.gz` archive.
+Git deployment uses the root `.cpanel.yml`. It activates the cPanel Node.js 24 environment, installs the exact dependencies from `pnpm-lock.yaml` only on the first deploy or when that lockfile changes, checks and bundles the API, applies pending Drizzle migrations, prepares persistent upload storage, and then requests a Passenger restart with `api-service/tmp/restart.txt`. A failed install, type check, build, or migration stops the deployment before the restart.
 
-Create `/home/healthfi/healthfield-api/.env` from `api-service/.env.example` and supply the real values:
+In cPanel **Git Version Control**, use **Update from Remote** and then **Deploy HEAD Commit**. cPanel runs `.cpanel.yml` during the deploy action. A normal Git push updates the remote repository but does not, by itself, make every cPanel installation pull and deploy; fully unattended push-to-deploy additionally requires the host's webhook/API or a cPanel cron job.
+
+Create `/home/healthfi/health_field/api-service/.env` from `api-service/.env.example` and supply the real values. Git ignores this file, so pulls and deployments leave it untouched:
 
 ```dotenv
 NODE_ENV=production
@@ -82,6 +84,8 @@ Before switching traffic, **copy** existing files into those directories:
 
 - old `public/uploads/products/*` to `healthfield-storage/uploads/products/`
 - old private prescription storage to `healthfield-storage/prescriptions/`
+
+The Git deployment automatically copies any legacy files found in `/home/healthfi/health_field/public/uploads/products` into persistent storage without overwriting an existing file. The API serves product files publicly at `https://api.healthfieldpharmacy.co.ke/uploads/products/FILENAME`, and catalogue responses convert stored `/uploads/products/...` values to that API hostname. Keep `STORAGE_ROOT=/home/healthfi/healthfield-storage` in `api-service/.env` so uploads, reads, and deployment storage all point to the same directory.
 
 Compare file counts and open representative files before considering removal of an old copy. Never put prescription files in a public web directory.
 

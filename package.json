@@ -21,6 +21,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:migrate:api": "node scripts/migrate-api.mjs",
     "db:create": "node scripts/create-database.mjs",
     "db:seed": "node scripts/seed-admin.mjs",
     "db:sync-inventory": "node scripts/sync-inventory.mjs"

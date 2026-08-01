@@ -1,4 +1,4 @@
 ---
 deployment:
   tasks:
-    - /home/healthfi/nodevenv/healthfield-api/24/bin/node /home/healthfi/healthfield/scripts/deploy-api-cpanel.mjs
+    - /bin/bash /home/healthfi/health_field/scripts/deploy-api-git-cpanel.sh
