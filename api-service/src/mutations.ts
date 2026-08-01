@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import bcrypt, { hash } from "bcryptjs";
-import { and, desc, eq, inArray, ne, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, orderItems, orders,
@@ -10,7 +10,7 @@ import {
 } from "../../db/schema";
 import { createPasswordResetToken, createSessionToken, requireSession, requestSession, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
-import { sendEmail } from "./email";
+import { sendBulkEmail, sendEmail } from "./email";
 import { json, publicImageUrl, safeFilename } from "./http";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
@@ -355,12 +355,11 @@ export async function handleSettings(request: Request) {
     pharmacyName: z.string().trim().min(2).max(150), phone: z.string().trim().max(30), whatsapp: z.string().trim().max(30), supportEmail: z.string().trim().email().or(z.literal("")),
     address: z.string().trim().max(1000), openingHours: z.string().trim().max(255), deliveryMessage: z.string().trim().min(2).max(255), freeDeliveryThreshold: z.coerce.number().nonnegative().optional(),
     bulkSmsApiUrl: z.string().trim().url().or(z.literal("")), bulkSmsApiKey: z.string().trim().max(500), bulkSmsSenderId: z.string().trim().max(50),
-    emailApiUrl: z.string().trim().url().or(z.literal("")), emailApiKey: z.string().trim().max(500), campaignFromEmail: z.string().trim().email().or(z.literal("")),
     facebookUrl: z.string().trim().url().or(z.literal("")), instagramUrl: z.string().trim().url().or(z.literal("")), xUrl: z.string().trim().url().or(z.literal("")), tiktokUrl: z.string().trim().url().or(z.literal("")),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid settings." }, { status: 400 });
   const data = parsed.data;
-  const values = { ...data, phone: data.phone || null, whatsapp: data.whatsapp || null, supportEmail: data.supportEmail || null, address: data.address || null, openingHours: data.openingHours || null, freeDeliveryThreshold: data.freeDeliveryThreshold?.toString() ?? null, bulkSmsApiUrl: data.bulkSmsApiUrl || null, bulkSmsApiKey: data.bulkSmsApiKey || null, bulkSmsSenderId: data.bulkSmsSenderId || null, emailApiUrl: data.emailApiUrl || null, emailApiKey: data.emailApiKey || null, campaignFromEmail: data.campaignFromEmail || null, facebookUrl: data.facebookUrl || null, instagramUrl: data.instagramUrl || null, xUrl: data.xUrl || null, tiktokUrl: data.tiktokUrl || null, updatedBy: auth.session.userId };
+  const values = { ...data, phone: data.phone || null, whatsapp: data.whatsapp || null, supportEmail: data.supportEmail || null, address: data.address || null, openingHours: data.openingHours || null, freeDeliveryThreshold: data.freeDeliveryThreshold?.toString() ?? null, bulkSmsApiUrl: data.bulkSmsApiUrl || null, bulkSmsApiKey: data.bulkSmsApiKey || null, bulkSmsSenderId: data.bulkSmsSenderId || null, facebookUrl: data.facebookUrl || null, instagramUrl: data.instagramUrl || null, xUrl: data.xUrl || null, tiktokUrl: data.tiktokUrl || null, updatedBy: auth.session.userId };
   const [current] = await db.select({ id: siteSettings.id }).from(siteSettings).limit(1);
   if (current) await db.update(siteSettings).set(values).where(eq(siteSettings.id, current.id)); else await db.insert(siteSettings).values(values);
   return json({ ok: true });
@@ -412,18 +411,26 @@ export async function handleStores(request: Request, id?: number) {
 export async function handleCampaigns(request: Request) {
   const auth = await requireSession(request, [...admins]);
   if ("response" in auth) return auth.response;
-  const parsed = z.object({ name: z.string().trim().min(2).max(180), channel: z.enum(["EMAIL", "SMS", "EMAIL_AND_SMS"]), subject: z.string().trim().max(220).optional().default(""), message: z.string().trim().min(2).max(3000) }).safeParse(await body(request));
+  const parsed = z.object({ name:z.string().trim().min(2).max(180),channel:z.enum(["EMAIL","SMS","EMAIL_AND_SMS"]),subject:z.string().trim().max(220).optional().default(""),message:z.string().trim().min(2).max(3000),audience:z.enum(["MARKETING_CUSTOMERS","ORDER_CUSTOMERS","ALL_CONTACTS"]).default("MARKETING_CUSTOMERS"),lookbackDays:z.coerce.number().int().min(0).max(3650).default(0) }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message || "Invalid campaign." }, { status: 400 });
   const db = getDb();
   const [settings] = await db.select().from(siteSettings).limit(1);
-  const customers = await db.select({ email: users.email, phone: users.phone }).from(users).where(and(eq(users.role, "CUSTOMER"), eq(users.isActive, true), eq(users.marketingConsent, true)));
+  const since=parsed.data.lookbackDays?new Date(Date.now()-parsed.data.lookbackDays*86400000):null;
+  const [registered,orderContacts]=await Promise.all([
+    parsed.data.audience!=="ORDER_CUSTOMERS"?db.select({email:users.email,phone:users.phone}).from(users).where(and(eq(users.role,"CUSTOMER"),eq(users.isActive,true),eq(users.marketingConsent,true),...(since?[gte(users.createdAt,since)]:[]))):Promise.resolve([]),
+    parsed.data.audience!=="MARKETING_CUSTOMERS"?db.select({email:orders.email,phone:orders.phone}).from(orders).where(since?gte(orders.createdAt,since):undefined):Promise.resolve([]),
+  ]);
+  const contacts=new Map<string,{email:string|null;phone:string|null}>();
+  for(const contact of [...registered,...orderContacts]){const email=contact.email?.trim().toLowerCase()||null,phone=contact.phone?.trim()||null,key=email?`e:${email}`:phone?`p:${phone}`:"";if(key&&!contacts.has(key))contacts.set(key,{email,phone})}
+  const customers=[...contacts.values()];
   const wantsEmail = parsed.data.channel !== "SMS", wantsSms = parsed.data.channel !== "EMAIL";
-  if (wantsEmail && (!settings?.emailApiUrl || !settings.emailApiKey || !settings.campaignFromEmail)) return json({ error: "Configure the email campaign API first." }, { status: 400 });
+  if(wantsEmail&&(!process.env.SMTP_HOST||!process.env.SMTP_USER||!process.env.SMTP_PASSWORD))return json({error:"Configure the cPanel SMTP mailbox in api-service/.env first."},{status:400});
   if (wantsSms && (!settings?.bulkSmsApiUrl || !settings.bulkSmsApiKey || !settings.bulkSmsSenderId)) return json({ error: "Configure the bulk SMS API first." }, { status: 400 });
-  const [created] = await db.insert(campaigns).values({ ...parsed.data, subject: parsed.data.subject || null, status: "SENDING", recipientCount: customers.length, createdBy: auth.session.userId });
+  const {audience:_audience,lookbackDays:_lookbackDays,...campaignData}=parsed.data;
+  const [created] = await db.insert(campaigns).values({ ...campaignData, subject: parsed.data.subject || null, status: "SENDING", recipientCount: customers.length, createdBy: auth.session.userId });
   let successCount = 0, failureCount = 0;
   try {
-    if (wantsEmail) { const recipients = customers.map((customer) => customer.email).filter(Boolean); const response = await fetch(settings!.emailApiUrl!, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings!.emailApiKey}` }, body: JSON.stringify({ recipients, from: settings!.campaignFromEmail, subject: parsed.data.subject, message: parsed.data.message }) }); response.ok ? successCount += recipients.length : failureCount += recipients.length; }
+    if(wantsEmail){const recipients=customers.map(customer=>customer.email).filter((email):email is string=>Boolean(email)),result=await sendBulkEmail({recipients,subject:parsed.data.subject||parsed.data.name,message:parsed.data.message});successCount+=result.successCount;failureCount+=result.failureCount}
     if (wantsSms) { const recipients = customers.map((customer) => customer.phone).filter((phone): phone is string => Boolean(phone)); const response = await fetch(settings!.bulkSmsApiUrl!, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings!.bulkSmsApiKey}` }, body: JSON.stringify({ recipients, senderId: settings!.bulkSmsSenderId, message: parsed.data.message }) }); response.ok ? successCount += recipients.length : failureCount += recipients.length; }
     await db.update(campaigns).set({ status: failureCount ? "FAILED" : "SENT", successCount, failureCount, sentAt: new Date() }).where(eq(campaigns.id, created.insertId));
   } catch { failureCount = customers.length; await db.update(campaigns).set({ status: "FAILED", successCount, failureCount }).where(eq(campaigns.id, created.insertId)); }

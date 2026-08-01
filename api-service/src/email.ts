@@ -1,31 +1,8 @@
 import nodemailer from "nodemailer";
 
-export async function sendEmail(input: { to: string | string[]; subject: string; message: string }) {
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASSWORD;
-  const from = process.env.SMTP_FROM || user;
-  if (!host || !user || !pass || !from) {
-    console.error("[email] SMTP is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD and SMTP_FROM on the API host.");
-    return { sent: false, reason: "not-configured" } as const;
-  }
-  const port = Number(process.env.SMTP_PORT || 465);
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: process.env.SMTP_SECURE ? process.env.SMTP_SECURE === "true" : port === 465,
-    auth: { user, pass },
-  });
-  try {
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM_NAME ? `"${process.env.SMTP_FROM_NAME.replaceAll('"', "")}" <${from}>` : from,
-      to: Array.isArray(input.to) ? input.to.join(",") : input.to,
-      subject: input.subject,
-      text: input.message,
-    });
-    return { sent: true } as const;
-  } catch (error) {
-    console.error("[email] Failed to send:", input.subject, error);
-    return { sent: false, reason: "send-failed" } as const;
-  }
-}
+type EmailInput={to:string|string[];subject:string;message:string};
+function configuration(){const host=process.env.SMTP_HOST,user=process.env.SMTP_USER,pass=process.env.SMTP_PASSWORD,from=process.env.SMTP_FROM||user;if(!host||!user||!pass||!from)return null;const port=Number(process.env.SMTP_PORT||465);return{from:process.env.SMTP_FROM_NAME?`"${process.env.SMTP_FROM_NAME.replaceAll('"',"")}" <${from}>`:from,transport:nodemailer.createTransport({host,port,secure:process.env.SMTP_SECURE?process.env.SMTP_SECURE==="true":port===465,auth:{user,pass},pool:true,maxConnections:3,maxMessages:100})}}
+function escapeHtml(value:string){return value.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
+function messageHtml(subject:string,message:string){const blocks=message.trim().split(/\n\s*\n/).map(block=>`<p style="margin:0 0 16px;line-height:1.65;color:#4c4650">${escapeHtml(block).replace(/\n/g,"<br>")}</p>`).join("");return `<!doctype html><html><body style="margin:0;background:#f6f3f7;font-family:Arial,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="padding:28px 12px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;margin:auto;background:#fff;border-radius:14px;overflow:hidden"><tr><td style="padding:22px 28px;color:#fff;background:linear-gradient(90deg,#70227e,#c82d82)"><div style="font-size:12px;font-weight:700;letter-spacing:.08em">HEALTHFIELD PHARMACY</div><h1 style="margin:8px 0 0;font-size:24px">${escapeHtml(subject)}</h1></td></tr><tr><td style="padding:28px">${blocks}</td></tr><tr><td style="padding:16px 28px;color:#817985;background:#faf8fb;font-size:11px">Healthfield Pharmacy · Care you can trust</td></tr></table></td></tr></table></body></html>`}
+export async function sendEmail(input:EmailInput){const config=configuration();if(!config){console.error("[email] cPanel SMTP is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD and SMTP_FROM.");return{sent:false,reason:"not-configured"}as const}try{await config.transport.sendMail({from:config.from,to:Array.isArray(input.to)?input.to.join(","):input.to,subject:input.subject,text:input.message,html:messageHtml(input.subject,input.message)});config.transport.close();return{sent:true}as const}catch(error){config.transport.close();console.error("[email] cPanel SMTP send failed:",input.subject,error);return{sent:false,reason:"send-failed"}as const}}
+export async function sendBulkEmail(input:{recipients:string[];subject:string;message:string}){const config=configuration();if(!config)return{successCount:0,failureCount:input.recipients.length};let successCount=0,failureCount=0;for(let index=0;index<input.recipients.length;index+=5){const batch=input.recipients.slice(index,index+5);const results=await Promise.all(batch.map(to=>config.transport.sendMail({from:config.from,to,subject:input.subject,text:input.message,html:messageHtml(input.subject,input.message)}).then(()=>true).catch(error=>{console.error("[campaign-email] Send failed:",to,error);return false})));for(const sent of results)sent?successCount++:failureCount++}config.transport.close();return{successCount,failureCount}}

@@ -8,7 +8,6 @@ type SettingsValue = {
   supportEmail: string | null; address: string | null; openingHours: string | null;
   deliveryMessage: string; freeDeliveryThreshold: string | null;
   bulkSmsApiUrl: string | null; bulkSmsApiKey: string | null; bulkSmsSenderId: string | null;
-  emailApiUrl: string | null; emailApiKey: string | null; campaignFromEmail: string | null;
   facebookUrl:string|null; instagramUrl:string|null; xUrl:string|null; tiktokUrl:string|null;
 } | null;
 
@@ -24,7 +23,7 @@ export function SettingsForm({ initial }: { initial: SettingsValue }) {
   }
   return (
     <main className="settings-page">
-      <header><a href="/admin"><ArrowLeft /> Dashboard</a><div><Settings /><span><h1>Website settings</h1><p>Customer contact, delivery and campaign providers.</p></span></div></header>
+      <header><a href="/admin"><ArrowLeft /> Dashboard</a><div><Settings /><span><h1>Website settings</h1><p>Customer contact, delivery and SMS settings. Email uses the cPanel SMTP mailbox.</p></span></div></header>
       <form onSubmit={submit}>
         <section><h2>Pharmacy contact</h2><div>
           <label>Pharmacy name<input name="pharmacyName" defaultValue={initial?.pharmacyName ?? "Healthfield Pharmacy"} required /></label>
@@ -48,11 +47,6 @@ export function SettingsForm({ initial }: { initial: SettingsValue }) {
           <label className="full">SMS API URL<input name="bulkSmsApiUrl" type="url" defaultValue={initial?.bulkSmsApiUrl ?? ""} placeholder="https://provider.example/api/messages" /></label>
           <label>API key<input name="bulkSmsApiKey" type="password" defaultValue={initial?.bulkSmsApiKey ?? ""} autoComplete="off" /></label>
           <label>Sender ID<input name="bulkSmsSenderId" defaultValue={initial?.bulkSmsSenderId ?? ""} placeholder="HEALTHFIELD" /></label>
-        </div></section>
-        <section><h2>Email campaign API</h2><p>Healthfield sends JSON containing recipients, subject, message and from to this provider.</p><div>
-          <label className="full">Email API URL<input name="emailApiUrl" type="url" defaultValue={initial?.emailApiUrl ?? ""} /></label>
-          <label>Email API key<input name="emailApiKey" type="password" defaultValue={initial?.emailApiKey ?? ""} autoComplete="off" /></label>
-          <label>Campaign from address<input name="campaignFromEmail" type="email" defaultValue={initial?.campaignFromEmail ?? ""} /></label>
         </div></section>
         {message && <div className="form-message">{message}</div>}
         <button><Save /> Save settings</button>

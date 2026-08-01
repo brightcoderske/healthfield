@@ -32,7 +32,7 @@ export function CampaignManager({ initialCampaigns }: { initialCampaigns: Campai
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
     setMessage(response.ok ? `Campaign sent to ${data.successCount} customers.` : data.error || "Campaign could not be sent.");
     setSending(false);
     if (response.ok) {
@@ -58,8 +58,10 @@ export function CampaignManager({ initialCampaigns }: { initialCampaigns: Campai
           <h2>Create campaign</h2>
           <label>Campaign name<input name="name" required maxLength={180} /></label>
           <label>Channel<select name="channel" defaultValue="EMAIL"><option value="EMAIL">Email</option><option value="SMS">SMS</option><option value="EMAIL_AND_SMS">Email and SMS</option></select></label>
+          <label>Audience<select name="audience" defaultValue="MARKETING_CUSTOMERS"><option value="MARKETING_CUSTOMERS">Registered customers with marketing consent</option><option value="ORDER_CUSTOMERS">Customers who placed orders, including guests</option><option value="ALL_CONTACTS">Both audiences, without duplicates</option></select><small>Use guest-order contacts only for appropriate customer communication.</small></label>
+          <label>Interaction timeline<select name="lookbackDays" defaultValue="0"><option value="0">Any time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="180">Last 6 months</option><option value="365">Last year</option></select><small>Registered customers use join date; order contacts use order date.</small></label>
           <label>Email subject<input name="subject" maxLength={220} /></label>
-          <label>Message<textarea name="message" rows={8} required maxLength={3000} /></label>
+          <label>Message<textarea name="message" rows={8} required maxLength={3000} placeholder={"Write normally. Blank lines create clean paragraphs.\n\nThank you for shopping with Healthfield."}/><small>Email automatically receives Healthfield branding, spacing and a mobile-friendly layout.</small></label>
           {message && <div className="form-message">{message}</div>}
           <button disabled={sending}><Send />{sending ? "Sending…" : "Send campaign"}</button>
         </form>
