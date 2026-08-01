@@ -22,6 +22,11 @@ cd "${REPOSITORY_ROOT}"
 
 export NODE_ENV=production
 export CI=true
+# Shared cPanel accounts can reject pnpm's default worker burst with EAGAIN.
+# Keep installs deliberately single-worker; this runs only when pnpm-lock.yaml changes.
+export PNPM_CONFIG_NETWORK_CONCURRENCY=1
+export PNPM_CONFIG_CHILD_CONCURRENCY=1
+export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy
 
 echo "Deploying repository commit $(git rev-parse --short HEAD)..."
 
@@ -32,9 +37,9 @@ INSTALLED_HASH="$(cat "${LOCK_MARKER}" 2>/dev/null || true)"
 if [[ ! -d node_modules || "${LOCK_HASH}" != "${INSTALLED_HASH}" ]]; then
   echo "Dependency lock changed; installing packages..."
   if command -v corepack >/dev/null 2>&1; then
-    corepack pnpm install --frozen-lockfile --prod=false
+    corepack pnpm install --frozen-lockfile --prod=false --network-concurrency=1 --child-concurrency=1
   else
-    npx --yes pnpm@10.15.0 install --frozen-lockfile --prod=false
+    npx --yes pnpm@10.15.0 install --frozen-lockfile --prod=false --network-concurrency=1 --child-concurrency=1
   fi
   printf '%s\n' "${LOCK_HASH}" > "${LOCK_MARKER}"
 else
