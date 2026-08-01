@@ -8,13 +8,18 @@ import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, orderItems, orders,
   prescriptions, productHealthConditions, products, siteSettings, users,
 } from "../../db/schema";
-import { createSessionToken, requireSession, requestSession } from "./auth";
+import { createPasswordResetToken, createSessionToken, requireSession, requestSession, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
 import { sendEmail } from "./email";
-import { apiOrigin, json, publicImageUrl, safeFilename } from "./http";
+import { json, publicImageUrl, safeFilename } from "./http";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
+const orderStatuses = ["NEW", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"] as const;
+
+function storefrontOrigin() {
+  return (process.env.APP_URL || process.env.STOREFRONT_URL || "https://healthfieldpharmacy.co.ke").replace(/\/$/, "");
+}
 
 async function body(request: Request) {
   return request.json().catch(() => null);
@@ -30,7 +35,32 @@ export async function handleAuth(request: Request, action: string) {
     if (!user || !valid || !user.isActive) return json({ error: "Incorrect email or password." }, { status: 401 });
     const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+    const when = new Date().toLocaleString("en-KE", { timeZone: "Africa/Nairobi" });
+    void sendEmail({ to: user.email, subject: "Healthfield Pharmacy sign-in", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy account was signed in at ${when} (East Africa Time).\n\nIf this was not you, reset your password immediately from the login page.` });
+    if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Sign-in: ${user.email}`, message: `${user.firstName} ${user.lastName} (${user.role}) signed in at ${when}.\nEmail: ${user.email}` });
     return json({ token: await createSessionToken(session), session, role: user.role, redirectTo: user.forcePasswordChange ? "/change-password" : user.role === "CUSTOMER" ? "/#products" : user.role === "STAFF" ? "/staff" : "/admin" });
+  }
+  if (action === "forgot-password" && request.method === "POST") {
+    const parsed = z.object({ email: z.string().trim().toLowerCase().email() }).safeParse(await body(request));
+    if (!parsed.success) return json({ error: "Enter a valid email address." }, { status: 400 });
+    const [user] = await db.select().from(users).where(eq(users.email, parsed.data.email)).limit(1);
+    if (user?.isActive) {
+      const token = await createPasswordResetToken({ userId: user.id, email: user.email });
+      const resetUrl = `${storefrontOrigin()}/reset-password?token=${encodeURIComponent(token)}`;
+      void sendEmail({ to: user.email, subject: "Reset your Healthfield Pharmacy password", message: `Hello ${user.firstName},\n\nUse this link to choose a new password. It expires in one hour.\n\n${resetUrl}\n\nIf you did not request this, you can ignore this email.` });
+    }
+    return json({ ok: true, message: "If this email is registered, reset instructions will be sent." });
+  }
+  if (action === "reset-password" && request.method === "POST") {
+    const parsed = z.object({ token: z.string().min(20), newPassword: z.string().min(8).max(128).regex(/[A-Z]/).regex(/[a-z]/).regex(/[0-9]/) }).safeParse(await body(request));
+    if (!parsed.success) return json({ error: "Use a strong new password." }, { status: 400 });
+    const reset = await verifyPasswordResetToken(parsed.data.token);
+    if (!reset) return json({ error: "This reset link is invalid or has expired." }, { status: 400 });
+    const [user] = await db.select().from(users).where(and(eq(users.id, reset.userId), eq(users.email, reset.email))).limit(1);
+    if (!user || !user.isActive) return json({ error: "This reset link is invalid or has expired." }, { status: 400 });
+    await db.update(users).set({ passwordHash: await bcrypt.hash(parsed.data.newPassword, 12), forcePasswordChange: false }).where(eq(users.id, user.id));
+    void sendEmail({ to: user.email, subject: "Your Healthfield password was changed", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy password was changed successfully. If you did not do this, contact the pharmacy immediately.` });
+    return json({ ok: true, message: "Password updated. You can sign in with your new password." });
   }
   if (action === "register" && request.method === "POST") {
     const parsed = z.object({
@@ -96,7 +126,22 @@ export async function handleChats(request: Request) {
   return json({ error: "Method not allowed." }, { status: 405 });
 }
 
-export async function handleOrders(request: Request) {
+export async function handleOrders(request: Request, id?: number) {
+  if (request.method === "PATCH" && id) {
+    const auth = await requireSession(request, [...team]);
+    if ("response" in auth) return auth.response;
+    const parsed = z.object({ status: z.enum(orderStatuses) }).safeParse(await body(request));
+    if (!Number.isInteger(id) || !parsed.success) return json({ error: "Choose a valid order status." }, { status: 400 });
+    const db = getDb();
+    const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
+    if (!order) return json({ error: "Order not found." }, { status: 404 });
+    if (order.status === parsed.data.status) return json({ ok: true, status: order.status });
+    await db.update(orders).set({ status: parsed.data.status }).where(eq(orders.id, id));
+    const label = parsed.data.status.replaceAll("_", " ").toLowerCase();
+    if (order.email) void sendEmail({ to: order.email, subject: `Order ${order.orderNumber} update`, message: `Hello ${order.customerName},\n\nYour order ${order.orderNumber} is now ${label}.\n\nThank you for choosing Healthfield Pharmacy.` });
+    if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.` });
+    return json({ ok: true, status: parsed.data.status });
+  }
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
   const parsed = z.object({
     fullName: z.string().trim().min(3).max(200), phone: z.string().trim().min(9).max(30), email: z.string().trim().email().optional().or(z.literal("")),
@@ -119,8 +164,8 @@ export async function handleOrders(request: Request) {
     await tx.insert(orderItems).values(lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })));
     return created;
   });
-  if (parsed.data.email) await sendEmail({ to: parsed.data.email, subject: `Order ${orderNumber} received`, message: `Hello ${parsed.data.fullName},\n\nWe received order ${orderNumber}.\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.` }).catch(console.error);
-  if (process.env.NOTIFICATION_EMAIL) await sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.` }).catch(console.error);
+  if (parsed.data.email) void sendEmail({ to: parsed.data.email, subject: `Order ${orderNumber} received`, message: `Hello ${parsed.data.fullName},\n\nWe received order ${orderNumber}.\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.\n\nWe will update you as your order progresses.` });
+  if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.` });
   return json({ ok: true, id: result.insertId, orderNumber, total: subtotal + deliveryFee }, { status: 201 });
 }
 
@@ -145,7 +190,7 @@ export async function handleProducts(request: Request, id?: number) {
     const suffix = Date.now().toString(36);
     const baseSlug = values.name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const created = await db.transaction(async (tx) => {
-      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: `HF-${suffix.toUpperCase()}`, brand: values.brand || null, shortDescription: values.shortDescription || null, imageUrl: values.imageUrl || null, discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: values.isFeatured, isActive: true });
+      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: `HF-${suffix.toUpperCase()}`, brand: values.brand || null, shortDescription: values.shortDescription || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: values.isFeatured, isActive: true });
       if (values.conditionIds.length) await tx.insert(productHealthConditions).values(values.conditionIds.map((conditionId) => ({ productId: record.insertId, conditionId })));
       const stores = await tx.select({ id: branches.id }).from(branches).where(eq(branches.isActive, true));
       if (stores.length) await tx.insert(branchInventory).values(stores.map((store) => ({ branchId: store.id, productId: record.insertId, quantityAvailable: 0, quantityReserved: 0, reorderLevel: 5, updatedBy: auth.session.userId })));
@@ -162,8 +207,9 @@ export async function handleProducts(request: Request, id?: number) {
     const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional() }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Invalid product update." }, { status: 400 });
     const { conditionIds, ...update } = parsed.data;
+    const normalized = { ...update, imageUrl: parsed.data.imageUrl === undefined ? undefined : normalizeStoredImageUrl(parsed.data.imageUrl) };
     await db.transaction(async (tx) => {
-      await tx.update(products).set({ ...update, price: parsed.data.price?.toString(), discountPrice: parsed.data.discountPrice === null ? null : parsed.data.discountPrice?.toString() }).where(eq(products.id, id));
+      await tx.update(products).set({ ...normalized, price: parsed.data.price?.toString(), discountPrice: parsed.data.discountPrice === null ? null : parsed.data.discountPrice?.toString() }).where(eq(products.id, id));
       if (conditionIds) { await tx.delete(productHealthConditions).where(eq(productHealthConditions.productId, id)); if (conditionIds.length) await tx.insert(productHealthConditions).values(conditionIds.map((conditionId) => ({ productId: id, conditionId }))); }
     });
     return json({ ok: true });
@@ -173,6 +219,17 @@ export async function handleProducts(request: Request, id?: number) {
 
 function storageRoot() {
   return path.resolve(process.env.STORAGE_ROOT || path.join(process.cwd(), "storage"));
+}
+
+function normalizeStoredImageUrl(value: string | null | undefined) {
+  if (!value) return null;
+  try {
+    if (value.startsWith("http://") || value.startsWith("https://")) {
+      const url = new URL(value);
+      if (url.pathname.startsWith("/uploads/products/")) return url.pathname;
+    }
+  } catch { /* keep original */ }
+  return value.startsWith("/uploads/products/") ? value : value;
 }
 
 export async function handleProductImage(request: Request) {
@@ -189,7 +246,7 @@ export async function handleProductImage(request: Request) {
   const directory = path.join(storageRoot(), "uploads", "products");
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, filename), Buffer.from(await image.arrayBuffer()), { flag: "wx" });
-  return json({ imageUrl: `${apiOrigin()}/uploads/products/${filename}` }, { status: 201 });
+  return json({ imageUrl: publicImageUrl(`/uploads/products/${filename}`) }, { status: 201 });
 }
 
 export async function serveProductImage(filename: string) {

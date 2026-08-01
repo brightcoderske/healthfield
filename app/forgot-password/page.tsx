@@ -4,11 +4,27 @@ import Image from "next/image";
 import { FormEvent, useState } from "react";
 
 export default function ForgotPasswordPage() {
-  const [sent, setSent] = useState(false);
-  function submit(event: FormEvent<HTMLFormElement>) {
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSent(true);
+    setSending(true);
+    setError("");
+    setMessage("");
+    const email = String(new FormData(event.currentTarget).get("email") || "");
+    const response = await fetch("/api/auth/forgot-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) setError(data.error || "Unable to send reset instructions.");
+    else setMessage(data.message || "If this email is registered, reset instructions will be sent.");
+    setSending(false);
   }
+
   return (
     <main className="password-page">
       <form onSubmit={submit}>
@@ -16,8 +32,9 @@ export default function ForgotPasswordPage() {
         <h1>Forgot password?</h1>
         <p>Enter your account email. If it is registered, Healthfield will send password-reset instructions.</p>
         <label>Email address<input name="email" type="email" required /></label>
-        {sent && <div className="form-message">If this email is registered, reset instructions will be sent.</div>}
-        <button>Send reset instructions</button>
+        {error && <div className="auth-error">{error}</div>}
+        {message && <div className="form-message">{message}</div>}
+        <button disabled={sending}>{sending ? "Sending…" : "Send reset instructions"}</button>
         <a className="auth-register" href="/login">Back to login</a>
       </form>
     </main>

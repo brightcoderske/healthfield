@@ -2,6 +2,7 @@ import { jwtVerify, SignJWT } from "jose";
 
 export type Role = "CUSTOMER" | "STAFF" | "ADMIN" | "SUPER_ADMIN";
 export type Session = { userId: number; email: string; firstName: string; role: Role; forcePasswordChange: boolean };
+export type ResetPayload = { userId: number; email: string; purpose: "password-reset" };
 
 function secret() {
   const value = process.env.AUTH_SECRET;
@@ -17,6 +18,29 @@ export async function createSessionToken(session: Session) {
     .setIssuer("healthfield-pharmacy")
     .setAudience("healthfield-web")
     .sign(secret());
+}
+
+export async function createPasswordResetToken(user: { userId: number; email: string }) {
+  return new SignJWT({ userId: user.userId, email: user.email, purpose: "password-reset" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("1h")
+    .setIssuer("healthfield-pharmacy")
+    .setAudience("healthfield-reset")
+    .sign(secret());
+}
+
+export async function verifyPasswordResetToken(token: string): Promise<ResetPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, secret(), {
+      issuer: "healthfield-pharmacy",
+      audience: "healthfield-reset",
+    });
+    if (payload.purpose !== "password-reset" || typeof payload.userId !== "number" || typeof payload.email !== "string") return null;
+    return { userId: payload.userId, email: payload.email, purpose: "password-reset" };
+  } catch {
+    return null;
+  }
 }
 
 export async function requestSession(request: Request, allowUploadToken = false): Promise<Session | null> {

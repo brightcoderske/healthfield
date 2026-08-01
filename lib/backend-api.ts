@@ -27,6 +27,10 @@ export async function backendRequest(path: string, init: RequestInit = {}) {
 
 export async function backendJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await backendRequest(path, init);
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    throw new BackendError(response.status || 502, "The API returned a non-JSON response. Check API_BASE_URL and disable bot protection on the API hostname.");
+  }
   const data = await response.json().catch(() => ({})) as { error?: string } & T;
   if (!response.ok) throw new BackendError(response.status, data.error || "Backend request failed.");
   return data;

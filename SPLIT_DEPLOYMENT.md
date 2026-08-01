@@ -51,6 +51,7 @@ DATABASE_URL=mysql://DATABASE_USER:DATABASE_PASSWORD@127.0.0.1:3306/DATABASE_NAM
 AUTH_SECRET=THE_SHARED_AUTH_SECRET
 API_SHARED_SECRET=THE_PRIVATE_API_SECRET
 API_PUBLIC_URL=https://api.healthfieldpharmacy.co.ke
+APP_URL=https://healthfieldpharmacy.co.ke
 CORS_ALLOWED_ORIGINS=https://healthfieldpharmacy.co.ke,https://www.healthfieldpharmacy.co.ke
 STORAGE_ROOT=/home/healthfi/healthfield-storage
 RUN_MIGRATIONS=true
@@ -64,8 +65,9 @@ SMTP_FROM=YOUR_NOVAHOST_MAILBOX
 SMTP_FROM_NAME=Healthfield Pharmacy
 NOTIFICATION_EMAIL=THE_TEAM_NOTIFICATION_MAILBOX
 ```
-
 Restrict this file to the account owner where cPanel permits it. API startup applies pending database migrations automatically. Set `RUN_MIGRATIONS=false` only after migrations have been deliberately moved to another release process.
+
+Disable Imunify360 / “Bot Protection” (or whitelist Vercel egress IPs) on `api.healthfieldpharmacy.co.ke`. The challenge page returns HTML with HTTP 200 and breaks every storefront and admin API call.
 
 ## 4. Preserve operational files
 

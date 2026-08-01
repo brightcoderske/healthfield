@@ -2,8 +2,26 @@ export function apiOrigin() {
   return (process.env.API_PUBLIC_URL || "https://api.healthfieldpharmacy.co.ke").replace(/\/$/, "");
 }
 
+const storefrontHosts = new Set(
+  (process.env.CORS_ALLOWED_ORIGINS || "https://healthfieldpharmacy.co.ke,https://www.healthfieldpharmacy.co.ke")
+    .split(",")
+    .map((value) => {
+      try { return new URL(value.trim()).host; } catch { return ""; }
+    })
+    .filter(Boolean),
+);
+
 export function publicImageUrl(value: string | null | undefined) {
-  if (!value || value.startsWith("http://") || value.startsWith("https://")) return value ?? null;
+  if (!value) return null;
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    try {
+      const url = new URL(value);
+      if (storefrontHosts.has(url.host) && url.pathname.startsWith("/uploads/products/")) {
+        return `${apiOrigin()}${url.pathname}`;
+      }
+    } catch { /* keep original */ }
+    return value;
+  }
   return `${apiOrigin()}${value.startsWith("/") ? value : `/${value}`}`;
 }
 

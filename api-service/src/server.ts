@@ -54,10 +54,12 @@ async function responseOf(value: Promise<Response | undefined>) {
 async function route(request: Request, ip: string): Promise<Response> {
   const url = new URL(request.url);
   const origin = request.headers.get("origin")?.replace(/\/$/, "") || null;
-  if (origin && !allowedOrigins.has(origin)) return json({ error: "Origin not allowed." }, { status: 403 });
   if (request.method === "OPTIONS") {
+    if (origin && !allowedOrigins.has(origin)) return json({ error: "Origin not allowed." }, { status: 403 });
     return new Response(null, { status: 204, headers: { "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS", "Access-Control-Allow-Headers": "Authorization,Content-Type,X-Healthfield-Key", "Access-Control-Max-Age": "86400" } });
   }
+  // Browser navigations and <img> tags often omit Origin; only enforce CORS for credentialed cross-origin API calls.
+  if (origin && !allowedOrigins.has(origin) && url.pathname.startsWith("/v1/")) return json({ error: "Origin not allowed." }, { status: 403 });
   if (url.pathname === "/health") return json({ service: "healthfield-api", status: "ok", timestamp: new Date().toISOString() });
   const imageMatch = url.pathname.match(/^\/uploads\/products\/([^/]+)$/);
   if (imageMatch && request.method === "GET") return serveProductImage(imageMatch[1]);
@@ -71,6 +73,8 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname.startsWith("/v1/auth/")) return responseOf(handleAuth(request, url.pathname.slice(9)));
   if (url.pathname === "/v1/chats") return responseOf(handleChats(request));
   if (url.pathname === "/v1/orders") return responseOf(handleOrders(request));
+  const orderMatch = url.pathname.match(/^\/v1\/orders\/(\d+)$/);
+  if (orderMatch) return responseOf(handleOrders(request, Number(orderMatch[1])));
   if (url.pathname === "/v1/campaigns") return responseOf(handleCampaigns(request));
   if (url.pathname === "/v1/settings") return responseOf(handleSettings(request));
   if (url.pathname === "/v1/products/image") return responseOf(handleProductImage(request));
