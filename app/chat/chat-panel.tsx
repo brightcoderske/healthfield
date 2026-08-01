@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 type Message = { id: number; message: string; createdAt: string; firstName: string; role: string };
 
@@ -9,6 +9,7 @@ export function ChatPanel({ conversationId }: { conversationId?: number }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const participant = useMemo(() => conversationId ? messages.find(message => message.role === "CUSTOMER")?.firstName || "Customer" : "Healthfield pharmacy team", [conversationId, messages]);
 
   const load = useCallback(async () => {
     const response = await fetch(`/api/chats${conversationId ? `?conversation=${conversationId}` : ""}`, { cache: "no-store" });
@@ -53,8 +54,8 @@ export function ChatPanel({ conversationId }: { conversationId?: number }) {
       <header>
         <a href={conversationId ? "/admin/chats" : "/account"}>← Back</a>
         <div>
-          <h1>{conversationId ? "Customer conversation" : "Chat with Healthfield"}</h1>
-          <p>Ask about products, prescriptions, delivery or an order.</p>
+          <h1>{participant}</h1>
+          <p><span className="chat-online-dot"/> {conversationId ? "Customer conversation" : "Pharmacy support"}</p>
         </div>
       </header>
       <section>

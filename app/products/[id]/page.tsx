@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { BackendError, backendJson } from "@/lib/backend-api";
 import { ProductActions } from "./product-actions";
+import { RichText } from "../rich-text";
 
 export const dynamic = "force-dynamic";
 
@@ -91,7 +92,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
       </div>
     </section>
     <section className="product-information"><h2>Product information</h2><div>
-      {product.description && <article><h3>Details</h3><p>{product.description}</p></article>}
+      {product.description && <article><h3>Details</h3><RichText value={product.description}/></article>}
       {product.usageInformation && <article><h3>How to use</h3><p>{product.usageInformation}</p></article>}
       {product.warnings && <article><h3>Important warnings</h3><p>{product.warnings}</p></article>}
       {product.storageInformation && <article><h3>Storage</h3><p>{product.storageInformation}</p></article>}

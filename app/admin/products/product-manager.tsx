@@ -2,10 +2,11 @@
 
 import { ArrowLeft, ImageOff, Package, Plus, Search, Trash2, X } from "lucide-react";
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
+import { RichTextEditor } from "./rich-text-editor";
 
 type Product = {
   id: number; categoryId: number; name: string; brand: string | null; packSize: string | null;
-  shortDescription: string | null; price: number; discountPrice: number | null; imageUrl: string | null;
+  shortDescription: string | null; description: string | null; price: number; discountPrice: number | null; imageUrl: string | null;
   isFeatured: boolean; isActive: boolean; conditionIds: number[];
 };
 type Option = { id: number; name: string };
@@ -31,6 +32,7 @@ export function ProductManager({ initialProducts, categories, conditions }: { in
     const payload = {
       categoryId: Number(form.get("categoryId")), name: String(form.get("name")), brand: String(form.get("brand") || ""),
       packSize: String(form.get("packSize") || ""), shortDescription: String(form.get("shortDescription") || ""),
+      description: String(form.get("description") || ""),
       price: Number(form.get("price")), discountPrice: form.get("discountPrice") ? Number(form.get("discountPrice")) : null,
       imageUrl: editing === "new" ? null : editing.imageUrl, isFeatured: form.get("isFeatured") === "on",
       isActive: form.get("isActive") === "on", conditionIds: form.getAll("conditionIds").map(Number),
@@ -74,9 +76,11 @@ export function ProductManager({ initialProducts, categories, conditions }: { in
   }
 
   async function deactivate(product: Product) {
+    if (!window.confirm(`Permanently delete ${product.name}? Historical order text will be preserved.`)) return;
     setSavingId(product.id);
     const response = await fetch(`/api/products/${product.id}`, { method: "DELETE" });
-    if (response.ok) setItems((current) => current.map((item) => item.id === product.id ? { ...item, isActive: false } : item));
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) setItems((current) => current.filter((item) => item.id !== product.id)); else setMessage(data.error || "Product could not be deleted.");
     setSavingId(null);
   }
 
@@ -112,7 +116,8 @@ export function ProductManager({ initialProducts, categories, conditions }: { in
         <label>Price (KES)<input name="price" type="number" min="0" step=".01" defaultValue={activeEdit?.price||""} required/></label><label>Discount price<input name="discountPrice" type="number" min="0" step=".01" defaultValue={activeEdit?.discountPrice||""}/></label>
         <label className="full">Product image<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/bmp,image/tiff,.jpg,.jpeg,.png,.webp,.gif,.avif,.bmp,.tif,.tiff" onChange={chooseImage}/><small>JPEG, PNG, WebP, GIF, AVIF, BMP or TIFF. Maximum 2 MB.</small></label>
         {(imagePreview||activeEdit?.imageUrl)&&<div className="edit-image-preview full"><img src={imagePreview||activeEdit?.imageUrl||""} alt={activeEdit?.name||"New product preview"}/>{activeEdit?.imageUrl&&!imagePreview&&<button type="button" onClick={()=>removeImage(activeEdit)}><ImageOff/> Remove image now</button>}</div>}
-        <label className="full">Product description<textarea name="shortDescription" rows={4} defaultValue={activeEdit?.shortDescription||""} placeholder="Describe the product, its purpose and important customer information."/></label>
+        <label className="full">Short card description<textarea name="shortDescription" maxLength={500} rows={3} defaultValue={activeEdit?.shortDescription||""} placeholder="Short catalogue summary."/></label>
+        <label className="full">Detailed description<RichTextEditor defaultValue={activeEdit?.description||""}/></label>
         <fieldset className="full condition-picker"><legend>Health conditions supported by this product</legend>{conditions.map((item)=><label key={item.id}><input type="checkbox" name="conditionIds" value={item.id} defaultChecked={activeEdit?.conditionIds.includes(item.id)}/><span>{item.name}</span></label>)}</fieldset>
         <label className="check-label"><input type="checkbox" name="isFeatured" defaultChecked={activeEdit?.isFeatured}/> Featured</label><label className="check-label"><input type="checkbox" name="isActive" defaultChecked={activeEdit?.isActive??true}/> Active</label>
       </div>{message&&<div className="auth-error">{message}</div>}<footer><button type="button" onClick={()=>setEditing(null)}>Cancel</button><button type="submit" disabled={savingId!==null}>{savingId!==null?"Saving product…":"Save product"}</button></footer></form></div>}

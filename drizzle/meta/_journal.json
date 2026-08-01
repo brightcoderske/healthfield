@@ -57,6 +57,13 @@
       "when": 1785525024497,
       "tag": "0007_steep_roughhouse",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1785586979348,
+      "tag": "0008_chunky_jane_foster",
+      "breakpoints": true
     }
   ]
 }

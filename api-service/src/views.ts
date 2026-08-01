@@ -1,6 +1,6 @@
-import { and, asc, count, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import {
-  branchInventory, branches, campaigns, categories, chatConversations, healthConditions,
+  branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
   orderItems, orders, prescriptions, productHealthConditions, productReviews, products,
   siteSettings, users,
 } from "../../db/schema";
@@ -116,11 +116,12 @@ export async function handleView(request: Request, path: string) {
     const auth = await requireSession(request, ["CUSTOMER"]);
     if ("response" in auth) return auth.response;
     const db = getDb();
-    const [orderRows, catalog] = await Promise.all([
+    const [orderRows, catalog, prescriptionRows] = await Promise.all([
       db.select().from(orders).where(eq(orders.customerId, auth.session.userId)).orderBy(desc(orders.createdAt)),
       db.select(productCard).from(products).where(eq(products.isActive, true)).orderBy(desc(products.isFeatured), desc(products.createdAt)).limit(24),
+      db.select({id:prescriptions.id,originalFilename:prescriptions.originalFilename,status:prescriptions.status,pharmacistNotes:prescriptions.pharmacistNotes,createdAt:prescriptions.createdAt,reviewedAt:prescriptions.reviewedAt}).from(prescriptions).where(eq(prescriptions.customerId,auth.session.userId)).orderBy(desc(prescriptions.createdAt)),
     ]);
-    return json({ orders: orderRows, catalog: images(catalog) });
+    return json({ orders: orderRows, catalog: images(catalog), prescriptions:prescriptionRows });
   }
   const customerOrderMatch = path.match(/^account\/orders\/(\d+)$/);
   if (customerOrderMatch) {
@@ -158,17 +159,18 @@ export async function handleView(request: Request, path: string) {
     const db = getDb();
     const view = path.slice(6);
     if (view === "dashboard") {
-      const [[{ newOrders }], [{ pendingPrescriptions }], [{ activeProducts }], [{ lowStock }], [{ customers }], recentOrders] = await Promise.all([
+      const [[{ newOrders }], [{ pendingPrescriptions }], [{ activeProducts }], [{ lowStock }], [{ customers }], [{ newChats }], recentOrders] = await Promise.all([
         db.select({ newOrders: count() }).from(orders).where(eq(orders.status, "NEW")),
         db.select({ pendingPrescriptions: count() }).from(prescriptions).where(eq(prescriptions.status, "RECEIVED")),
         db.select({ activeProducts: count() }).from(products).where(eq(products.isActive, true)),
         db.select({ lowStock: count() }).from(branchInventory).where(sql`${branchInventory.quantityAvailable} <= ${branchInventory.reorderLevel}`),
         db.select({ customers: count() }).from(users).where(eq(users.role, "CUSTOMER")),
+        db.select({ newChats: sql<number>`count(distinct ${chatMessages.conversationId})` }).from(chatMessages).innerJoin(users,eq(users.id,chatMessages.senderId)).where(and(eq(users.role,"CUSTOMER"),isNull(chatMessages.readAt))),
         db.select().from(orders).orderBy(desc(orders.createdAt)).limit(8),
       ]);
-      return json({ newOrders, pendingPrescriptions, activeProducts, lowStock, customers, recentOrders });
+      return json({ newOrders, pendingPrescriptions, activeProducts, lowStock, customers, newChats:Number(newChats), recentOrders });
     }
-    if (view === "orders") return json({ orders: await db.select().from(orders).orderBy(desc(orders.createdAt)) });
+    if (view === "orders") return json({ orders: await db.select().from(orders).orderBy(sql`case when ${orders.status}='NEW' then 0 when ${orders.status} in ('CONFIRMED','UNDER_REVIEW') then 1 else 2 end`,desc(orders.createdAt)) });
     const orderMatch = view.match(/^orders\/(\d+)$/);
     if (orderMatch) {
       const id = Number(orderMatch[1]);
@@ -176,7 +178,7 @@ export async function handleView(request: Request, path: string) {
       return order ? json({ order, items: await db.select().from(orderItems).where(eq(orderItems.orderId, id)) }) : json({ error: "Order not found." }, { status: 404 });
     }
     if (view === "customers") return json({ customers: await db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, phone: users.phone, isActive: users.isActive, createdAt: users.createdAt }).from(users).where(eq(users.role, "CUSTOMER")).orderBy(desc(users.createdAt)) });
-    if (view === "chats") return json({ chats: await db.select({ id: chatConversations.id, status: chatConversations.status, lastMessageAt: chatConversations.lastMessageAt, firstName: users.firstName, lastName: users.lastName, email: users.email }).from(chatConversations).innerJoin(users, eq(users.id, chatConversations.customerId)).orderBy(desc(chatConversations.lastMessageAt)) });
+    if (view === "chats") { const [chats,unread]=await Promise.all([db.select({ id: chatConversations.id, status: chatConversations.status, lastMessageAt: chatConversations.lastMessageAt, firstName: users.firstName, lastName: users.lastName, email: users.email }).from(chatConversations).innerJoin(users, eq(users.id, chatConversations.customerId)).orderBy(desc(chatConversations.lastMessageAt)),db.select({conversationId:chatMessages.conversationId,total:count()}).from(chatMessages).innerJoin(users,eq(users.id,chatMessages.senderId)).where(and(eq(users.role,"CUSTOMER"),isNull(chatMessages.readAt))).groupBy(chatMessages.conversationId)]);return json({chats:chats.map(chat=>({...chat,unread:Number(unread.find(row=>row.conversationId===chat.id)?.total||0)}))}); }
     if (view === "prescriptions") return json({ prescriptions: await db.select().from(prescriptions).orderBy(desc(prescriptions.createdAt)) });
     if (view === "campaigns") return json({ campaigns: await db.select().from(campaigns).orderBy(desc(campaigns.createdAt)).limit(30) });
     if (view === "stores") return json({ stores: await db.select().from(branches).orderBy(desc(branches.createdAt)) });

@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import bcrypt, { hash } from "bcryptjs";
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, orderItems, orders,
-  prescriptions, productHealthConditions, products, siteSettings, users,
+  categories, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, users,
 } from "../../db/schema";
 import { createPasswordResetToken, createSessionToken, requireSession, requestSession, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
@@ -47,7 +47,7 @@ export async function handleAuth(request: Request, action: string) {
     if (user?.isActive) {
       const token = await createPasswordResetToken({ userId: user.id, email: user.email });
       const resetUrl = `${storefrontOrigin()}/reset-password?token=${encodeURIComponent(token)}`;
-      void sendEmail({ to: user.email, subject: "Reset your Healthfield Pharmacy password", message: `Hello ${user.firstName},\n\nUse this link to choose a new password. It expires in one hour.\n\n${resetUrl}\n\nIf you did not request this, you can ignore this email.` });
+      await sendEmail({ to: user.email, subject: "Reset your Healthfield Pharmacy password", message: `Hello ${user.firstName},\n\nUse this link to choose a new password. It expires in one hour.\n\n${resetUrl}\n\nIf you did not request this, you can ignore this email.` });
     }
     return json({ ok: true, message: "If this email is registered, reset instructions will be sent." });
   }
@@ -70,10 +70,17 @@ export async function handleAuth(request: Request, action: string) {
       acceptTerms: z.literal(true), marketingConsent: z.boolean().default(false),
     }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Complete every field and use a strong password." }, { status: 400 });
-    const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, parsed.data.email)).limit(1);
-    if (existing) return json({ error: "An account already uses this email." }, { status: 409 });
+    const [existing] = await db.select({ email: users.email, phone: users.phone }).from(users).where(or(eq(users.email, parsed.data.email), eq(users.phone, parsed.data.phone))).limit(1);
+    if (existing?.email === parsed.data.email) return json({ error: "An account already uses this email." }, { status: 409 });
+    if (existing?.phone === parsed.data.phone) return json({ error: "An account already uses this phone number." }, { status: 409 });
     const { acceptTerms: _acceptTerms, password, ...customer } = parsed.data;
-    const [created] = await db.insert(users).values({ ...customer, passwordHash: await bcrypt.hash(password, 12), role: "CUSTOMER", isActive: true, twoFactorEnabled: false, forcePasswordChange: false, termsAcceptedAt: new Date(), marketingConsentAt: customer.marketingConsent ? new Date() : null });
+    let created;
+    try {
+      [created] = await db.insert(users).values({ ...customer, passwordHash: await bcrypt.hash(password, 12), role: "CUSTOMER", isActive: true, twoFactorEnabled: false, forcePasswordChange: false, termsAcceptedAt: new Date(), marketingConsentAt: customer.marketingConsent ? new Date() : null });
+    } catch (error) {
+      console.error("Customer registration insert failed", error);
+      return json({ error: "That email address or phone number is already registered." }, { status: 409 });
+    }
     const session = { userId: created.insertId, email: customer.email, firstName: customer.firstName, role: "CUSTOMER" as const, forcePasswordChange: false };
     await sendEmail({ to: customer.email, subject: "Welcome to Healthfield Pharmacy", message: `Hello ${customer.firstName},\n\nYour Healthfield Pharmacy account is ready. You can now shop, save products, chat with our team and track your orders.` }).catch(console.error);
     if (process.env.NOTIFICATION_EMAIL) await sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New Healthfield customer account", message: `${customer.firstName} ${customer.lastName} created a customer account.\nEmail: ${customer.email}\nPhone: ${customer.phone}` }).catch(console.error);
@@ -108,6 +115,7 @@ export async function handleChats(request: Request) {
     const [allowed] = auth.session.role === "CUSTOMER" ? await db.select({ id: chatConversations.id }).from(chatConversations).where(and(eq(chatConversations.id, conversationId), eq(chatConversations.customerId, auth.session.userId))).limit(1) : [{ id: conversationId }];
     if (!allowed) return json({ error: "Not found." }, { status: 404 });
     const messages = await db.select({ id: chatMessages.id, message: chatMessages.message, createdAt: chatMessages.createdAt, senderId: chatMessages.senderId, firstName: users.firstName, role: users.role }).from(chatMessages).innerJoin(users, eq(users.id, chatMessages.senderId)).where(eq(chatMessages.conversationId, conversationId)).orderBy(chatMessages.createdAt);
+    await db.update(chatMessages).set({ readAt: new Date() }).where(and(eq(chatMessages.conversationId, conversationId), ne(chatMessages.senderId, auth.session.userId)));
     return json({ conversationId, messages });
   }
   if (request.method === "POST") {
@@ -130,28 +138,33 @@ export async function handleOrders(request: Request, id?: number) {
   if (request.method === "PATCH" && id) {
     const auth = await requireSession(request, [...team]);
     if ("response" in auth) return auth.response;
-    const parsed = z.object({ status: z.enum(orderStatuses) }).safeParse(await body(request));
-    if (!Number.isInteger(id) || !parsed.success) return json({ error: "Choose a valid order status." }, { status: 400 });
+    const parsed = z.object({ status:z.enum(orderStatuses),customerName:z.string().trim().max(200).optional(),phone:z.string().trim().max(30).optional(),email:z.string().trim().max(190).nullable().optional(),deliveryAddress:z.string().trim().max(1000).nullable().optional(),deliveryArea:z.string().trim().max(160).nullable().optional() }).safeParse(await body(request));
+    if (!Number.isInteger(id) || !parsed.success) return json({ error: "Check the order details and status." }, { status: 400 });
     const db = getDb();
     const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
     if (!order) return json({ error: "Order not found." }, { status: 404 });
-    if (order.status === parsed.data.status) return json({ ok: true, status: order.status });
-    await db.update(orders).set({ status: parsed.data.status }).where(eq(orders.id, id));
-    const label = parsed.data.status.replaceAll("_", " ").toLowerCase();
-    if (order.email) void sendEmail({ to: order.email, subject: `Order ${order.orderNumber} update`, message: `Hello ${order.customerName},\n\nYour order ${order.orderNumber} is now ${label}.\n\nThank you for choosing Healthfield Pharmacy.` });
+    const editable=!['READY_FOR_DISPATCH','OUT_FOR_DELIVERY','READY_FOR_PICKUP','COMPLETED','CANCELLED'].includes(order.status);
+    const {status,...details}=parsed.data;
+    await db.update(orders).set({status,...(editable?details:{})}).where(eq(orders.id,id));
+    if(order.status===status)return json({ok:true,status});
+    const label = status==="READY_FOR_DISPATCH"?"packaged and ready for dispatch":status.replaceAll("_", " ").toLowerCase();
+    const notificationEmail=details.email===undefined?order.email:details.email,notificationName=details.customerName||order.customerName;
+    if (notificationEmail) void sendEmail({ to: notificationEmail, subject: `Order ${order.orderNumber} update`, message: `Hello ${notificationName},\n\nYour order ${order.orderNumber} is now ${label}.\n\nThank you for choosing Healthfield Pharmacy.` });
     if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.` });
-    return json({ ok: true, status: parsed.data.status });
+    return json({ok:true,status});
   }
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
   const parsed = z.object({
     fullName: z.string().trim().min(3).max(200), phone: z.string().trim().min(9).max(30), email: z.string().trim().email().optional().or(z.literal("")),
     fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), deliveryAddress: z.string().trim().max(1000).optional(), deliveryArea: z.string().trim().max(160).optional(),
     deliveryLatitude: z.number().min(-90).max(90).optional(), deliveryLongitude: z.number().min(-180).max(180).optional(),
-    items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).min(1),
+    checkoutToken: z.string().uuid(), items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).min(1),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid order." }, { status: 400 });
   if (parsed.data.fulfilmentMethod === "DELIVERY" && !parsed.data.deliveryAddress) return json({ error: "Delivery address is required." }, { status: 400 });
   const db = getDb();
+  const [duplicate] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, total: orders.total }).from(orders).where(eq(orders.checkoutToken, parsed.data.checkoutToken)).limit(1);
+  if (duplicate) return json({ ok: true, id: duplicate.id, orderNumber: duplicate.orderNumber, total: Number(duplicate.total), duplicate: true });
   const catalog = await db.select().from(products).where(inArray(products.id, parsed.data.items.map((item) => item.productId)));
   if (catalog.length !== new Set(parsed.data.items.map((item) => item.productId)).size) return json({ error: "One or more products are unavailable." }, { status: 409 });
   const lines = parsed.data.items.map((item) => { const product = catalog.find((entry) => entry.id === item.productId)!; const price = Number(product.discountPrice ?? product.price); return { ...item, product, price, total: price * item.quantity }; });
@@ -160,7 +173,7 @@ export async function handleOrders(request: Request, id?: number) {
   const session = await requestSession(request);
   const orderNumber = `HF-${Date.now().toString().slice(-8)}`;
   const result = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(orders).values({ orderNumber, customerId: session?.role === "CUSTOMER" ? session.userId : null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: parsed.data.email || null, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
+    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: session?.role === "CUSTOMER" ? session.userId : null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: parsed.data.email || null, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
     await tx.insert(orderItems).values(lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })));
     return created;
   });
@@ -172,6 +185,7 @@ export async function handleOrders(request: Request, id?: number) {
 const productSchema = z.object({
   categoryId: z.coerce.number().int().positive(), name: z.string().trim().min(2).max(220), brand: z.string().trim().max(150).optional().default(""),
   shortDescription: z.string().trim().max(500).optional().default(""), imageUrl: z.string().trim().max(500).optional().default(""),
+  description: z.string().trim().max(1000).optional().default(""),
   price: z.coerce.number().nonnegative(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), packSize: z.string().trim().max(100).optional().default(""),
   prescriptionRequired: z.coerce.boolean().default(false), isFeatured: z.coerce.boolean().default(false), conditionIds: z.array(z.coerce.number().int().positive()).optional().default([]),
 });
@@ -190,7 +204,7 @@ export async function handleProducts(request: Request, id?: number) {
     const suffix = Date.now().toString(36);
     const baseSlug = values.name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const created = await db.transaction(async (tx) => {
-      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: `HF-${suffix.toUpperCase()}`, brand: values.brand || null, shortDescription: values.shortDescription || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: values.isFeatured, isActive: true });
+      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: `HF-${suffix.toUpperCase()}`, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: values.isFeatured, isActive: true });
       if (values.conditionIds.length) await tx.insert(productHealthConditions).values(values.conditionIds.map((conditionId) => ({ productId: record.insertId, conditionId })));
       const stores = await tx.select({ id: branches.id }).from(branches).where(eq(branches.isActive, true));
       if (stores.length) await tx.insert(branchInventory).values(stores.map((store) => ({ branchId: store.id, productId: record.insertId, quantityAvailable: 0, quantityReserved: 0, reorderLevel: 5, updatedBy: auth.session.userId })));
@@ -200,11 +214,16 @@ export async function handleProducts(request: Request, id?: number) {
   }
   if (!id || !Number.isInteger(id)) return json({ error: "Invalid product." }, { status: 400 });
   if (request.method === "DELETE") {
-    await db.update(products).set({ isActive: false }).where(eq(products.id, id));
+    await db.transaction(async (tx) => {
+      await tx.delete(productHealthConditions).where(eq(productHealthConditions.productId, id));
+      await tx.delete(productReviews).where(eq(productReviews.productId, id));
+      await tx.delete(branchInventory).where(eq(branchInventory.productId, id));
+      await tx.delete(products).where(eq(products.id, id));
+    });
     return json({ ok: true });
   }
   if (request.method === "PATCH") {
-    const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional() }).safeParse(await body(request));
+    const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(1000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional() }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Invalid product update." }, { status: 400 });
     const { conditionIds, ...update } = parsed.data;
     const normalized = { ...update, imageUrl: parsed.data.imageUrl === undefined ? undefined : normalizeStoredImageUrl(parsed.data.imageUrl) };
@@ -215,6 +234,19 @@ export async function handleProducts(request: Request, id?: number) {
     return json({ ok: true });
   }
   return json({ error: "Method not allowed." }, { status: 405 });
+}
+
+export async function handleTaxonomy(request: Request, kind: "categories" | "conditions") {
+  const auth = await requireSession(request, [...admins]);
+  if ("response" in auth) return auth.response;
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  const parsed = z.object({ name: z.string().trim().min(2).max(150), description: z.string().trim().max(500).optional().default("") }).safeParse(await body(request));
+  if (!parsed.success) return json({ error: "Enter a valid name." }, { status: 400 });
+  const slug = `${parsed.data.name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`;
+  const [created] = kind === "categories"
+    ? await getDb().insert(categories).values({ name: parsed.data.name, slug, isActive: true })
+    : await getDb().insert(healthConditions).values({ name: parsed.data.name, slug, description: parsed.data.description || null, isActive: true });
+  return json({ ok: true, id: created.insertId, name: parsed.data.name }, { status: 201 });
 }
 
 function storageRoot() {
@@ -263,7 +295,17 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   if (downloadId) {
     const auth = await requireSession(request, [...team]);
     if ("response" in auth) return auth.response;
-    const [record] = await getDb().select().from(prescriptions).where(eq(prescriptions.id, downloadId)).limit(1);
+    const db=getDb();
+    if(request.method==="PATCH"){
+      const parsed=z.object({status:z.enum(["RECEIVED","UNDER_REVIEW","APPROVED","MORE_INFORMATION_REQUIRED","DECLINED"]),pharmacistNotes:z.string().trim().max(2000).optional().default("")}).safeParse(await body(request));
+      if(!parsed.success)return json({error:"Choose a valid prescription status."},{status:400});
+      const [record]=await db.select({id:prescriptions.id,email:users.email,firstName:users.firstName}).from(prescriptions).leftJoin(users,eq(users.id,prescriptions.customerId)).where(eq(prescriptions.id,downloadId)).limit(1);
+      if(!record)return json({error:"Prescription not found."},{status:404});
+      await db.update(prescriptions).set({status:parsed.data.status,pharmacistNotes:parsed.data.pharmacistNotes||null,reviewedBy:auth.session.userId,reviewedAt:new Date()}).where(eq(prescriptions.id,downloadId));
+      if(record.email)void sendEmail({to:record.email,subject:"Prescription review update",message:`Hello ${record.firstName||"customer"},\n\nYour prescription status is now ${parsed.data.status.replaceAll("_"," ").toLowerCase()}.${parsed.data.pharmacistNotes?`\n\nPharmacist note: ${parsed.data.pharmacistNotes}`:""}\n\nSign in to your Healthfield account to track progress.`});
+      return json({ok:true,status:parsed.data.status});
+    }
+    const [record] = await db.select().from(prescriptions).where(eq(prescriptions.id, downloadId)).limit(1);
     if (!record) return json({ error: "Prescription not found." }, { status: 404 });
     try {
       const buffer = await readFile(path.join(storageRoot(), "prescriptions", path.basename(record.storageKey)));
@@ -278,7 +320,7 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   const allowed = new Map([["application/pdf", ".pdf"], ["image/png", ".png"], ["image/jpeg", ".jpg"]]);
   const extension = allowed.get(file.type);
   if (!extension) return json({ error: "Only PDF, PNG, JPG and JPEG files are supported." }, { status: 415 });
-  if (file.size <= 0 || file.size > 10 * 1024 * 1024) return json({ error: "The file must be smaller than 10 MB." }, { status: 413 });
+  if (file.size <= 0 || file.size > 2 * 1024 * 1024) return json({ error: "The file must be 2 MB or smaller." }, { status: 413 });
   const bytes = new Uint8Array(await file.arrayBuffer());
   const valid = file.type === "application/pdf" ? bytes.slice(0, 4).toString() === "37,80,68,70" : file.type === "image/png" ? bytes.slice(0, 8).toString() === "137,80,78,71,13,10,26,10" : bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   if (!valid) return json({ error: "The file content does not match its format." }, { status: 400 });
@@ -287,6 +329,8 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   const storedName = `${randomUUID()}${extension}`;
   await writeFile(path.join(directory, storedName), bytes, { flag: "wx" });
   const [created] = await getDb().insert(prescriptions).values({ customerId: auth.session.userId, storageKey: storedName, originalFilename: safeFilename(file.name), mimeType: file.type, sizeBytes: file.size, status: "RECEIVED" });
+  void sendEmail({to:auth.session.email,subject:"Prescription received",message:`Hello ${auth.session.firstName},\n\nWe received your prescription and it is awaiting pharmacist review. Track its progress from your Healthfield account.`});
+  if(process.env.NOTIFICATION_EMAIL)void sendEmail({to:process.env.NOTIFICATION_EMAIL,subject:"New prescription awaiting review",message:`A new prescription upload is awaiting pharmacist review. Reference: ${created.insertId}.`});
   return json({ ok: true, id: created.insertId }, { status: 201 });
 }
 

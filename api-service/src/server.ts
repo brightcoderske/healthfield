@@ -9,7 +9,7 @@ import { getDb, closeDb } from "./db";
 import { json } from "./http";
 import { handleView } from "./views";
 import {
-  handleAuth, handleCampaigns, handleChats, handleInventory, handleOrders, handlePrescriptions,
+  handleAuth, handleCampaigns, handleChats, handleInventory, handleOrders, handlePrescriptions, handleTaxonomy,
   handleProductImage, handleProducts, handleSettings, handleStaff, handleStores, serveProductImage,
 } from "./mutations";
 
@@ -70,7 +70,8 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname.startsWith("/v1/auth/") && rateLimited(ip)) return json({ error: "Too many attempts. Try again later." }, { status: 429, headers: { "Retry-After": "900" } });
 
   if (url.pathname.startsWith("/v1/views/") && request.method === "GET") return responseOf(handleView(request, url.pathname.slice(10)));
-  if (url.pathname.startsWith("/v1/auth/")) return responseOf(handleAuth(request, url.pathname.slice(9)));
+  const authMatch = url.pathname.match(/^\/v1\/auth\/(login|register|forgot-password|reset-password|change-password)$/);
+  if (authMatch) return responseOf(handleAuth(request, authMatch[1]));
   if (url.pathname === "/v1/chats") return responseOf(handleChats(request));
   if (url.pathname === "/v1/orders") return responseOf(handleOrders(request));
   const orderMatch = url.pathname.match(/^\/v1\/orders\/(\d+)$/);
@@ -79,11 +80,15 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/settings") return responseOf(handleSettings(request));
   if (url.pathname === "/v1/products/image") return responseOf(handleProductImage(request));
   if (url.pathname === "/v1/products") return responseOf(handleProducts(request));
+  if (url.pathname === "/v1/categories") return responseOf(handleTaxonomy(request, "categories"));
+  if (url.pathname === "/v1/conditions") return responseOf(handleTaxonomy(request, "conditions"));
   const productMatch = url.pathname.match(/^\/v1\/products\/(\d+)$/);
   if (productMatch) return responseOf(handleProducts(request, Number(productMatch[1])));
   if (url.pathname === "/v1/prescriptions") return responseOf(handlePrescriptions(request));
   const prescriptionMatch = url.pathname.match(/^\/v1\/prescriptions\/(\d+)\/download$/);
   if (prescriptionMatch) return responseOf(handlePrescriptions(request, Number(prescriptionMatch[1])));
+  const prescriptionStatusMatch = url.pathname.match(/^\/v1\/prescriptions\/(\d+)$/);
+  if (prescriptionStatusMatch) return responseOf(handlePrescriptions(request, Number(prescriptionStatusMatch[1])));
   const inventoryMatch = url.pathname.match(/^\/v1\/inventory\/(\d+)$/);
   if (inventoryMatch) return responseOf(handleInventory(request, Number(inventoryMatch[1])));
   if (url.pathname === "/v1/staff") return responseOf(handleStaff(request));

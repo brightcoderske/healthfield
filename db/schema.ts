@@ -112,6 +112,7 @@ export const branchInventory = mysqlTable("branch_inventory", {
 export const orders = mysqlTable("orders", {
   id: int("id").autoincrement().primaryKey(),
   orderNumber: varchar("order_number", { length: 40 }).notNull(),
+  checkoutToken: varchar("checkout_token", { length: 64 }),
   customerId: int("customer_id").references(() => users.id),
   customerName: varchar("customer_name", { length: 200 }).notNull(),
   phone: varchar("phone", { length: 30 }).notNull(),
@@ -132,13 +133,14 @@ export const orders = mysqlTable("orders", {
   ...timestamps,
 }, (table) => [
   uniqueIndex("orders_number_unique").on(table.orderNumber),
+  uniqueIndex("orders_checkout_token_unique").on(table.checkoutToken),
   index("orders_work_queue_idx").on(table.status, table.createdAt),
 ]);
 
 export const orderItems = mysqlTable("order_items", {
   id: int("id").autoincrement().primaryKey(),
   orderId: int("order_id").notNull().references(() => orders.id),
-  productId: int("product_id").notNull().references(() => products.id),
+  productId: int("product_id").references(() => products.id, { onDelete: "set null" }),
   productName: varchar("product_name", { length: 220 }).notNull(),
   quantity: int("quantity").notNull(),
   unitPrice: decimal("unit_price", { precision: 12, scale: 2 }).notNull(),

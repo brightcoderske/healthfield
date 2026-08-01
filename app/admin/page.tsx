@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 
 export default async function AdminPage() {
   const session = await requireRole(["ADMIN", "SUPER_ADMIN"]);
-  const {newOrders,pendingPrescriptions,activeProducts,lowStock,customers,recentOrders}=await backendJson<{newOrders:number;pendingPrescriptions:number;activeProducts:number;lowStock:number;customers:number;recentOrders:Array<{id:number;orderNumber:string;customerName:string;deliveryArea:string|null;fulfilmentMethod:string;status:string;paymentStatus:string;total:string}>}>("/v1/views/admin/dashboard");
+  const {newOrders,pendingPrescriptions,activeProducts,lowStock,customers,newChats,recentOrders}=await backendJson<{newOrders:number;pendingPrescriptions:number;activeProducts:number;lowStock:number;customers:number;newChats:number;recentOrders:Array<{id:number;orderNumber:string;customerName:string;deliveryArea:string|null;fulfilmentMethod:string;status:string;paymentStatus:string;total:string}>}>("/v1/views/admin/dashboard");
 
   return (
     <div className="admin-shell">
@@ -32,13 +32,14 @@ export default async function AdminPage() {
           <a className="active" href="/admin"><LayoutDashboard /> Overview</a>
           <a href="/admin/orders"><ClipboardList /> Orders {newOrders > 0 && <b>{newOrders}</b>}</a>
           <a href="/admin/products"><Pill /> Products</a>
+          <a href="/admin/catalogue"><Package /> Categories & conditions</a>
           <a href="/admin/inventory"><Boxes /> Inventory</a>
           <a href="/admin/prescriptions"><ShieldCheck /> Prescriptions {pendingPrescriptions > 0 && <b>{pendingPrescriptions}</b>}</a>
           <a href="/admin/customers"><Users /> Customers</a>
           <a href="/admin/staff"><UserCog /> Staff</a>
           <a href="/admin/stores"><Building2 /> Stores</a>
           <a href="/admin/campaigns"><MessageSquareText /> Campaigns</a>
-          <a href="/admin/chats"><MessageSquareText /> Chats</a>
+          <a href="/admin/chats"><MessageSquareText /> Chats {newChats > 0 && <b>{newChats}</b>}</a>
           <a href="/admin/settings"><Settings /> Settings</a>
         </nav>
         <div className="admin-user"><span>{session.firstName.slice(0,1)}</span><div><strong>{session.firstName}</strong><small>{session.role.replace("_"," ")}</small></div></div>
@@ -69,7 +70,7 @@ export default async function AdminPage() {
           </article>
         </section>
       </main>
-      <nav className="admin-mobile-nav"><a className="active" href="/admin"><LayoutDashboard /><span>Home</span></a><a href="/admin/orders"><ClipboardList /><span>Orders</span></a><a href="/admin/products"><Pill /><span>Products</span></a><a href="/admin/inventory"><Boxes /><span>Stock</span></a><AdminMobileMenu/></nav>
+      <nav className="admin-mobile-nav"><a className="active" href="/admin"><LayoutDashboard /><span>Home</span></a><a href="/admin/orders"><ClipboardList /><span>Orders</span></a><a href="/admin/products"><Pill /><span>Products</span></a><a href="/admin/inventory"><Boxes /><span>Stock</span></a><AdminMobileMenu counts={{newOrders,newChats}}/></nav>
     </div>
   );
 }
