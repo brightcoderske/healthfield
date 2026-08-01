@@ -17,7 +17,9 @@ if [[ ! -f "${APPLICATION_ROOT}/.env" ]]; then
 fi
 
 # cPanel creates this activation script for the configured Node.js 24 app.
+set +u
 source "${VIRTUAL_ENV}"
+set -u
 cd "${REPOSITORY_ROOT}"
 
 export NODE_ENV=production
