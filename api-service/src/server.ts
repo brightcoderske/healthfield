@@ -82,6 +82,10 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/products") return responseOf(handleProducts(request));
   if (url.pathname === "/v1/categories") return responseOf(handleTaxonomy(request, "categories"));
   if (url.pathname === "/v1/conditions") return responseOf(handleTaxonomy(request, "conditions"));
+  const categoryMatch = url.pathname.match(/^\/v1\/categories\/(\d+)$/);
+  if (categoryMatch) return responseOf(handleTaxonomy(request, "categories", Number(categoryMatch[1])));
+  const conditionMatch = url.pathname.match(/^\/v1\/conditions\/(\d+)$/);
+  if (conditionMatch) return responseOf(handleTaxonomy(request, "conditions", Number(conditionMatch[1])));
   const productMatch = url.pathname.match(/^\/v1\/products\/(\d+)$/);
   if (productMatch) return responseOf(handleProducts(request, Number(productMatch[1])));
   if (url.pathname === "/v1/prescriptions") return responseOf(handlePrescriptions(request));

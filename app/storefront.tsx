@@ -86,12 +86,18 @@ export function Storefront({ initialProducts, initialCategories, initialConditio
     const conditionMatch = initialConditions.find((item) => item.slug === condition);
     if (conditionMatch) setSelectedCondition(conditionMatch.id);
   }, []);
+  useEffect(() => {
+    const button=document.querySelector<HTMLButtonElement>(".desktop-hero-row aside button");
+    const showAll=()=>{setSelectedCategory(null);setVisibleCount(24);document.getElementById("categories")?.scrollIntoView({behavior:"smooth"})};
+    button?.addEventListener("click",showAll);
+    return()=>button?.removeEventListener("click",showAll);
+  },[]);
   const cartCount = Object.values(cart).reduce((sum, quantity) => sum + quantity, 0);
 
   return (
     <div className="approved-app">
       <div className="desktop-store">
-        <div className="desktop-trust"><span><Truck /> {contact.deliveryMessage}</span><span><ShieldCheck /> 100% Genuine Products</span><span><Package /> Secure Payments</span>{(contact.phone||contact.whatsapp)&&<span><Phone /> Call/WhatsApp: {contact.whatsapp||contact.phone}</span>}<a href={viewer?(viewer.role==="CUSTOMER"?"/account":viewer.role==="STAFF"?"/staff":"/admin"):"/login"}><CircleUserRound/> {viewer?`Hi, ${viewer.firstName}`:"Login / Register"}</a><a href="/wishlist"><Heart/> Wishlist ({wishlist.length})</a><a href="/cart"><ShoppingCart /> Cart ({cartCount})</a></div>
+        <div className="desktop-trust"><span><Truck /> {contact.deliveryMessage}</span><span><ShieldCheck /> 100% Genuine Products</span><span><Package /> Secure Payments</span>{(contact.phone||contact.whatsapp)&&<span><Phone /> Call/WhatsApp: {contact.whatsapp||contact.phone}</span>}<a href={viewer?(viewer.role==="CUSTOMER"?"/account":viewer.role==="STAFF"?"/staff":"/admin"):"/login"}><CircleUserRound/> {viewer?`Hi, ${viewer.firstName}`:"Login / Register"}</a>{viewer?.role==="CUSTOMER"&&<a href="/account#orders"><Package/> My orders</a>}<a href="/wishlist"><Heart/> Wishlist ({wishlist.length})</a><a href="/cart"><ShoppingCart /> Cart ({cartCount})</a></div>
         <div className="desktop-brand-row"><a href="/"><Image src="/healthfield-logo-clean.png" alt="Healthfield Pharmacy" width={250} height={90} priority /></a><label><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search for medicines, health & wellness products..." /><button><Search /></button></label><a className="desktop-help" href={contact.phone ? `tel:${contact.phone.replace(/\s/g,"")}` : contact.whatsapp ? `https://wa.me/${contact.whatsapp.replace(/\D/g,"")}` : "/admin/settings"}><Phone /><span><small>Need Help?</small><strong>{contact.phone||contact.whatsapp||"Contact pharmacy"}</strong></span></a></div>
         <nav className="desktop-store-nav"><a className={!selectedCategory?"active":""} href="/">Home</a>{displayedCategories.map((category)=><a key={category.id} className={selectedCategory===category.id?"active":""} href={`/?category=${category.slug}#products`}>{category.name}</a>)}<a href="/?offers=1#products">Offers</a></nav>
       </div>
@@ -138,7 +144,7 @@ export function Storefront({ initialProducts, initialCategories, initialConditio
         </label>
 
         <section className="approved-section" id="categories">
-          <div className="approved-title"><h1>Categories</h1><a href="#products">View All</a></div>
+          <div className="approved-title"><h1>Categories</h1><button type="button" onClick={()=>{setSelectedCategory(null);setVisibleCount(24);document.getElementById("products")?.scrollIntoView({behavior:"smooth"})}}>View All</button></div>
           <div className="approved-categories">
             <a className="prescription-category-link" href="/prescriptions/upload"><span className="green"><Upload /></span><small>Upload Prescription</small></a>
             {displayedCategories.map(({ id, name, icon: Icon, color }) => (

@@ -31,7 +31,7 @@ export function ProductManager({ initialProducts, categories, conditions }: { in
     const form = new FormData(event.currentTarget);
     const payload = {
       categoryId: Number(form.get("categoryId")), name: String(form.get("name")), brand: String(form.get("brand") || ""),
-      packSize: String(form.get("packSize") || ""), shortDescription: String(form.get("shortDescription") || ""),
+      packSize: String(form.get("packSize") || ""), shortDescription: "",
       description: String(form.get("description") || ""),
       price: Number(form.get("price")), discountPrice: form.get("discountPrice") ? Number(form.get("discountPrice")) : null,
       imageUrl: editing === "new" ? null : editing.imageUrl, isFeatured: form.get("isFeatured") === "on",
@@ -116,7 +116,6 @@ export function ProductManager({ initialProducts, categories, conditions }: { in
         <label>Price (KES)<input name="price" type="number" min="0" step=".01" defaultValue={activeEdit?.price||""} required/></label><label>Discount price<input name="discountPrice" type="number" min="0" step=".01" defaultValue={activeEdit?.discountPrice||""}/></label>
         <label className="full">Product image<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/bmp,image/tiff,.jpg,.jpeg,.png,.webp,.gif,.avif,.bmp,.tif,.tiff" onChange={chooseImage}/><small>JPEG, PNG, WebP, GIF, AVIF, BMP or TIFF. Maximum 2 MB.</small></label>
         {(imagePreview||activeEdit?.imageUrl)&&<div className="edit-image-preview full"><img src={imagePreview||activeEdit?.imageUrl||""} alt={activeEdit?.name||"New product preview"}/>{activeEdit?.imageUrl&&!imagePreview&&<button type="button" onClick={()=>removeImage(activeEdit)}><ImageOff/> Remove image now</button>}</div>}
-        <label className="full">Short card description<textarea name="shortDescription" maxLength={500} rows={3} defaultValue={activeEdit?.shortDescription||""} placeholder="Short catalogue summary."/></label>
         <label className="full">Detailed description<RichTextEditor defaultValue={activeEdit?.description||""}/></label>
         <fieldset className="full condition-picker"><legend>Health conditions supported by this product</legend>{conditions.map((item)=><label key={item.id}><input type="checkbox" name="conditionIds" value={item.id} defaultChecked={activeEdit?.conditionIds.includes(item.id)}/><span>{item.name}</span></label>)}</fieldset>
         <label className="check-label"><input type="checkbox" name="isFeatured" defaultChecked={activeEdit?.isFeatured}/> Featured</label><label className="check-label"><input type="checkbox" name="isActive" defaultChecked={activeEdit?.isActive??true}/> Active</label>

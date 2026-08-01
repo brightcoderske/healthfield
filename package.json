@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
+    "dev:api": "node scripts/build-api.mjs && node --env-file=.env.local api-service/dist/server.mjs",
     "build": "next build --webpack",
     "build:api": "node scripts/build-api.mjs",
     "check:api": "tsc --noEmit -p api-service/tsconfig.json",

@@ -37,7 +37,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   const data = await dataFor(Number((await params).id));
   if (!data) return { title: "Product not found" };
   const { product } = data;
-  const description = product.shortDescription || `Buy ${product.name} from Healthfield Pharmacy.`;
+  const description = product.description || `Buy ${product.name} from Healthfield Pharmacy.`;
   const origin = await currentOrigin();
   const previewImage = product.imageUrl || `${origin}/healthfield-logo-clean.png`;
   return {
@@ -84,7 +84,6 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
         <span>{product.brand || "Healthfield Pharmacy"}</span><h1>{product.name}</h1>
         {rating && <div className="detail-rating"><Star />{rating.toFixed(1)} <small>{reviewCount} verified {reviewCount === 1 ? "review" : "reviews"}</small></div>}
         {product.packSize && <p>{product.packSize}</p>}<strong>KES {price.toLocaleString()}</strong>
-        {product.shortDescription && <div className="product-description"><h2>Description</h2><p>{product.shortDescription}</p></div>}
         <div className="availability-pill">Available to order</div>
         {product.prescriptionRequired && <div className="prescription-note"><ShieldCheck />A valid prescription is required before this order can be processed. <Link href="/prescriptions/upload">Upload prescription</Link></div>}
         <ProductActions productId={product.id} productName={product.name} productUrl={productUrl} />

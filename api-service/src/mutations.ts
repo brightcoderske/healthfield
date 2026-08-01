@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import bcrypt, { hash } from "bcryptjs";
-import { and, desc, eq, gte, inArray, ne, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, orderItems, orders,
@@ -10,7 +10,7 @@ import {
 } from "../../db/schema";
 import { createPasswordResetToken, createSessionToken, requireSession, requestSession, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
-import { sendBulkEmail, sendEmail } from "./email";
+import { orderEmailHtml, sendBulkEmail, sendEmail } from "./email";
 import { json, publicImageUrl, safeFilename } from "./http";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
@@ -35,6 +35,7 @@ export async function handleAuth(request: Request, action: string) {
     if (!user || !valid || !user.isActive) return json({ error: "Incorrect email or password." }, { status: 401 });
     const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+    if (user.role === "CUSTOMER") await db.update(orders).set({ customerId: user.id }).where(and(isNull(orders.customerId), eq(orders.email, user.email)));
     const when = new Date().toLocaleString("en-KE", { timeZone: "Africa/Nairobi" });
     void sendEmail({ to: user.email, subject: "Healthfield Pharmacy sign-in", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy account was signed in at ${when} (East Africa Time).\n\nIf this was not you, reset your password immediately from the login page.` });
     if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Sign-in: ${user.email}`, message: `${user.firstName} ${user.lastName} (${user.role}) signed in at ${when}.\nEmail: ${user.email}` });
@@ -81,6 +82,7 @@ export async function handleAuth(request: Request, action: string) {
       console.error("Customer registration insert failed", error);
       return json({ error: "That email address or phone number is already registered." }, { status: 409 });
     }
+    await db.update(orders).set({ customerId: created.insertId }).where(and(isNull(orders.customerId), eq(orders.email, customer.email)));
     const session = { userId: created.insertId, email: customer.email, firstName: customer.firstName, role: "CUSTOMER" as const, forcePasswordChange: false };
     await sendEmail({ to: customer.email, subject: "Welcome to Healthfield Pharmacy", message: `Hello ${customer.firstName},\n\nYour Healthfield Pharmacy account is ready. You can now shop, save products, chat with our team and track your orders.` }).catch(console.error);
     if (process.env.NOTIFICATION_EMAIL) await sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New Healthfield customer account", message: `${customer.firstName} ${customer.lastName} created a customer account.\nEmail: ${customer.email}\nPhone: ${customer.phone}` }).catch(console.error);
@@ -177,7 +179,7 @@ export async function handleOrders(request: Request, id?: number) {
     await tx.insert(orderItems).values(lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })));
     return created;
   });
-  if (parsed.data.email) void sendEmail({ to: parsed.data.email, subject: `Order ${orderNumber} received`, message: `Hello ${parsed.data.fullName},\n\nWe received order ${orderNumber}.\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.\n\nWe will update you as your order progresses.` });
+  if (parsed.data.email) void sendEmail({ to: parsed.data.email, subject: `Order ${orderNumber} received`, message: `Hello ${parsed.data.fullName},\n\nWe received order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}.\n\nWe will update you as your order progresses.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"NEW"}) });
   if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.` });
   return json({ ok: true, id: result.insertId, orderNumber, total: subtotal + deliveryFee }, { status: 201 });
 }
@@ -236,9 +238,11 @@ export async function handleProducts(request: Request, id?: number) {
   return json({ error: "Method not allowed." }, { status: 405 });
 }
 
-export async function handleTaxonomy(request: Request, kind: "categories" | "conditions") {
+export async function handleTaxonomy(request: Request, kind: "categories" | "conditions", id?: number) {
   const auth = await requireSession(request, [...admins]);
   if ("response" in auth) return auth.response;
+  if (request.method === "DELETE" && id) { if(kind==="categories")await getDb().update(categories).set({isActive:false}).where(eq(categories.id,id));else await getDb().update(healthConditions).set({isActive:false}).where(eq(healthConditions.id,id)); return json({ok:true}); }
+  if (request.method === "PATCH" && id) { const parsed=z.object({name:z.string().trim().min(2).max(150),description:z.string().trim().max(500).optional().default("")}).safeParse(await body(request));if(!parsed.success)return json({error:"Enter a valid name."},{status:400});if(kind==="categories")await getDb().update(categories).set({name:parsed.data.name}).where(eq(categories.id,id));else await getDb().update(healthConditions).set({name:parsed.data.name,description:parsed.data.description||null}).where(eq(healthConditions.id,id));return json({ok:true}); }
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
   const parsed = z.object({ name: z.string().trim().min(2).max(150), description: z.string().trim().max(500).optional().default("") }).safeParse(await body(request));
   if (!parsed.success) return json({ error: "Enter a valid name." }, { status: 400 });
