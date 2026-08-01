@@ -27,6 +27,8 @@ export CI=true
 export PNPM_CONFIG_NETWORK_CONCURRENCY=1
 export PNPM_CONFIG_CHILD_CONCURRENCY=1
 export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy
+# pnpm 11 uses this worker pool while importing packages from its store.
+export PNPM_MAX_WORKERS=1
 
 echo "Deploying repository commit $(git rev-parse --short HEAD)..."
 
