@@ -63,6 +63,7 @@ next-env.d.ts
 /api-service/.release.previous/
 /api-service/dist.next/
 /api-service/dist.previous/
+/api-service/.healthfield-build.json
 
 # Backend deployment files
 api-service/node_modules/
