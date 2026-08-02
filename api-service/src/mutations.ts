@@ -6,7 +6,7 @@ import { and, desc, eq, gte, inArray, isNull, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, orderItems, orders,
-  categories, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, users,
+  activityLogs, categories, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, users,
 } from "../../db/schema";
 import { createPasswordResetToken, createSessionToken, requireSession, requestSession, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
@@ -182,6 +182,51 @@ export async function handleOrders(request: Request, id?: number) {
   if (parsed.data.email) void sendEmail({ to: parsed.data.email, subject: `Order ${orderNumber} received`, message: `Hello ${parsed.data.fullName},\n\nWe received order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}.\n\nWe will update you as your order progresses.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"NEW"}) });
   if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.` });
   return json({ ok: true, id: result.insertId, orderNumber, total: subtotal + deliveryFee }, { status: 201 });
+}
+
+export async function handleWalkInSales(request: Request) {
+  const auth = await requireSession(request, [...team]);
+  if ("response" in auth) return auth.response;
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  const parsed = z.object({
+    branchId: z.number().int().positive(),
+    customerName: z.string().trim().max(200).optional(), phone: z.string().trim().max(30).optional(),
+    email: z.string().trim().email().optional().or(z.literal("")),
+    items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).min(1),
+  }).safeParse(await body(request));
+  if (!parsed.success) return json({ error: "Choose a branch and at least one valid product." }, { status: 400 });
+  const db = getDb();
+  const [branch] = await db.select({ id: branches.id }).from(branches).where(and(eq(branches.id, parsed.data.branchId), eq(branches.isActive, true))).limit(1);
+  if (!branch) return json({ error: "Choose an active branch." }, { status: 400 });
+  const grouped = new Map<number, number>();
+  for (const item of parsed.data.items) grouped.set(item.productId, (grouped.get(item.productId) || 0) + item.quantity);
+  const itemList = [...grouped].map(([productId, quantity]) => ({ productId, quantity }));
+  const catalog = await db.select().from(products).where(and(inArray(products.id, itemList.map((item) => item.productId)), eq(products.isActive, true)));
+  if (catalog.length !== itemList.length) return json({ error: "One or more products are unavailable." }, { status: 409 });
+  const subtotal = itemList.reduce((sum, item) => { const product = catalog.find((entry) => entry.id === item.productId)!; return sum + Number(product.discountPrice ?? product.price) * item.quantity; }, 0);
+  const orderNumber = `POS-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 5).toUpperCase()}`;
+  try {
+    const result = await db.transaction(async (tx) => {
+      const stock = await tx.select().from(branchInventory).where(and(eq(branchInventory.branchId, branch.id), inArray(branchInventory.productId, itemList.map((item) => item.productId))));
+      for (const item of itemList) {
+        const record = stock.find((row) => row.productId === item.productId);
+        if (!record || record.quantityAvailable < item.quantity) {
+          const product = catalog.find((entry) => entry.id === item.productId)!;
+          throw new Error(`Insufficient stock for ${product.name}.`);
+        }
+      }
+      const [created] = await tx.insert(orders).values({ orderNumber, customerName: parsed.data.customerName || "Walk-in customer", phone: parsed.data.phone || "Walk-in", email: parsed.data.email || null, fulfilmentMethod: "PICKUP", status: "COMPLETED", paymentStatus: "PAID", subtotal: subtotal.toString(), deliveryFee: "0", discount: "0", total: subtotal.toString(), suggestedBranchId: branch.id });
+      await tx.insert(orderItems).values(itemList.map((item) => { const product = catalog.find((entry) => entry.id === item.productId)!; const unitPrice = Number(product.discountPrice ?? product.price); return { orderId: created.insertId, productId: product.id, productName: product.name, quantity: item.quantity, unitPrice: unitPrice.toString(), lineTotal: (unitPrice * item.quantity).toString() }; }));
+      for (const item of itemList) { const record = stock.find((row) => row.productId === item.productId)!; await tx.update(branchInventory).set({ quantityAvailable: record.quantityAvailable - item.quantity, updatedBy: auth.session.userId }).where(eq(branchInventory.id, record.id)); }
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "WALK_IN_SALE", entityType: "order", entityId: String(created.insertId), metadata: { branchId: branch.id, total: subtotal, itemCount: itemList.length } });
+      return created.insertId;
+    });
+    return json({ ok: true, id: result, orderNumber, total: subtotal }, { status: 201 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Walk-in sale could not be completed.";
+    console.error("Walk-in sale failed", error);
+    return json({ error: message }, { status: message.startsWith("Insufficient stock") ? 409 : 500 });
+  }
 }
 
 const productSchema = z.object({

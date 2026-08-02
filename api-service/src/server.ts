@@ -10,7 +10,7 @@ import { json } from "./http";
 import { handleView } from "./views";
 import {
   handleAuth, handleCampaigns, handleChats, handleInventory, handleOrders, handlePrescriptions, handleTaxonomy,
-  handleProductImage, handleProducts, handleSettings, handleStaff, handleStores, serveProductImage,
+  handleProductImage, handleProducts, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
 } from "./mutations";
 
 const envPath = resolve(process.cwd(), ".env");
@@ -83,6 +83,7 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/orders") return responseOf(handleOrders(request));
   const orderMatch = url.pathname.match(/^\/v1\/orders\/(\d+)$/);
   if (orderMatch) return responseOf(handleOrders(request, Number(orderMatch[1])));
+  if (url.pathname === "/v1/walk-in-sales") return responseOf(handleWalkInSales(request));
   if (url.pathname === "/v1/campaigns") return responseOf(handleCampaigns(request));
   if (url.pathname === "/v1/settings") return responseOf(handleSettings(request));
   if (url.pathname === "/v1/products/image") return responseOf(handleProductImage(request));

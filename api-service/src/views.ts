@@ -226,5 +226,15 @@ export async function handleView(request: Request, path: string) {
     ]);
     return json({ newOrders, pending, lowStock, queue });
   }
+  if (path === "walk-in-sale") {
+    const auth = await requireSession(request, [...teamRoles]);
+    if ("response" in auth) return auth.response;
+    const [branchRows, productRows, stockRows] = await Promise.all([
+      getDb().select({ id: branches.id, name: branches.name }).from(branches).where(eq(branches.isActive, true)).orderBy(asc(branches.name)),
+      getDb().select({ id: products.id, name: products.name, sku: products.sku, price: products.price, discountPrice: products.discountPrice }).from(products).where(eq(products.isActive, true)).orderBy(asc(products.name)),
+      getDb().select({ branchId: branchInventory.branchId, productId: branchInventory.productId, available: branchInventory.quantityAvailable }).from(branchInventory),
+    ]);
+    return json({ branches: branchRows, products: productRows.map((product) => ({ ...product, price: Number(product.price), discountPrice: product.discountPrice === null ? null : Number(product.discountPrice) })), stock: stockRows });
+  }
   return json({ error: "View not found." }, { status: 404 });
 }
