@@ -37,7 +37,7 @@ export async function handleAuth(request: Request, action: string) {
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
     if (user.role === "CUSTOMER") await db.update(orders).set({ customerId: user.id }).where(and(isNull(orders.customerId), eq(orders.email, user.email)));
     const when = new Date().toLocaleString("en-KE", { timeZone: "Africa/Nairobi" });
-    void sendEmail({ to: user.email, subject: "Healthfield Pharmacy sign-in", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy account was signed in at ${when} (East Africa Time).\n\nIf this was not you, reset your password immediately from the login page.` });
+    void sendEmail({ to: user.email, subject: "Healthfield Pharmacy sign-in", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy account was signed in at ${when} (East Africa Time).\n\nIf this was not you, reset your password immediately from the login page.`, action:{label:"Secure my account",url:`${storefrontOrigin()}/forgot-password`} });
     if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Sign-in: ${user.email}`, message: `${user.firstName} ${user.lastName} (${user.role}) signed in at ${when}.\nEmail: ${user.email}` });
     return json({ token: await createSessionToken(session), session, role: user.role, redirectTo: user.forcePasswordChange ? "/change-password" : user.role === "CUSTOMER" ? "/#products" : user.role === "STAFF" ? "/staff" : "/admin" });
   }
@@ -48,7 +48,7 @@ export async function handleAuth(request: Request, action: string) {
     if (user?.isActive) {
       const token = await createPasswordResetToken({ userId: user.id, email: user.email });
       const resetUrl = `${storefrontOrigin()}/reset-password?token=${encodeURIComponent(token)}`;
-      await sendEmail({ to: user.email, subject: "Reset your Healthfield Pharmacy password", message: `Hello ${user.firstName},\n\nUse this link to choose a new password. It expires in one hour.\n\n${resetUrl}\n\nIf you did not request this, you can ignore this email.` });
+      await sendEmail({ to: user.email, subject: "Reset your Healthfield Pharmacy password", message: `Hello ${user.firstName},\n\nUse the button below to choose a new password. It expires in one hour.\n\nIf you did not request this, you can ignore this email.`, action:{label:"Reset password",url:resetUrl} });
     }
     return json({ ok: true, message: "If this email is registered, reset instructions will be sent." });
   }
@@ -60,7 +60,7 @@ export async function handleAuth(request: Request, action: string) {
     const [user] = await db.select().from(users).where(and(eq(users.id, reset.userId), eq(users.email, reset.email))).limit(1);
     if (!user || !user.isActive) return json({ error: "This reset link is invalid or has expired." }, { status: 400 });
     await db.update(users).set({ passwordHash: await bcrypt.hash(parsed.data.newPassword, 12), forcePasswordChange: false }).where(eq(users.id, user.id));
-    void sendEmail({ to: user.email, subject: "Your Healthfield password was changed", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy password was changed successfully. If you did not do this, contact the pharmacy immediately.` });
+    void sendEmail({ to: user.email, subject: "Your Healthfield password was changed", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy password was changed successfully. If you did not do this, contact the pharmacy immediately.`, action:{label:"Sign in securely",url:`${storefrontOrigin()}/login`} });
     return json({ ok: true, message: "Password updated. You can sign in with your new password." });
   }
   if (action === "register" && request.method === "POST") {
@@ -84,7 +84,7 @@ export async function handleAuth(request: Request, action: string) {
     }
     await db.update(orders).set({ customerId: created.insertId }).where(and(isNull(orders.customerId), eq(orders.email, customer.email)));
     const session = { userId: created.insertId, email: customer.email, firstName: customer.firstName, role: "CUSTOMER" as const, forcePasswordChange: false };
-    await sendEmail({ to: customer.email, subject: "Welcome to Healthfield Pharmacy", message: `Hello ${customer.firstName},\n\nYour Healthfield Pharmacy account is ready. You can now shop, save products, chat with our team and track your orders.` }).catch(console.error);
+    await sendEmail({ to: customer.email, subject: "Welcome to Healthfield Pharmacy", message: `Hello ${customer.firstName},\n\nYour Healthfield Pharmacy account is ready. You can now shop, save products, chat with our team and track your orders.`, action:{label:"Start shopping",url:`${storefrontOrigin()}/#products`} }).catch(console.error);
     if (process.env.NOTIFICATION_EMAIL) await sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New Healthfield customer account", message: `${customer.firstName} ${customer.lastName} created a customer account.\nEmail: ${customer.email}\nPhone: ${customer.phone}` }).catch(console.error);
     return json({ token: await createSessionToken(session), session, redirectTo: "/#products" }, { status: 201 });
   }
@@ -151,7 +151,7 @@ export async function handleOrders(request: Request, id?: number) {
     if(order.status===status)return json({ok:true,status});
     const label = status==="READY_FOR_DISPATCH"?"packaged and ready for dispatch":status.replaceAll("_", " ").toLowerCase();
     const notificationEmail=details.email===undefined?order.email:details.email,notificationName=details.customerName||order.customerName;
-    if (notificationEmail) void sendEmail({ to: notificationEmail, subject: `Order ${order.orderNumber} update`, message: `Hello ${notificationName},\n\nYour order ${order.orderNumber} is now ${label}.\n\nThank you for choosing Healthfield Pharmacy.` });
+    if (notificationEmail) void sendEmail({ to: notificationEmail, subject: `Order ${order.orderNumber} update`, message: `Hello ${notificationName},\n\nYour order ${order.orderNumber} is now ${label}.\n\nThank you for choosing Healthfield Pharmacy.`, action:{label:"Track my order",url:`${storefrontOrigin()}/account#orders`} });
     if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.` });
     return json({ok:true,status});
   }
@@ -351,7 +351,7 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
       const [record]=await db.select({id:prescriptions.id,email:users.email,firstName:users.firstName}).from(prescriptions).leftJoin(users,eq(users.id,prescriptions.customerId)).where(eq(prescriptions.id,downloadId)).limit(1);
       if(!record)return json({error:"Prescription not found."},{status:404});
       await db.update(prescriptions).set({status:parsed.data.status,pharmacistNotes:parsed.data.pharmacistNotes||null,reviewedBy:auth.session.userId,reviewedAt:new Date()}).where(eq(prescriptions.id,downloadId));
-      if(record.email)void sendEmail({to:record.email,subject:"Prescription review update",message:`Hello ${record.firstName||"customer"},\n\nYour prescription status is now ${parsed.data.status.replaceAll("_"," ").toLowerCase()}.${parsed.data.pharmacistNotes?`\n\nPharmacist note: ${parsed.data.pharmacistNotes}`:""}\n\nSign in to your Healthfield account to track progress.`});
+      if(record.email)void sendEmail({to:record.email,subject:"Prescription review update",message:`Hello ${record.firstName||"customer"},\n\nYour prescription status is now ${parsed.data.status.replaceAll("_"," ").toLowerCase()}.${parsed.data.pharmacistNotes?`\n\nPharmacist note: ${parsed.data.pharmacistNotes}`:""}\n\nSign in to your Healthfield account to track progress.`,action:{label:"View prescription progress",url:`${storefrontOrigin()}/account#prescriptions`}});
       return json({ok:true,status:parsed.data.status});
     }
     const [record] = await db.select().from(prescriptions).where(eq(prescriptions.id, downloadId)).limit(1);
@@ -378,7 +378,7 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   const storedName = `${randomUUID()}${extension}`;
   await writeFile(path.join(directory, storedName), bytes, { flag: "wx" });
   const [created] = await getDb().insert(prescriptions).values({ customerId: auth.session.userId, storageKey: storedName, originalFilename: safeFilename(file.name), mimeType: file.type, sizeBytes: file.size, status: "RECEIVED" });
-  void sendEmail({to:auth.session.email,subject:"Prescription received",message:`Hello ${auth.session.firstName},\n\nWe received your prescription and it is awaiting pharmacist review. Track its progress from your Healthfield account.`});
+  void sendEmail({to:auth.session.email,subject:"Prescription received",message:`Hello ${auth.session.firstName},\n\nWe received your prescription and it is awaiting pharmacist review. Track its progress from your Healthfield account.`,action:{label:"Track prescription",url:`${storefrontOrigin()}/account#prescriptions`}});
   if(process.env.NOTIFICATION_EMAIL)void sendEmail({to:process.env.NOTIFICATION_EMAIL,subject:"New prescription awaiting review",message:`A new prescription upload is awaiting pharmacist review. Reference: ${created.insertId}.`});
   return json({ ok: true, id: created.insertId }, { status: 201 });
 }
