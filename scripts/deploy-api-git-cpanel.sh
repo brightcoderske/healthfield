@@ -42,6 +42,9 @@ echo "Deploying repository commit ${DEPLOY_SHORT_COMMIT} at ${DEPLOY_STARTED_AT}
 # Install only on the first deployment or when pnpm-lock.yaml changes.
 LOCK_HASH="$(sha256sum pnpm-lock.yaml | awk '{print $1}')"
 LOCK_MARKER="node_modules/.healthfield-pnpm-lock.sha256"
+CURRENT_BUNDLE="${APPLICATION_ROOT}/dist"
+STAGED_BUNDLE="${APPLICATION_ROOT}/dist.next"
+PREVIOUS_BUNDLE="${APPLICATION_ROOT}/dist.previous"
 INSTALLED_HASH="$(cat "${LOCK_MARKER}" 2>/dev/null || true)"
 if [[ ! -d node_modules || "${LOCK_HASH}" != "${INSTALLED_HASH}" ]]; then
   echo "Dependency lock changed; installing packages..."
@@ -56,10 +59,32 @@ else
 fi
 
 node node_modules/typescript/bin/tsc --noEmit -p api-service/tsconfig.json
-node scripts/build-api.mjs
 
-# Fail the deployment before restarting Passenger if the database cannot migrate.
+# Build away from the live bundle. A failed build leaves the running API's dist untouched.
+rm -rf "${STAGED_BUNDLE}"
+HEALTHFIELD_API_OUTPUT="${STAGED_BUNDLE}" node scripts/build-api.mjs
+test -s "${STAGED_BUNDLE}/server.mjs"
+
+# Fail the deployment before replacing the current bundle if the database cannot migrate.
 node scripts/migrate-api.mjs
+
+# Keep one rollback bundle only. The two renames occur on the same filesystem.
+# The active Node process continues serving its in-memory code until cPanel reloads it.
+SWAP_STARTED=0
+restore_bundle() {
+  if [[ "${SWAP_STARTED}" == "1" && ! -d "${CURRENT_BUNDLE}" && -d "${PREVIOUS_BUNDLE}" ]]; then
+    mv "${PREVIOUS_BUNDLE}" "${CURRENT_BUNDLE}"
+  fi
+}
+trap restore_bundle ERR
+rm -rf "${PREVIOUS_BUNDLE}"
+if [[ -d "${CURRENT_BUNDLE}" ]]; then
+  SWAP_STARTED=1
+  mv "${CURRENT_BUNDLE}" "${PREVIOUS_BUNDLE}"
+fi
+mv "${STAGED_BUNDLE}" "${CURRENT_BUNDLE}"
+SWAP_STARTED=0
+trap - ERR
 
 # This stamp is written only after type-check, bundle, and migrations succeed.
 # /health returns it after the Node application has actually reloaded.
@@ -78,6 +103,7 @@ fi
 mkdir -p "${APPLICATION_ROOT}/tmp"
 touch "${APPLICATION_ROOT}/tmp/restart.txt"
 
-echo "API build and migrations completed: ${DEPLOY_SHORT_COMMIT} at ${DEPLOY_COMPLETED_AT}"
+echo "API build, migrations, and bundle swap completed: ${DEPLOY_SHORT_COMMIT} at ${DEPLOY_COMPLETED_AT}"
+echo "Rollback bundle retained at ${PREVIOUS_BUNDLE} (replaced on the next successful deployment)."
 echo "Restart signal written to ${APPLICATION_ROOT}/tmp/restart.txt."
 echo "After cPanel reloads the Node application, verify: curl -fsS https://api.healthfieldpharmacy.co.ke/health"
