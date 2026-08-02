@@ -5,6 +5,9 @@ REPOSITORY_ROOT="/home/healthfi/health_field"
 APPLICATION_ROOT="${REPOSITORY_ROOT}/api-service"
 VIRTUAL_ENV="/home/healthfi/nodevenv/health_field/api-service/24/bin/activate"
 STORAGE_ROOT="/home/healthfi/healthfield-storage"
+RELEASE_ARCHIVE="${REPOSITORY_ROOT}/deploy/healthfield-api-production.tar.gz"
+RELEASE_STAGE="${APPLICATION_ROOT}/.release.next"
+RELEASE_PREVIOUS="${APPLICATION_ROOT}/.release.previous"
 
 if [[ ! -f "${VIRTUAL_ENV}" ]]; then
   echo "Node.js virtual environment was not found: ${VIRTUAL_ENV}" >&2
@@ -24,8 +27,8 @@ cd "${REPOSITORY_ROOT}"
 
 export NODE_ENV=production
 export CI=true
-# Shared cPanel accounts can reject pnpm's default worker burst with EAGAIN.
-# Keep installs deliberately single-worker; this runs only when pnpm-lock.yaml changes.
+# Dependencies are normally installed through cPanel only when package dependencies change.
+# The production API bundle itself is built locally and delivered as a release archive.
 export PNPM_CONFIG_NETWORK_CONCURRENCY=1
 export PNPM_CONFIG_CHILD_CONCURRENCY=1
 export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy
@@ -39,52 +42,43 @@ DEPLOY_SHORT_COMMIT="$(git rev-parse --short HEAD)"
 DEPLOY_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "Deploying repository commit ${DEPLOY_SHORT_COMMIT} at ${DEPLOY_STARTED_AT}..."
 
-# Install only on the first deployment or when pnpm-lock.yaml changes.
-LOCK_HASH="$(sha256sum pnpm-lock.yaml | awk '{print $1}')"
-LOCK_MARKER="node_modules/.healthfield-pnpm-lock.sha256"
-CURRENT_BUNDLE="${APPLICATION_ROOT}/dist"
-STAGED_BUNDLE="${APPLICATION_ROOT}/dist.next"
-PREVIOUS_BUNDLE="${APPLICATION_ROOT}/dist.previous"
-INSTALLED_HASH="$(cat "${LOCK_MARKER}" 2>/dev/null || true)"
-if [[ ! -d node_modules || "${LOCK_HASH}" != "${INSTALLED_HASH}" ]]; then
-  echo "Dependency lock changed; installing packages..."
+# Set INSTALL_DEPS=1 only after changing runtime dependencies in package.json.
+if [[ "${INSTALL_DEPS:-0}" == "1" ]]; then
+  echo "Installing changed dependencies with cPanel-safe limits..."
   if command -v corepack >/dev/null 2>&1; then
     corepack pnpm install --frozen-lockfile --prod=false --network-concurrency=1 --child-concurrency=1
   else
     npx --yes pnpm@10.15.0 install --frozen-lockfile --prod=false --network-concurrency=1 --child-concurrency=1
   fi
-  printf '%s\n' "${LOCK_HASH}" > "${LOCK_MARKER}"
 else
-  echo "Dependency lock is unchanged; skipping package installation."
+  echo "Using existing cPanel dependencies (set INSTALL_DEPS=1 only for dependency changes)."
 fi
 
-node node_modules/typescript/bin/tsc --noEmit -p api-service/tsconfig.json
+if [[ ! -f "${RELEASE_ARCHIVE}" ]]; then
+  echo "Missing locally built API release archive: ${RELEASE_ARCHIVE}" >&2
+  exit 1
+fi
 
-# Build away from the live bundle. A failed build leaves the running API's dist untouched.
-rm -rf "${STAGED_BUNDLE}"
-HEALTHFIELD_API_OUTPUT="${STAGED_BUNDLE}" node scripts/build-api.mjs
-test -s "${STAGED_BUNDLE}/server.mjs"
+# Extract the Git-delivered local build away from the live runtime directories.
+rm -rf "${RELEASE_STAGE}"
+mkdir -p "${RELEASE_STAGE}"
+tar -xzf "${RELEASE_ARCHIVE}" -C "${RELEASE_STAGE}"
+test -s "${RELEASE_STAGE}/dist/server.mjs"
+test -d "${RELEASE_STAGE}/drizzle"
+echo "Local API release archive extracted and verified."
 
-# Fail the deployment before replacing the current bundle if the database cannot migrate.
+# Fail before replacing the live runtime if the database cannot migrate.
 node scripts/migrate-api.mjs
 
-# Keep one rollback bundle only. The two renames occur on the same filesystem.
-# The active Node process continues serving its in-memory code until cPanel reloads it.
-SWAP_STARTED=0
-restore_bundle() {
-  if [[ "${SWAP_STARTED}" == "1" && ! -d "${CURRENT_BUNDLE}" && -d "${PREVIOUS_BUNDLE}" ]]; then
-    mv "${PREVIOUS_BUNDLE}" "${CURRENT_BUNDLE}"
-  fi
-}
-trap restore_bundle ERR
-rm -rf "${PREVIOUS_BUNDLE}"
-if [[ -d "${CURRENT_BUNDLE}" ]]; then
-  SWAP_STARTED=1
-  mv "${CURRENT_BUNDLE}" "${PREVIOUS_BUNDLE}"
-fi
-mv "${STAGED_BUNDLE}" "${CURRENT_BUNDLE}"
-SWAP_STARTED=0
-trap - ERR
+# Retain exactly one rollback release. The app root and private .env are never renamed.
+rm -rf "${RELEASE_PREVIOUS}"
+mkdir -p "${RELEASE_PREVIOUS}"
+if [[ -d "${APPLICATION_ROOT}/dist" ]]; then mv "${APPLICATION_ROOT}/dist" "${RELEASE_PREVIOUS}/dist"; fi
+if [[ -d "${APPLICATION_ROOT}/drizzle" ]]; then mv "${APPLICATION_ROOT}/drizzle" "${RELEASE_PREVIOUS}/drizzle"; fi
+mv "${RELEASE_STAGE}/dist" "${APPLICATION_ROOT}/dist"
+mv "${RELEASE_STAGE}/drizzle" "${APPLICATION_ROOT}/drizzle"
+# The archive also carries package metadata for manual recovery; it is not part of the live app root.
+rm -rf "${RELEASE_STAGE}"
 
 # This stamp is written only after type-check, bundle, and migrations succeed.
 # /health returns it after the Node application has actually reloaded.
@@ -103,7 +97,7 @@ fi
 mkdir -p "${APPLICATION_ROOT}/tmp"
 touch "${APPLICATION_ROOT}/tmp/restart.txt"
 
-echo "API build, migrations, and bundle swap completed: ${DEPLOY_SHORT_COMMIT} at ${DEPLOY_COMPLETED_AT}"
-echo "Rollback bundle retained at ${PREVIOUS_BUNDLE} (replaced on the next successful deployment)."
+echo "Local release extraction, migrations, and runtime swap completed: ${DEPLOY_SHORT_COMMIT} at ${DEPLOY_COMPLETED_AT}"
+echo "Rollback release retained at ${RELEASE_PREVIOUS} (replaced on the next successful deployment)."
 echo "Restart signal written to ${APPLICATION_ROOT}/tmp/restart.txt."
 echo "After cPanel reloads the Node application, verify: curl -fsS https://api.healthfieldpharmacy.co.ke/health"

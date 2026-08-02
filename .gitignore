@@ -59,6 +59,10 @@ next-env.d.ts
 !/deploy/healthfield-api-production.tar.gz
 /api-service/dist/
 /api-service/drizzle/
+/api-service/.release.next/
+/api-service/.release.previous/
+/api-service/dist.next/
+/api-service/dist.previous/
 
 # Backend deployment files
 api-service/node_modules/
