@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { resolve } from "node:path";
@@ -18,6 +18,13 @@ if (existsSync(envPath)) loadEnvFile(envPath);
 
 const allowedOrigins = new Set((process.env.CORS_ALLOWED_ORIGINS || "https://healthfieldpharmacy.co.ke,https://www.healthfieldpharmacy.co.ke")
   .split(",").map((value) => value.trim().replace(/\/$/, "")).filter(Boolean));
+
+function deploymentInfo() {
+  try {
+    const parsed = JSON.parse(readFileSync(resolve(process.cwd(), ".healthfield-build.json"), "utf8"));
+    return { commit: String(parsed.commit || "unknown"), builtAt: String(parsed.builtAt || "unknown") };
+  } catch { return { commit: "unknown", builtAt: "unknown" }; }
+}
 
 function safeEqual(left: string, right: string) {
   const a = Buffer.from(left), b = Buffer.from(right);
@@ -60,7 +67,7 @@ async function route(request: Request, ip: string): Promise<Response> {
   }
   // Browser navigations and <img> tags often omit Origin; only enforce CORS for credentialed cross-origin API calls.
   if (origin && !allowedOrigins.has(origin) && url.pathname.startsWith("/v1/")) return json({ error: "Origin not allowed." }, { status: 403 });
-  if (url.pathname === "/health") return json({ service: "healthfield-api", status: "ok", timestamp: new Date().toISOString() });
+  if (url.pathname === "/health") return json({ service: "healthfield-api", status: "ok", timestamp: new Date().toISOString(), deployment: deploymentInfo() });
   const imageMatch = url.pathname.match(/^\/uploads\/products\/([^/]+)$/);
   if (imageMatch && request.method === "GET") return serveProductImage(imageMatch[1]);
   const expectedKey = process.env.API_SHARED_SECRET || "";
