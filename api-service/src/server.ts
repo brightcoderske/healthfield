@@ -144,6 +144,15 @@ const port = Number(process.env.PORT || 3001);
 if (process.env.RUN_MIGRATIONS !== "false") await migrate(getDb(), { migrationsFolder: resolve(process.cwd(), "drizzle") });
 server.listen(port, "0.0.0.0", () => console.log(`Healthfield API listening on ${port}`));
 
-async function shutdown() { server.close(); await closeDb(); }
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Healthfield API received ${signal}; closing server and database pool.`);
+  const forceExit = setTimeout(() => process.exit(0), 5_000);
+  forceExit.unref();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeDb();
+  process.exit(0);
+}
+for (const signal of ["SIGTERM", "SIGINT", "SIGUSR2"] as const) process.once(signal, () => void shutdown(signal));
