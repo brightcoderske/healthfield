@@ -226,6 +226,11 @@ export async function handleView(request: Request, path: string) {
     ]);
     return json({ newOrders, pending, lowStock, queue });
   }
+  if (path === "staff/prescriptions") {
+    const auth = await requireSession(request, [...teamRoles]);
+    if ("response" in auth) return auth.response;
+    return json({ prescriptions: await getDb().select().from(prescriptions).orderBy(desc(prescriptions.createdAt)) });
+  }
   if (path === "walk-in-sale") {
     const auth = await requireSession(request, [...teamRoles]);
     if ("response" in auth) return auth.response;

@@ -1,2 +1,7 @@
-import { ClipboardList } from "lucide-react";import { backendJson } from "@/lib/backend-api";import { SearchableTable } from "../searchable-table";export const dynamic="force-dynamic";
-export default async function OrdersPage(){const {orders}=await backendJson<{orders:Array<{id:number;orderNumber:string;customerName:string;phone:string;status:string;createdAt:string;paymentStatus:string;fulfilmentMethod:string;total:string;deliveryArea:string|null}>}>("/v1/views/admin/orders");return <main className="data-page"><header><a href="/admin">← Dashboard</a><h1>Orders</h1><p>Every customer order across all stores.</p></header><SearchableTable columns={["Order & customer","Status","Payment / delivery","Total"]} placeholder="Search order number, customer, phone or status" rows={orders.map(row=>({id:row.id,cells:[{primary:row.orderNumber,secondary:`${row.customerName} · ${row.phone}`,href:`/admin/orders/${row.id}`},{primary:row.status.replaceAll("_"," "),secondary:new Date(row.createdAt).toLocaleDateString()},{primary:row.paymentStatus,secondary:row.fulfilmentMethod},{primary:`KES ${Number(row.total).toLocaleString()}`,secondary:row.deliveryArea||"No area"}]}))} empty={<><ClipboardList/><strong>No orders yet</strong><span>Completed checkouts appear here.</span></>}/></main>}
+import { backendJson } from "@/lib/backend-api";
+import { OrderList } from "./order-list";
+
+export const dynamic = "force-dynamic";
+
+type Order={id:number;orderNumber:string;customerName:string;phone:string;status:string;createdAt:string;paymentStatus:string;fulfilmentMethod:string;total:string;deliveryArea:string|null};
+export default async function OrdersPage(){const {orders}=await backendJson<{orders:Order[]}>("/v1/views/admin/orders");return <main className="data-page"><header><a href="/admin">← Dashboard</a><h1>Orders</h1><p>Every customer order across all stores.</p></header><OrderList orders={orders}/></main>}

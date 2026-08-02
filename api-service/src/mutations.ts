@@ -138,7 +138,7 @@ export async function handleChats(request: Request) {
 
 export async function handleOrders(request: Request, id?: number) {
   if (request.method === "PATCH" && id) {
-    const auth = await requireSession(request, [...team]);
+    const auth = await requireSession(request);
     if ("response" in auth) return auth.response;
     const parsed = z.object({ status:z.enum(orderStatuses),customerName:z.string().trim().max(200).optional(),phone:z.string().trim().max(30).optional(),email:z.string().trim().max(190).nullable().optional(),deliveryAddress:z.string().trim().max(1000).nullable().optional(),deliveryArea:z.string().trim().max(160).nullable().optional() }).safeParse(await body(request));
     if (!Number.isInteger(id) || !parsed.success) return json({ error: "Check the order details and status." }, { status: 400 });
@@ -346,6 +346,7 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
     if ("response" in auth) return auth.response;
     const db=getDb();
     if(request.method==="PATCH"){
+      if(!team.includes(auth.session.role as typeof team[number]))return json({error:"Not allowed."},{status:403});
       const parsed=z.object({status:z.enum(["RECEIVED","UNDER_REVIEW","APPROVED","MORE_INFORMATION_REQUIRED","DECLINED"]),pharmacistNotes:z.string().trim().max(2000).optional().default("")}).safeParse(await body(request));
       if(!parsed.success)return json({error:"Choose a valid prescription status."},{status:400});
       const [record]=await db.select({id:prescriptions.id,email:users.email,firstName:users.firstName}).from(prescriptions).leftJoin(users,eq(users.id,prescriptions.customerId)).where(eq(prescriptions.id,downloadId)).limit(1);
@@ -356,6 +357,7 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
     }
     const [record] = await db.select().from(prescriptions).where(eq(prescriptions.id, downloadId)).limit(1);
     if (!record) return json({ error: "Prescription not found." }, { status: 404 });
+    if (auth.session.role === "CUSTOMER" && record.customerId !== auth.session.userId) return json({ error: "Not found." }, { status: 404 });
     try {
       const buffer = await readFile(path.join(storageRoot(), "prescriptions", path.basename(record.storageKey)));
       return new Response(buffer, { headers: { "Content-Type": record.mimeType, "Content-Disposition": `inline; filename="${safeFilename(record.originalFilename)}"`, "Cache-Control": "private, no-store" } });
@@ -377,7 +379,8 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   await mkdir(directory, { recursive: true });
   const storedName = `${randomUUID()}${extension}`;
   await writeFile(path.join(directory, storedName), bytes, { flag: "wx" });
-  const [created] = await getDb().insert(prescriptions).values({ customerId: auth.session.userId, storageKey: storedName, originalFilename: safeFilename(file.name), mimeType: file.type, sizeBytes: file.size, status: "RECEIVED" });
+  const displayName = `Prescription - ${new Date().toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}${extension}`;
+  const [created] = await getDb().insert(prescriptions).values({ customerId: auth.session.userId, storageKey: storedName, originalFilename: displayName, mimeType: file.type, sizeBytes: file.size, status: "RECEIVED" });
   void sendEmail({to:auth.session.email,subject:"Prescription received",message:`Hello ${auth.session.firstName},\n\nWe received your prescription and it is awaiting pharmacist review. Track its progress from your Healthfield account.`,action:{label:"Track prescription",url:`${storefrontOrigin()}/account#prescriptions`}});
   if(process.env.NOTIFICATION_EMAIL)void sendEmail({to:process.env.NOTIFICATION_EMAIL,subject:"New prescription awaiting review",message:`A new prescription upload is awaiting pharmacist review. Reference: ${created.insertId}.`});
   return json({ ok: true, id: created.insertId }, { status: 201 });

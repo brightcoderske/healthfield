@@ -182,7 +182,7 @@ export function Storefront({ initialProducts, initialCategories, initialConditio
 
       <nav className="approved-nav">
         <a className="active" href="/"><HeartPulse /><span>Home</span></a>
-        <a href="#categories"><Package /><span>Categories</span></a>
+        <a href={viewer?.role==="CUSTOMER"?"/account#orders":"/login?next=/account#orders"}><Package /><span>Orders</span></a>
         <a href="/wishlist"><Heart /><span>Wishlist</span></a>
         <a href="/cart"><ShoppingCart /><span>Cart {cartCount ? `(${cartCount})` : ""}</span></a>
         <a href={viewer?(viewer.role==="CUSTOMER"?"/account":viewer.role==="STAFF"?"/staff":"/admin"):"/login"}><CircleUserRound /><span>{viewer?viewer.firstName:"Account"}</span></a>
