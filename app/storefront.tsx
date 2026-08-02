@@ -58,7 +58,7 @@ function formatKes(value: number) {
 
 export function Storefront({ initialProducts, initialCategories, initialConditions, contact, viewer, offersOnly, initialCart, initialWishlist }: { initialProducts: CatalogProduct[]; initialCategories: CatalogCategory[]; initialConditions: HealthCondition[]; contact: { phone: string; whatsapp: string; supportEmail:string; address:string; openingHours:string; deliveryMessage: string; facebookUrl:string; instagramUrl:string; xUrl:string; tiktokUrl:string }; viewer: { firstName: string; role: string } | null; offersOnly: boolean; initialCart: Record<number, number>; initialWishlist: number[] }) {
   const [query, setQuery] = useState("");
-  const [cart] = useState<Record<number, number>>(initialCart);
+  const [cart,setCart] = useState<Record<number, number>>(initialCart);
   const [wishlist] = useState<number[]>(initialWishlist);
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
   const [selectedCondition, setSelectedCondition] = useState<number | null>(null);
@@ -93,6 +93,7 @@ export function Storefront({ initialProducts, initialCategories, initialConditio
     return()=>button?.removeEventListener("click",showAll);
   },[]);
   const cartCount = Object.values(cart).reduce((sum, quantity) => sum + quantity, 0);
+  async function addToCart(event:React.FormEvent<HTMLFormElement>,productId:number){event.preventDefault();const form=new FormData(event.currentTarget);const response=await fetch("/api/cart",{method:"POST",headers:{Accept:"application/json"},body:form}),data=await response.json().catch(()=>null);if(response.ok&&data?.cart)setCart(data.cart);else setCart(current=>({...current,[productId]:Math.min(99,(current[productId]||0)+1)}));}
 
   return (
     <div className="approved-app">
@@ -171,7 +172,7 @@ export function Storefront({ initialProducts, initialCategories, initialConditio
                   </div>
                 </a>
                 <form action="/api/wishlist" method="post" className="product-wishlist-form"><input type="hidden" name="productId" value={product.id}/><input type="hidden" name="return" value="/#products"/><button type="submit" className={`approved-wishlist ${wishlist.includes(product.id)?"active":""}`} aria-label={`Save ${product.name}`}><Heart/></button></form>
-                <div className="product-card-footer"><strong>{formatKes(product.discountPrice ?? product.price)}</strong><form action="/api/cart" method="post"><input type="hidden" name="productId" value={product.id}/><input type="hidden" name="action" value="add"/><input type="hidden" name="return" value="/#products"/><button type="submit" className="approved-cart" aria-label={`Add ${product.name} to cart`}>{cart[product.id] ? <b>{cart[product.id]}</b> : <ShoppingCart />}</button></form></div>
+                <div className="product-card-footer"><strong>{formatKes(product.discountPrice ?? product.price)}</strong><form action="/api/cart" method="post" onSubmit={event=>addToCart(event,product.id)}><input type="hidden" name="productId" value={product.id}/><input type="hidden" name="action" value="add"/><input type="hidden" name="return" value="/#products"/><button type="submit" className="approved-cart" aria-label={`Add ${product.name} to cart`}>{cart[product.id] ? <b>{cart[product.id]}</b> : <ShoppingCart />}</button></form></div>
               </article>
             ))}
           </div>

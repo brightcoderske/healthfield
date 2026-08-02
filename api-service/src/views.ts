@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import {
   branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
-  orderItems, orders, prescriptions, productHealthConditions, productReviews, products,
+  orderItemFulfilments, orderItems, orders, prescriptions, productHealthConditions, productReviews, products,
   siteSettings, users,
 } from "../../db/schema";
 import { requireSession } from "./auth";
@@ -175,7 +175,7 @@ export async function handleView(request: Request, path: string) {
     if (orderMatch) {
       const id = Number(orderMatch[1]);
       const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
-      return order ? json({ order, items: await db.select().from(orderItems).where(eq(orderItems.orderId, id)) }) : json({ error: "Order not found." }, { status: 404 });
+      if(!order)return json({ error: "Order not found." }, { status: 404 });const items=await db.select().from(orderItems).where(eq(orderItems.orderId,id));const fulfilments=items.length?await db.select().from(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId,items.map(item=>item.id))):[];const stores=await db.select({id:branches.id,name:branches.name}).from(branches).where(eq(branches.isActive,true));return json({order,items,fulfilments,stores});
     }
     if (view === "customers") return json({ customers: await db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, phone: users.phone, isActive: users.isActive, createdAt: users.createdAt }).from(users).where(eq(users.role, "CUSTOMER")).orderBy(desc(users.createdAt)) });
     if (view === "chats") { const [chats,unread]=await Promise.all([db.select({ id: chatConversations.id, status: chatConversations.status, lastMessageAt: chatConversations.lastMessageAt, firstName: users.firstName, lastName: users.lastName, email: users.email }).from(chatConversations).innerJoin(users, eq(users.id, chatConversations.customerId)).orderBy(desc(chatConversations.lastMessageAt)),db.select({conversationId:chatMessages.conversationId,total:count()}).from(chatMessages).innerJoin(users,eq(users.id,chatMessages.senderId)).where(and(eq(users.role,"CUSTOMER"),isNull(chatMessages.readAt))).groupBy(chatMessages.conversationId)]);return json({chats:chats.map(chat=>({...chat,unread:Number(unread.find(row=>row.conversationId===chat.id)?.total||0)}))}); }

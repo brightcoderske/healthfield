@@ -25,7 +25,8 @@ export async function POST(request: Request) {
       cart[productId] = Math.min(99, (cart[productId] || 0) + quantity);
     }
   }
-  const response = NextResponse.redirect(requestUrl(request, safeReturn(form.get("return"))), 303);
+  const wantsJson = request.headers.get("accept")?.includes("application/json");
+  const response = wantsJson ? NextResponse.json({ ok: true, cart }) : NextResponse.redirect(requestUrl(request, safeReturn(form.get("return"))), 303);
   response.cookies.set(CART_COOKIE, JSON.stringify(cart), { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 30, path: "/" });
   return response;
 }

@@ -5,7 +5,7 @@ import bcrypt, { hash } from "bcryptjs";
 import { and, desc, eq, gte, inArray, isNull, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import {
-  branches, branchInventory, campaigns, chatConversations, chatMessages, orderItems, orders,
+  branches, branchInventory, campaigns, chatConversations, chatMessages, orderItemFulfilments, orderItems, orders,
   activityLogs, categories, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, users,
 } from "../../db/schema";
 import { createPasswordResetToken, createSessionToken, requireSession, requestSession, verifyPasswordResetToken } from "./auth";
@@ -36,9 +36,6 @@ export async function handleAuth(request: Request, action: string) {
     const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
     if (user.role === "CUSTOMER") await db.update(orders).set({ customerId: user.id }).where(and(isNull(orders.customerId), eq(orders.email, user.email)));
-    const when = new Date().toLocaleString("en-KE", { timeZone: "Africa/Nairobi" });
-    void sendEmail({ to: user.email, subject: "Healthfield Pharmacy sign-in", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy account was signed in at ${when} (East Africa Time).\n\nIf this was not you, reset your password immediately from the login page.`, action:{label:"Secure my account",url:`${storefrontOrigin()}/forgot-password`} });
-    if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Sign-in: ${user.email}`, message: `${user.firstName} ${user.lastName} (${user.role}) signed in at ${when}.\nEmail: ${user.email}` });
     return json({ token: await createSessionToken(session), session, role: user.role, redirectTo: user.forcePasswordChange ? "/change-password" : user.role === "CUSTOMER" ? "/#products" : user.role === "STAFF" ? "/staff" : "/admin" });
   }
   if (action === "forgot-password" && request.method === "POST") {
@@ -89,7 +86,7 @@ export async function handleAuth(request: Request, action: string) {
     return json({ token: await createSessionToken(session), session, redirectTo: "/#products" }, { status: 201 });
   }
   if (action === "change-password" && request.method === "POST") {
-    const auth = await requireSession(request);
+    const auth = await requireSession(request, [...team]);
     if ("response" in auth) return auth.response;
     const parsed = z.object({ currentPassword: z.string().min(8).max(128), newPassword: z.string().min(8).max(128).regex(/[A-Z]/).regex(/[a-z]/).regex(/[0-9]/) }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Use a strong new password." }, { status: 400 });
@@ -140,14 +137,14 @@ export async function handleOrders(request: Request, id?: number) {
   if (request.method === "PATCH" && id) {
     const auth = await requireSession(request);
     if ("response" in auth) return auth.response;
-    const parsed = z.object({ status:z.enum(orderStatuses),customerName:z.string().trim().max(200).optional(),phone:z.string().trim().max(30).optional(),email:z.string().trim().max(190).nullable().optional(),deliveryAddress:z.string().trim().max(1000).nullable().optional(),deliveryArea:z.string().trim().max(160).nullable().optional() }).safeParse(await body(request));
+    const parsed = z.object({ status:z.enum(orderStatuses),customerName:z.string().trim().max(200).optional(),phone:z.string().trim().max(30).optional(),email:z.string().trim().max(190).nullable().optional(),deliveryAddress:z.string().trim().max(1000).nullable().optional(),deliveryArea:z.string().trim().max(160).nullable().optional(),fulfilments:z.array(z.object({orderItemId:z.number().int().positive(),branchId:z.number().int().positive(),quantityReserved:z.number().int().nonnegative(),quantityPacked:z.number().int().nonnegative(),status:z.enum(["UNASSIGNED","RESERVED","PARTIALLY_RESERVED","PACKED","READY","UNAVAILABLE","REPLACED"])})).optional() }).safeParse(await body(request));
     if (!Number.isInteger(id) || !parsed.success) return json({ error: "Check the order details and status." }, { status: 400 });
     const db = getDb();
     const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
     if (!order) return json({ error: "Order not found." }, { status: 404 });
     const editable=!['READY_FOR_DISPATCH','OUT_FOR_DELIVERY','READY_FOR_PICKUP','COMPLETED','CANCELLED'].includes(order.status);
-    const {status,...details}=parsed.data;
-    await db.update(orders).set({status,...(editable?details:{})}).where(eq(orders.id,id));
+    const {status,fulfilments,...details}=parsed.data;
+    await db.transaction(async tx=>{await tx.update(orders).set({status,...(editable?details:{})}).where(eq(orders.id,id));if(fulfilments){const items=await tx.select({id:orderItems.id,quantity:orderItems.quantity}).from(orderItems).where(eq(orderItems.orderId,id));const allowed=new Map(items.map(item=>[item.id,item.quantity]));const branchRows=await tx.select({id:branches.id}).from(branches).where(inArray(branches.id,fulfilments.map(row=>row.branchId)));if(branchRows.length!==new Set(fulfilments.map(row=>row.branchId)).size)throw new Error("Choose valid fulfilment branches.");for(const row of fulfilments){if(!allowed.has(row.orderItemId)||row.quantityReserved>allowed.get(row.orderItemId)!||row.quantityPacked>row.quantityReserved)throw new Error("Check per-product fulfilment quantities.");}await tx.delete(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId,items.map(item=>item.id)));if(fulfilments.length)await tx.insert(orderItemFulfilments).values(fulfilments.map(row=>({...row,handledBy:auth.session.userId})));}});
     if(order.status===status)return json({ok:true,status});
     const label = status==="READY_FOR_DISPATCH"?"packaged and ready for dispatch":status.replaceAll("_", " ").toLowerCase();
     const notificationEmail=details.email===undefined?order.email:details.email,notificationName=details.customerName||order.customerName;
@@ -173,13 +170,14 @@ export async function handleOrders(request: Request, id?: number) {
   const subtotal = lines.reduce((sum, line) => sum + line.total, 0);
   const deliveryFee = parsed.data.fulfilmentMethod === "DELIVERY" ? 250 : 0;
   const session = await requestSession(request);
+  const orderEmail = session?.role === "CUSTOMER" ? session.email.trim().toLowerCase() : (parsed.data.email || "").trim().toLowerCase();
   const orderNumber = `HF-${Date.now().toString().slice(-8)}`;
   const result = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: session?.role === "CUSTOMER" ? session.userId : null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: parsed.data.email || null, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
+    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: session?.role === "CUSTOMER" ? session.userId : null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
     await tx.insert(orderItems).values(lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })));
     return created;
   });
-  if (parsed.data.email) void sendEmail({ to: parsed.data.email, subject: `Order ${orderNumber} received`, message: `Hello ${parsed.data.fullName},\n\nWe received order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}.\n\nWe will update you as your order progresses.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"NEW"}) });
+  if (orderEmail) void sendEmail({ to: orderEmail, subject: `Order ${orderNumber} received`, message: `Hello ${parsed.data.fullName},\n\nWe received order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}.\n\nWe will update you as your order progresses.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"NEW"}) });
   if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.` });
   return json({ ok: true, id: result.insertId, orderNumber, total: subtotal + deliveryFee }, { status: 201 });
 }
