@@ -65,6 +65,17 @@ mkdir -p "${RELEASE_STAGE}"
 tar -xzf "${RELEASE_ARCHIVE}" -C "${RELEASE_STAGE}"
 test -s "${RELEASE_STAGE}/dist/server.mjs"
 test -d "${RELEASE_STAGE}/drizzle"
+test -s "${RELEASE_STAGE}/.release-manifest.json"
+ARCHIVE_SOURCE_COMMIT="$(node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!/^[a-f0-9]{40}$/.test(p.sourceCommit||""))process.exit(1);process.stdout.write(p.sourceCommit)' "${RELEASE_STAGE}/.release-manifest.json")"
+if ! git merge-base --is-ancestor "${ARCHIVE_SOURCE_COMMIT}" HEAD; then
+  echo "API release archive was built from an unrelated commit: ${ARCHIVE_SOURCE_COMMIT}" >&2
+  exit 1
+fi
+if ! git diff --quiet "${ARCHIVE_SOURCE_COMMIT}" HEAD -- api-service/src db/schema.ts drizzle package.json pnpm-lock.yaml scripts/build-api.mjs; then
+  echo "API source, schema, migrations, or dependencies changed after the release archive was built." >&2
+  echo "Run pnpm release:api locally, commit deploy/healthfield-api-production.tar.gz, then deploy again." >&2
+  exit 1
+fi
 echo "Local API release archive extracted and verified."
 
 # Fail before replacing the live runtime if the database cannot migrate.
