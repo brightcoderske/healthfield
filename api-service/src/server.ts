@@ -74,10 +74,10 @@ async function route(request: Request, ip: string): Promise<Response> {
   const suppliedKey = request.headers.get("x-healthfield-key") || "";
   const directUpload = request.method === "POST" && (url.pathname === "/v1/products/image" || url.pathname === "/v1/prescriptions") && Boolean(origin);
   if (!directUpload && (!expectedKey || !safeEqual(suppliedKey, expectedKey))) return json({ error: "API access denied." }, { status: 401 });
-  if (url.pathname.startsWith("/v1/auth/") && rateLimited(ip)) return json({ error: "Too many attempts. Try again later." }, { status: 429, headers: { "Retry-After": "900" } });
+  if (url.pathname.startsWith("/v1/auth/") && url.pathname !== "/v1/auth/session" && rateLimited(ip)) return json({ error: "Too many attempts. Try again later." }, { status: 429, headers: { "Retry-After": "900" } });
 
   if (url.pathname.startsWith("/v1/views/") && request.method === "GET") return responseOf(handleView(request, url.pathname.slice(10)));
-  const authMatch = url.pathname.match(/^\/v1\/auth\/(login|register|forgot-password|reset-password|change-password|verify-email|resend-verification|two-factor|two-factor-resend)$/);
+  const authMatch = url.pathname.match(/^\/v1\/auth\/(login|register|forgot-password|reset-password|change-password|verify-email|resend-verification|two-factor|two-factor-resend|session)$/);
   if (authMatch) return responseOf(handleAuth(request, authMatch[1]));
   if (url.pathname === "/v1/chats") return responseOf(handleChats(request));
   if (url.pathname === "/v1/orders") return responseOf(handleOrders(request));

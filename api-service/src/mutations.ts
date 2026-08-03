@@ -32,13 +32,16 @@ const teamRedirect = (user: { role: string; forcePasswordChange: boolean }) => u
 async function createEmailTwoFactorChallenge(user: { id: number; email: string; firstName: string }) {
   const rawChallenge = randomUUID() + randomUUID();
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+  const now = Date.now();
   const db = getDb();
   await db.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, user.id));
   await db.insert(twoFactorChallenges).values({
     userId: user.id,
     tokenHash: tokenHash(rawChallenge),
     codeHash: twoFactorCodeHash(rawChallenge, code),
-    expiresAt: new Date(Date.now() + 10 * 60_000),
+    expiresAt: new Date(now + 10 * 60_000),
+    expiresAtMs: now + 10 * 60_000,
+    lastSentAtMs: now,
   });
   try {
     await sendEmail({
@@ -58,7 +61,8 @@ async function sendVerificationEmail(user: { id: number; email: string; firstNam
   const raw = randomUUID() + randomUUID();
   const db = getDb();
   await db.delete(emailVerificationTokens).where(eq(emailVerificationTokens.userId, user.id));
-  await db.insert(emailVerificationTokens).values({ userId: user.id, tokenHash: tokenHash(raw), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+  const expiresAtMs = Date.now() + 24 * 60 * 60 * 1000;
+  await db.insert(emailVerificationTokens).values({ userId: user.id, tokenHash: tokenHash(raw), expiresAt: new Date(expiresAtMs), expiresAtMs });
   await sendEmail({ to: user.email, subject: "Verify your Healthfield Pharmacy email", message: `Hello ${user.firstName},\n\nVerify your email to activate your customer account. This link expires in 24 hours.`, action: { label: "Verify email", url: `${storefrontOrigin()}/verify-email?token=${encodeURIComponent(raw)}` } });
 }
 
@@ -70,6 +74,11 @@ async function body(request: Request) {
 
 export async function handleAuth(request: Request, action: string) {
   const db = getDb();
+  if (action === "session" && request.method === "GET") {
+    const auth = await requireSession(request);
+    if ("response" in auth) return auth.response;
+    return json({ authenticated: true, session: auth.session }, { headers: { "Cache-Control": "private, no-store" } });
+  }
   if (action === "login" && request.method === "POST") {
     const parsed = z.object({ email: z.string().trim().toLowerCase().email(), password: z.string().min(8).max(128) }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Enter a valid email and password." }, { status: 400 });
@@ -95,7 +104,7 @@ export async function handleAuth(request: Request, action: string) {
     const parsed = z.object({ challengeToken: z.string().min(60).max(100), code: z.string().trim().regex(/^\d{6}$/) }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Enter the 6-digit code sent to your email." }, { status: 400 });
     const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, tokenHash(parsed.data.challengeToken))).limit(1);
-    if (!challenge || challenge.usedAt || challenge.expiresAt.getTime() < Date.now() || challenge.attemptCount >= 5) {
+    if (!challenge || challenge.usedAt || !challenge.expiresAtMs || challenge.expiresAtMs < Date.now() || challenge.attemptCount >= 5) {
       return json({ error: "This login code has expired. Return to login and request a new one." }, { status: 401 });
     }
     const expected = twoFactorCodeHash(parsed.data.challengeToken, parsed.data.code);
@@ -116,8 +125,8 @@ export async function handleAuth(request: Request, action: string) {
     if (!parsed.success) return json({ error: "This login request is invalid." }, { status: 400 });
     const hash = tokenHash(parsed.data.challengeToken);
     const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, hash)).limit(1);
-    if (!challenge || challenge.usedAt || challenge.expiresAt.getTime() < Date.now() || challenge.resendCount >= 3) return json({ error: "Return to login to request a new security code." }, { status: 429 });
-    if (Date.now() - challenge.createdAt.getTime() < 60_000) return json({ error: "Please wait one minute before requesting another code." }, { status: 429 });
+    if (!challenge || challenge.usedAt || !challenge.expiresAtMs || challenge.expiresAtMs < Date.now() || challenge.resendCount >= 3) return json({ error: "Return to login to request a new security code." }, { status: 429 });
+    if (challenge.lastSentAtMs && Date.now() - challenge.lastSentAtMs < 60_000) return json({ error: "Please wait one minute before requesting another code." }, { status: 429 });
     const [user] = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
     if (!user || !user.isActive || !team.includes(user.role as typeof team[number])) return json({ error: "This login request is no longer valid." }, { status: 401 });
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
@@ -127,7 +136,8 @@ export async function handleAuth(request: Request, action: string) {
       console.error("Two-factor resend failed", error);
       return json({ error: "The new code could not be sent. Please try again shortly." }, { status: 503 });
     }
-    await db.update(twoFactorChallenges).set({ codeHash: twoFactorCodeHash(parsed.data.challengeToken, code), attemptCount: 0, resendCount: challenge.resendCount + 1, expiresAt: new Date(Date.now() + 10 * 60_000), createdAt: new Date() }).where(eq(twoFactorChallenges.id, challenge.id));
+    const now = Date.now();
+    await db.update(twoFactorChallenges).set({ codeHash: twoFactorCodeHash(parsed.data.challengeToken, code), attemptCount: 0, resendCount: challenge.resendCount + 1, expiresAt: new Date(now + 10 * 60_000), expiresAtMs: now + 10 * 60_000, lastSentAtMs: now, createdAt: new Date() }).where(eq(twoFactorChallenges.id, challenge.id));
     return json({ ok: true, message: "A new security code has been sent." });
   }
   if (action === "forgot-password" && request.method === "POST") {
@@ -180,7 +190,7 @@ export async function handleAuth(request: Request, action: string) {
     const parsed = z.object({ token: z.string().min(40) }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "This verification link is invalid." }, { status: 400 });
     const [record] = await db.select().from(emailVerificationTokens).where(eq(emailVerificationTokens.tokenHash, tokenHash(parsed.data.token))).limit(1);
-    if (!record || record.usedAt || record.expiresAt.getTime() < Date.now()) return json({ error: "This verification link is invalid or has expired." }, { status: 400 });
+    if (!record || record.usedAt || !record.expiresAtMs || record.expiresAtMs < Date.now()) return json({ error: "This verification link is invalid or has expired." }, { status: 400 });
     await db.transaction(async tx => { await tx.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, record.userId)); await tx.update(emailVerificationTokens).set({ usedAt: new Date() }).where(eq(emailVerificationTokens.id, record.id)); });
     return json({ ok: true, message: "Email verified. You can now sign in." });
   }

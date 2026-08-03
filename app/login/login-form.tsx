@@ -89,7 +89,7 @@ export function LoginForm() {
         </> : <><form onSubmit={submit} method="post" action="/api/auth/login">
           <label><span>Email address</span><div><Mail /><input name="email" type="email" autoComplete="email" required /></div></label>
           <label><span>Password</span><div><LockKeyhole /><input name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" minLength={8} required /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff /> : <Eye />}</button></div></label>
-          {(error || urlError) && <div className="auth-error" role="alert">{error || (urlError === "incorrect" ? "Incorrect email or password." : "Enter a valid email and password.")}</div>}
+          {(error || urlError) && <div className="auth-error" role="alert">{error || (urlError === "incorrect" ? "Incorrect email or password." : urlError === "session_expired" ? "Your previous session is no longer valid. Sign in again securely." : "Enter a valid email and password.")}</div>}
           <a className="forgot-password" href="/forgot-password">Forgot password?</a>
           <button className="auth-submit" disabled={loading}>{loading ? "Signing in…" : "Log in"}</button>
         </form>

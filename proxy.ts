@@ -35,6 +35,24 @@ export async function proxy(request: NextRequest) {
     if (!rule.roles.includes(String(payload.role))) {
       return NextResponse.redirect(requestUrl(request,"/unauthorized"));
     }
+    const apiBase = (process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+    const apiKey = process.env.API_SHARED_SECRET;
+    if (!apiBase || !apiKey) return new NextResponse("Authentication service is not configured.", { status: 503 });
+    let validation: Response;
+    try {
+      validation = await fetch(`${apiBase}/v1/auth/session`, { headers: { Authorization: `Bearer ${token}`, "X-Healthfield-Key": apiKey }, cache: "no-store" });
+    } catch {
+      return new NextResponse("Authentication service is temporarily unavailable.", { status: 503, headers: { "Retry-After": "30" } });
+    }
+    if (validation.status === 401 || validation.status === 403) {
+      const login = requestUrl(request, "/login");
+      login.searchParams.set("next", request.nextUrl.pathname);
+      login.searchParams.set("error", "session_expired");
+      const response = NextResponse.redirect(login);
+      response.cookies.delete("healthfield_session");
+      return response;
+    }
+    if (!validation.ok) return new NextResponse("Authentication service is temporarily unavailable.", { status: 503, headers: { "Retry-After": "30" } });
     return NextResponse.next();
   } catch {
     const response = NextResponse.redirect(requestUrl(request,"/login"));

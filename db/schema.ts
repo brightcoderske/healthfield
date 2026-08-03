@@ -1,5 +1,6 @@
 import {
   boolean,
+  bigint,
   decimal,
   index,
   int,
@@ -223,6 +224,8 @@ export const twoFactorChallenges = mysqlTable("two_factor_challenges", {
   attemptCount: int("attempt_count").default(0).notNull(),
   resendCount: int("resend_count").default(0).notNull(),
   expiresAt: timestamp("expires_at").notNull(),
+  expiresAtMs: bigint("expires_at_ms", { mode: "number" }),
+  lastSentAtMs: bigint("last_sent_at_ms", { mode: "number" }),
   usedAt: timestamp("used_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
@@ -282,6 +285,7 @@ export const emailVerificationTokens = mysqlTable("email_verification_tokens", {
   userId: int("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   tokenHash: varchar("token_hash", { length: 64 }).notNull(),
   expiresAt: timestamp("expires_at").notNull(),
+  expiresAtMs: bigint("expires_at_ms", { mode: "number" }),
   usedAt: timestamp("used_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [uniqueIndex("email_verification_token_unique").on(table.tokenHash), index("email_verification_user_idx").on(table.userId)]);
