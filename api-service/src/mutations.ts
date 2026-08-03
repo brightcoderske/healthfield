@@ -44,11 +44,13 @@ async function createEmailTwoFactorChallenge(user: { id: number; email: string; 
     lastSentAtMs: now,
   });
   try {
-    await sendEmail({
+    const delivery = await sendEmail({
       to: user.email,
       subject: "Your Healthfield secure login code",
       message: `Hello ${user.firstName},\n\nYour Healthfield administration login code is ${code}.\n\nIt expires in 10 minutes and can only be used once. If you did not try to sign in, change your password and contact the pharmacy owner immediately.`,
+      channel: "security",
     });
+    if (!delivery.sent) throw new Error(`Security email delivery failed: ${delivery.reason}`);
   } catch (error) {
     await db.delete(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, tokenHash(rawChallenge)));
     throw error;
@@ -63,7 +65,8 @@ async function sendVerificationEmail(user: { id: number; email: string; firstNam
   await db.delete(emailVerificationTokens).where(eq(emailVerificationTokens.userId, user.id));
   const expiresAtMs = Date.now() + 24 * 60 * 60 * 1000;
   await db.insert(emailVerificationTokens).values({ userId: user.id, tokenHash: tokenHash(raw), expiresAt: new Date(expiresAtMs), expiresAtMs });
-  await sendEmail({ to: user.email, subject: "Verify your Healthfield Pharmacy email", message: `Hello ${user.firstName},\n\nVerify your email to activate your customer account. This link expires in 24 hours.`, action: { label: "Verify email", url: `${storefrontOrigin()}/verify-email?token=${encodeURIComponent(raw)}` } });
+  const delivery = await sendEmail({ to: user.email, subject: "Verify your Healthfield Pharmacy email", message: `Hello ${user.firstName},\n\nVerify your email to activate your customer account. This link expires in 24 hours.`, action: { label: "Verify email", url: `${storefrontOrigin()}/verify-email?token=${encodeURIComponent(raw)}` }, channel: "security" });
+  if (!delivery.sent) throw new Error(`Verification email delivery failed: ${delivery.reason}`);
 }
 
 async function body(request: Request) {
@@ -131,7 +134,8 @@ export async function handleAuth(request: Request, action: string) {
     if (!user || !user.isActive || !team.includes(user.role as typeof team[number])) return json({ error: "This login request is no longer valid." }, { status: 401 });
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     try {
-      await sendEmail({ to: user.email, subject: "Your new Healthfield secure login code", message: `Hello ${user.firstName},\n\nYour new Healthfield administration login code is ${code}.\n\nIt expires in 10 minutes and can only be used once.` });
+      const delivery = await sendEmail({ to: user.email, subject: "Your new Healthfield secure login code", message: `Hello ${user.firstName},\n\nYour new Healthfield administration login code is ${code}.\n\nIt expires in 10 minutes and can only be used once.`, channel: "security" });
+      if (!delivery.sent) throw new Error(`Security email delivery failed: ${delivery.reason}`);
     } catch (error) {
       console.error("Two-factor resend failed", error);
       return json({ error: "The new code could not be sent. Please try again shortly." }, { status: 503 });
@@ -147,7 +151,7 @@ export async function handleAuth(request: Request, action: string) {
     if (user?.isActive) {
       const token = await createPasswordResetToken({ userId: user.id, email: user.email });
       const resetUrl = `${storefrontOrigin()}/reset-password?token=${encodeURIComponent(token)}`;
-      await sendEmail({ to: user.email, subject: "Reset your Healthfield Pharmacy password", message: `Hello ${user.firstName},\n\nUse the button below to choose a new password. It expires in one hour.\n\nIf you did not request this, you can ignore this email.`, action:{label:"Reset password",url:resetUrl} });
+      await sendEmail({ to: user.email, subject: "Reset your Healthfield Pharmacy password", message: `Hello ${user.firstName},\n\nUse the button below to choose a new password. It expires in one hour.\n\nIf you did not request this, you can ignore this email.`, action:{label:"Reset password",url:resetUrl}, channel:"security" });
     }
     return json({ ok: true, message: "If this email is registered, reset instructions will be sent." });
   }
@@ -159,7 +163,7 @@ export async function handleAuth(request: Request, action: string) {
     const [user] = await db.select().from(users).where(and(eq(users.id, reset.userId), eq(users.email, reset.email))).limit(1);
     if (!user || !user.isActive) return json({ error: "This reset link is invalid or has expired." }, { status: 400 });
     await db.update(users).set({ passwordHash: await bcrypt.hash(parsed.data.newPassword, 12), forcePasswordChange: false }).where(eq(users.id, user.id));
-    void sendEmail({ to: user.email, subject: "Your Healthfield password was changed", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy password was changed successfully. If you did not do this, contact the pharmacy immediately.`, action:{label:"Sign in securely",url:`${storefrontOrigin()}/login`} });
+    void sendEmail({ to: user.email, subject: "Your Healthfield password was changed", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy password was changed successfully. If you did not do this, contact the pharmacy immediately.`, action:{label:"Sign in securely",url:`${storefrontOrigin()}/login`}, channel:"security" });
     return json({ ok: true, message: "Password updated. You can sign in with your new password." });
   }
   if (action === "register" && request.method === "POST") {
@@ -183,7 +187,7 @@ export async function handleAuth(request: Request, action: string) {
     }
     await db.update(orders).set({ customerId: created.insertId }).where(and(isNull(orders.customerId), eq(orders.email, customer.email)));
     await sendVerificationEmail({ id: created.insertId, email: customer.email, firstName: customer.firstName }).catch(console.error);
-    if (process.env.NOTIFICATION_EMAIL) await sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New Healthfield customer account", message: `${customer.firstName} ${customer.lastName} created a customer account.\nEmail: ${customer.email}\nPhone: ${customer.phone}` }).catch(console.error);
+    if (process.env.NOTIFICATION_EMAIL) await sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New Healthfield customer account", message: `${customer.firstName} ${customer.lastName} created a customer account.\nEmail: ${customer.email}\nPhone: ${customer.phone}`, channel:"security" }).catch(console.error);
     return json({ ok: true, redirectTo: `/verify-email?sent=1&email=${encodeURIComponent(customer.email)}` }, { status: 201 });
   }
   if (action === "verify-email" && request.method === "POST") {
@@ -266,8 +270,8 @@ export async function handleOrders(request: Request, id?: number) {
     if(order.status===status)return json({ok:true,status});
     const label = status==="READY_FOR_DISPATCH"?"packaged and ready for dispatch":status.replaceAll("_", " ").toLowerCase();
     const notificationEmail=details.email===undefined?order.email:details.email,notificationName=details.customerName||order.customerName;
-    if (notificationEmail) void sendEmail({ to: notificationEmail, subject: `Order ${order.orderNumber} update`, message: `Hello ${notificationName},\n\nYour order ${order.orderNumber} is now ${label}.\n\nThank you for choosing Healthfield Pharmacy.`, action:{label:"Track my order",url:`${storefrontOrigin()}/account#orders`} });
-    if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.` });
+    if (notificationEmail) void sendEmail({ to: notificationEmail, subject: `Order ${order.orderNumber} update`, message: `Hello ${notificationName},\n\nYour order ${order.orderNumber} is now ${label}.\n\nThank you for choosing Healthfield Pharmacy.`, action:{label:"Track my order",url:`${storefrontOrigin()}/account#orders`}, channel:"orders" });
+    if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.`, channel:"orders" });
     return json({ok:true,status});
   }
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
@@ -304,8 +308,8 @@ export async function handleOrders(request: Request, id?: number) {
     if (customerPrescription) await tx.update(prescriptions).set({ orderId: created.insertId }).where(eq(prescriptions.id, customerPrescription.id));
     return created;
   });
-  if (orderEmail) void sendEmail({ to: orderEmail, subject: `Order ${orderNumber} received`, message: `Hello ${parsed.data.fullName},\n\nWe received order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}.\n\nWe will update you as your order progresses.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"NEW"}) });
-  if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.` });
+  if (orderEmail) void sendEmail({ to: orderEmail, subject: `Order ${orderNumber} received`, message: `Hello ${parsed.data.fullName},\n\nWe received order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}.\n\nWe will update you as your order progresses.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"NEW"}), channel:"orders" });
+  if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.`, channel:"orders" });
   return json({ ok: true, id: result.insertId, orderNumber, total: subtotal + deliveryFee }, { status: 201 });
 }
 
@@ -503,7 +507,7 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
       await db.update(prescriptions).set({status:parsed.data.status,pharmacistNotes:parsed.data.pharmacistNotes||null,reviewedBy:auth.session.userId,reviewedAt:new Date()}).where(eq(prescriptions.id,downloadId));
       const [linked]=await db.select({orderId:prescriptions.orderId}).from(prescriptions).where(eq(prescriptions.id,downloadId)).limit(1);
       if(linked?.orderId)await db.update(orders).set({prescriptionStatus:parsed.data.status,status:parsed.data.status==="APPROVED"?"CONFIRMED":parsed.data.status==="DECLINED"?"CANCELLED":"UNDER_REVIEW"}).where(eq(orders.id,linked.orderId));
-      if(record.email)void sendEmail({to:record.email,subject:"Prescription review update",message:`Hello ${record.firstName||"customer"},\n\nYour prescription status is now ${parsed.data.status.replaceAll("_"," ").toLowerCase()}.${parsed.data.pharmacistNotes?`\n\nPharmacist note: ${parsed.data.pharmacistNotes}`:""}\n\nSign in to your Healthfield account to track progress.`,action:{label:"View prescription progress",url:`${storefrontOrigin()}/account#prescriptions`}});
+      if(record.email)void sendEmail({to:record.email,subject:"Prescription review update",message:`Hello ${record.firstName||"customer"},\n\nYour prescription status is now ${parsed.data.status.replaceAll("_"," ").toLowerCase()}.${parsed.data.pharmacistNotes?`\n\nPharmacist note: ${parsed.data.pharmacistNotes}`:""}\n\nSign in to your Healthfield account to track progress.`,action:{label:"View prescription progress",url:`${storefrontOrigin()}/account#prescriptions`},channel:"orders"});
       return json({ok:true,status:parsed.data.status});
     }
     const [record] = await db.select().from(prescriptions).where(eq(prescriptions.id, downloadId)).limit(1);
@@ -532,8 +536,8 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   await writeFile(path.join(directory, storedName), bytes, { flag: "wx" });
   const displayName = `Prescription - ${new Date().toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}${extension}`;
   const [created] = await getDb().insert(prescriptions).values({ customerId: auth.session.userId, storageKey: storedName, originalFilename: displayName, mimeType: file.type, sizeBytes: file.size, status: "RECEIVED" });
-  void sendEmail({to:auth.session.email,subject:"Prescription received",message:`Hello ${auth.session.firstName},\n\nWe received your prescription and it is awaiting pharmacist review. Track its progress from your Healthfield account.`,action:{label:"Track prescription",url:`${storefrontOrigin()}/account#prescriptions`}});
-  if(process.env.NOTIFICATION_EMAIL)void sendEmail({to:process.env.NOTIFICATION_EMAIL,subject:"New prescription awaiting review",message:`A new prescription upload is awaiting pharmacist review. Reference: ${created.insertId}.`});
+  void sendEmail({to:auth.session.email,subject:"Prescription received",message:`Hello ${auth.session.firstName},\n\nWe received your prescription and it is awaiting pharmacist review. Track its progress from your Healthfield account.`,action:{label:"Track prescription",url:`${storefrontOrigin()}/account#prescriptions`},channel:"orders"});
+  if(process.env.NOTIFICATION_EMAIL)void sendEmail({to:process.env.NOTIFICATION_EMAIL,subject:"New prescription awaiting review",message:`A new prescription upload is awaiting pharmacist review. Reference: ${created.insertId}.`,channel:"orders"});
   return json({ ok: true, id: created.insertId }, { status: 201 });
 }
 

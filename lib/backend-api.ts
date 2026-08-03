@@ -61,6 +61,7 @@ export async function proxyAuth(request: Request, action: "login" | "register" |
   const response = await backendRequest(`/v1/auth/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   const data = await response.json().catch(() => ({})) as { token?: string; redirectTo?: string; error?: string; role?: string };
   const result = NextResponse.json(data, { status: response.status });
+  if (action === "login") result.cookies.delete(SESSION_COOKIE);
   if (response.ok && data.token) result.cookies.set(SESSION_COOKIE, data.token, { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 60 * 60 * (data.role === "CUSTOMER" ? 8 : 12), path: "/" });
   return result;
 }
