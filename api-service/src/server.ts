@@ -9,8 +9,8 @@ import { getDb, closeDb } from "./db";
 import { json } from "./http";
 import { handleView } from "./views";
 import {
-  handleAuth, handleCampaigns, handleChats, handleInventory, handleOrders, handlePrescriptions, handleTaxonomy,
-  handleProductImage, handleProducts, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
+  handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOrders, handlePrescriptions, handleTaxonomy,
+  handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
 } from "./mutations";
 
 const envPath = resolve(process.cwd(), ".env");
@@ -77,7 +77,7 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname.startsWith("/v1/auth/") && rateLimited(ip)) return json({ error: "Too many attempts. Try again later." }, { status: 429, headers: { "Retry-After": "900" } });
 
   if (url.pathname.startsWith("/v1/views/") && request.method === "GET") return responseOf(handleView(request, url.pathname.slice(10)));
-  const authMatch = url.pathname.match(/^\/v1\/auth\/(login|register|forgot-password|reset-password|change-password)$/);
+  const authMatch = url.pathname.match(/^\/v1\/auth\/(login|register|forgot-password|reset-password|change-password|verify-email|resend-verification|two-factor|two-factor-resend)$/);
   if (authMatch) return responseOf(handleAuth(request, authMatch[1]));
   if (url.pathname === "/v1/chats") return responseOf(handleChats(request));
   if (url.pathname === "/v1/orders") return responseOf(handleOrders(request));
@@ -85,6 +85,8 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (orderMatch) return responseOf(handleOrders(request, Number(orderMatch[1])));
   if (url.pathname === "/v1/walk-in-sales") return responseOf(handleWalkInSales(request));
   if (url.pathname === "/v1/campaigns") return responseOf(handleCampaigns(request));
+  if (url.pathname === "/v1/blogs") return responseOf(handleBlogs(request));
+  const blogMatch=url.pathname.match(/^\/v1\/blogs\/(\d+)$/);if(blogMatch)return responseOf(handleBlogs(request,Number(blogMatch[1])));
   if (url.pathname === "/v1/settings") return responseOf(handleSettings(request));
   if (url.pathname === "/v1/products/image") return responseOf(handleProductImage(request));
   if (url.pathname === "/v1/products") return responseOf(handleProducts(request));
@@ -96,6 +98,8 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (conditionMatch) return responseOf(handleTaxonomy(request, "conditions", Number(conditionMatch[1])));
   const productMatch = url.pathname.match(/^\/v1\/products\/(\d+)$/);
   if (productMatch) return responseOf(handleProducts(request, Number(productMatch[1])));
+  const reviewMatch = url.pathname.match(/^\/v1\/products\/(\d+)\/reviews$/);
+  if (reviewMatch) return responseOf(handleReviews(request, Number(reviewMatch[1])));
   if (url.pathname === "/v1/prescriptions") return responseOf(handlePrescriptions(request));
   const prescriptionMatch = url.pathname.match(/^\/v1\/prescriptions\/(\d+)\/download$/);
   if (prescriptionMatch) return responseOf(handlePrescriptions(request, Number(prescriptionMatch[1])));

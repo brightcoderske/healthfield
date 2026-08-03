@@ -64,6 +64,27 @@
       "when": 1785586979348,
       "tag": "0008_chunky_jane_foster",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1785755272491,
+      "tag": "0009_handy_lord_tyger",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1785767788790,
+      "tag": "0010_quiet_firebrand",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1785768007021,
+      "tag": "0011_greedy_blue_blade",
+      "breakpoints": true
     }
   ]
 }

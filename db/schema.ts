@@ -33,6 +33,8 @@ export const users = mysqlTable("users", {
   termsAcceptedAt: timestamp("terms_accepted_at"),
   marketingConsent: boolean("marketing_consent").default(false).notNull(),
   marketingConsentAt: timestamp("marketing_consent_at"),
+  emailVerifiedAt: timestamp("email_verified_at"),
+  deletedAt: timestamp("deleted_at"),
   ...timestamps,
 }, (table) => [
   uniqueIndex("users_email_unique").on(table.email),
@@ -206,9 +208,27 @@ export const siteSettings = mysqlTable("site_settings", {
   instagramUrl: varchar("instagram_url", { length: 500 }),
   xUrl: varchar("x_url", { length: 500 }),
   tiktokUrl: varchar("tiktok_url", { length: 500 }),
+  licenceTitle: varchar("licence_title", { length: 190 }),
+  licenceNumber: varchar("licence_number", { length: 120 }),
+  licenceImageUrl: varchar("licence_image_url", { length: 500 }),
   updatedBy: int("updated_by").references(() => users.id),
   ...timestamps,
 });
+
+export const twoFactorChallenges = mysqlTable("two_factor_challenges", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("user_id").notNull(),
+  tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+  codeHash: varchar("code_hash", { length: 64 }).notNull(),
+  attemptCount: int("attempt_count").default(0).notNull(),
+  resendCount: int("resend_count").default(0).notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("two_factor_challenges_token_unique").on(table.tokenHash),
+  index("two_factor_challenges_user_idx").on(table.userId),
+]);
 
 export const chatConversations = mysqlTable("chat_conversations", {
   id: int("id").autoincrement().primaryKey(),
@@ -256,6 +276,30 @@ export const productReviews = mysqlTable("product_reviews", {
   uniqueIndex("product_customer_review_unique").on(table.productId, table.customerId),
   index("product_reviews_approved_idx").on(table.productId, table.isApproved),
 ]);
+
+export const emailVerificationTokens = mysqlTable("email_verification_tokens", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [uniqueIndex("email_verification_token_unique").on(table.tokenHash), index("email_verification_user_idx").on(table.userId)]);
+
+export const blogPosts = mysqlTable("blog_posts", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 220 }).notNull(),
+  slug: varchar("slug", { length: 240 }).notNull(),
+  excerpt: varchar("excerpt", { length: 500 }).notNull(),
+  content: text("content").notNull(),
+  imageUrl: varchar("image_url", { length: 500 }),
+  metaTitle: varchar("meta_title", { length: 220 }),
+  metaDescription: varchar("meta_description", { length: 500 }),
+  isPublished: boolean("is_published").default(false).notNull(),
+  publishedAt: timestamp("published_at"),
+  authorId: int("author_id").references(() => users.id),
+  ...timestamps,
+}, (table) => [uniqueIndex("blog_posts_slug_unique").on(table.slug), index("blog_posts_published_idx").on(table.isPublished, table.publishedAt)]);
 
 export const campaigns = mysqlTable("campaigns", {
   id: int("id").autoincrement().primaryKey(),

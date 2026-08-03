@@ -33,6 +33,7 @@ yarn-error.log*
 .pnpm-debug.log*
 stderr.log
 .dev-server*.log
+/.codex-logs/
 
 # env files (can opt-in for committing if needed)
 .env*
@@ -41,6 +42,7 @@ stderr.log
 /healthfield logos/
 /storage/private/
 /storage/prescriptions/
+/storage/uploads/products/
 /public/uploads/products/
 /.openai/
 
@@ -49,6 +51,7 @@ stderr.log
 
 # typescript
 next-env.d.ts
+tsconfig.tsbuildinfo
 /dist/
 /.wrangler/
 /outputs/

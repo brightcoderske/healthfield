@@ -8,6 +8,7 @@ type Product = {
   id: number; categoryId: number; name: string; brand: string | null; packSize: string | null;
   shortDescription: string | null; description: string | null; price: number; discountPrice: number | null; imageUrl: string | null;
   isFeatured: boolean; isActive: boolean; conditionIds: number[];
+  prescriptionRequired: boolean;
 };
 type Option = { id: number; name: string };
 
@@ -35,7 +36,7 @@ export function ProductManager({ initialProducts, categories, conditions }: { in
       description: String(form.get("description") || ""),
       price: Number(form.get("price")), discountPrice: form.get("discountPrice") ? Number(form.get("discountPrice")) : null,
       imageUrl: editing === "new" ? null : editing.imageUrl, isFeatured: form.get("isFeatured") === "on",
-      isActive: form.get("isActive") === "on", conditionIds: form.getAll("conditionIds").map(Number),
+      isActive: form.get("isActive") === "on", prescriptionRequired: form.get("prescriptionRequired") === "on", conditionIds: form.getAll("conditionIds").map(Number),
     };
     const isNew = editing === "new";
     const targetId = isNew ? "new" : editing.id;
@@ -118,7 +119,7 @@ export function ProductManager({ initialProducts, categories, conditions }: { in
         {(imagePreview||activeEdit?.imageUrl)&&<div className="edit-image-preview full"><img src={imagePreview||activeEdit?.imageUrl||""} alt={activeEdit?.name||"New product preview"}/>{activeEdit?.imageUrl&&!imagePreview&&<button type="button" onClick={()=>removeImage(activeEdit)}><ImageOff/> Remove image now</button>}</div>}
         <label className="full">Detailed description<RichTextEditor defaultValue={activeEdit?.description||""}/></label>
         <fieldset className="full condition-picker"><legend>Health conditions supported by this product</legend>{conditions.map((item)=><label key={item.id}><input type="checkbox" name="conditionIds" value={item.id} defaultChecked={activeEdit?.conditionIds.includes(item.id)}/><span>{item.name}</span></label>)}</fieldset>
-        <label className="check-label"><input type="checkbox" name="isFeatured" defaultChecked={activeEdit?.isFeatured}/> Featured</label><label className="check-label"><input type="checkbox" name="isActive" defaultChecked={activeEdit?.isActive??true}/> Active</label>
+        <label className="check-label"><input type="checkbox" name="prescriptionRequired" defaultChecked={activeEdit?.prescriptionRequired}/> Prescription required</label><label className="check-label"><input type="checkbox" name="isFeatured" defaultChecked={activeEdit?.isFeatured}/> Featured</label><label className="check-label"><input type="checkbox" name="isActive" defaultChecked={activeEdit?.isActive??true}/> Active</label>
       </div>{message&&<div className="auth-error">{message}</div>}<footer><button type="button" onClick={()=>setEditing(null)}>Cancel</button><button type="submit" disabled={savingId!==null}>{savingId!==null?"Saving product…":"Save product"}</button></footer></form></div>}
   </main>;
 }

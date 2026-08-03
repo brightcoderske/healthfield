@@ -1,4 +1,7 @@
 import { jwtVerify, SignJWT } from "jose";
+import { and, eq, isNull } from "drizzle-orm";
+import { users } from "../../db/schema";
+import { getDb } from "./db";
 
 export type Role = "CUSTOMER" | "STAFF" | "ADMIN" | "SUPER_ADMIN";
 export type Session = { userId: number; email: string; firstName: string; role: Role; forcePasswordChange: boolean };
@@ -14,7 +17,7 @@ export async function createSessionToken(session: Session) {
   return new SignJWT(session)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime("8h")
+    .setExpirationTime(session.role === "CUSTOMER" ? "8h" : "12h")
     .setIssuer("healthfield-pharmacy")
     .setAudience("healthfield-web")
     .sign(secret());
@@ -51,7 +54,11 @@ export async function requestSession(request: Request, allowUploadToken = false)
       issuer: "healthfield-pharmacy",
       audience: allowUploadToken ? ["healthfield-web", "healthfield-upload"] : "healthfield-web",
     });
-    return payload as unknown as Session;
+    const session = payload as unknown as Session;
+    const [user] = await getDb().select({ role: users.role, isActive: users.isActive, twoFactorEnabled: users.twoFactorEnabled }).from(users).where(and(eq(users.id, session.userId), isNull(users.deletedAt))).limit(1);
+    if (!user || !user.isActive || user.role !== session.role) return null;
+    if (user.role !== "CUSTOMER" && !user.twoFactorEnabled) return null;
+    return session;
   } catch {
     return null;
   }

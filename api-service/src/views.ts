@@ -1,6 +1,6 @@
 import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import {
-  branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
+  blogPosts, branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
   orderItemFulfilments, orderItems, orders, prescriptions, productHealthConditions, productReviews, products,
   siteSettings, users,
 } from "../../db/schema";
@@ -25,7 +25,7 @@ async function home() {
     db.select({
       id: products.id, name: products.name, price: products.price, imageUrl: products.imageUrl,
       packSize: products.packSize, brand: products.brand, categoryId: products.categoryId,
-      shortDescription: products.shortDescription, discountPrice: products.discountPrice,
+      shortDescription: products.shortDescription, description: products.description, discountPrice: products.discountPrice,
       rating: sql<string | null>`avg(case when ${productReviews.isApproved} = true then ${productReviews.rating} end)`,
       reviewCount: sql<number>`count(case when ${productReviews.isApproved} = true then 1 end)`,
     }).from(products).leftJoin(productReviews, eq(productReviews.productId, products.id))
@@ -52,8 +52,8 @@ async function home() {
     phone: settings.phone ?? "", whatsapp: settings.whatsapp ?? "", supportEmail: settings.supportEmail ?? "",
     address: settings.address ?? "", openingHours: settings.openingHours ?? "", deliveryMessage: settings.deliveryMessage,
     facebookUrl: settings.facebookUrl ?? "", instagramUrl: settings.instagramUrl ?? "",
-    xUrl: settings.xUrl ?? "", tiktokUrl: settings.tiktokUrl ?? "",
-  } : { phone: "", whatsapp: "", supportEmail: "", address: "", openingHours: "", deliveryMessage: "Fast Delivery Across Kenya", facebookUrl: "", instagramUrl: "", xUrl: "", tiktokUrl: "" };
+    xUrl: settings.xUrl ?? "", tiktokUrl: settings.tiktokUrl ?? "", licenceTitle:settings.licenceTitle??"",licenceNumber:settings.licenceNumber??"",licenceImageUrl:publicImageUrl(settings.licenceImageUrl),
+  } : { phone: "", whatsapp: "", supportEmail: "", address: "", openingHours: "", deliveryMessage: "Fast Delivery Across Kenya", facebookUrl: "", instagramUrl: "", xUrl: "", tiktokUrl: "",licenceTitle:"",licenceNumber:"",licenceImageUrl:null };
   return { catalog, contact, categories: categoryRows, conditions: conditionRows };
 }
 
@@ -61,9 +61,10 @@ async function productDetail(id: number) {
   const db = getDb();
   const [product] = await db.select().from(products).where(and(eq(products.id, id), eq(products.isActive, true))).limit(1);
   if (!product) return null;
-  const [reviewSummary, conditionLinks, orderLinks] = await Promise.all([
+  const [reviewSummary, reviews, conditionLinks, orderLinks] = await Promise.all([
     db.select({ rating: sql<string | null>`avg(${productReviews.rating})`, count: sql<number>`count(*)` })
       .from(productReviews).where(and(eq(productReviews.productId, id), eq(productReviews.isApproved, true))).then((rows) => rows[0]),
+    db.select({ id: productReviews.id, rating: productReviews.rating, comment: productReviews.comment, createdAt: productReviews.createdAt, firstName: users.firstName }).from(productReviews).innerJoin(users, eq(users.id, productReviews.customerId)).where(and(eq(productReviews.productId, id), eq(productReviews.isApproved, true))).orderBy(desc(productReviews.createdAt)).limit(20),
     db.select({ conditionId: productHealthConditions.conditionId }).from(productHealthConditions).where(eq(productHealthConditions.productId, id)),
     db.select({ orderId: orderItems.orderId }).from(orderItems).where(eq(orderItems.productId, id)).limit(100),
   ]);
@@ -79,6 +80,7 @@ async function productDetail(id: number) {
     product: { ...product, imageUrl: publicImageUrl(product.imageUrl) },
     rating: reviewSummary?.rating === null ? null : Number(reviewSummary?.rating),
     reviewCount: Number(reviewSummary?.count ?? 0),
+    reviews,
     related: normalizedRelated,
     similar: filteredSimilar.length ? filteredSimilar : normalizedRelated.slice().reverse(),
     bought: bought.length ? images(bought) : normalizedRelated.slice(0, 6),
@@ -100,6 +102,8 @@ export async function handleView(request: Request, path: string) {
     const rows = await getDb().select().from(healthConditions).where(eq(healthConditions.isActive, true)).orderBy(asc(healthConditions.displayOrder), asc(healthConditions.name));
     return json({ conditions: rows }, { headers: { "Cache-Control": "public, max-age=300" } });
   }
+  if(path==="blogs")return json({posts:await getDb().select().from(blogPosts).where(eq(blogPosts.isPublished,true)).orderBy(desc(blogPosts.publishedAt))},{headers:{"Cache-Control":"public, max-age=300"}});
+  const blogMatch=path.match(/^blogs\/([^/]+)$/);if(blogMatch){const [post]=await getDb().select().from(blogPosts).where(and(eq(blogPosts.slug,decodeURIComponent(blogMatch[1])),eq(blogPosts.isPublished,true))).limit(1);return post?json({post}):json({error:"Article not found."},{status:404})}
   if (path === "catalogue") {
     const ids = idsFrom(url);
     const rows = ids.length
@@ -149,7 +153,7 @@ export async function handleView(request: Request, path: string) {
     return json({ products: productRows }, { headers: { "Cache-Control": "public, max-age=300" } });
   }
   if (path === "merchant") {
-    const rows = await getDb().select({ id:products.id,sku:products.sku,name:products.name,description:products.description,shortDescription:products.shortDescription,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice,brand:products.brand,barcode:products.barcode,packSize:products.packSize,category:categories.name }).from(products).innerJoin(categories,eq(categories.id,products.categoryId)).where(eq(products.isActive,true));
+    const rows = await getDb().select({ id:products.id,sku:products.sku,name:products.name,description:products.description,shortDescription:products.shortDescription,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice,brand:products.brand,barcode:products.barcode,packSize:products.packSize,category:categories.name,rating:sql<string|null>`avg(case when ${productReviews.isApproved}=true then ${productReviews.rating} end)`,reviewCount:sql<number>`count(case when ${productReviews.isApproved}=true then 1 end)` }).from(products).innerJoin(categories,eq(categories.id,products.categoryId)).leftJoin(productReviews,eq(productReviews.productId,products.id)).where(eq(products.isActive,true)).groupBy(products.id,categories.name);
     return json({ products: rows.map((row)=>({...row,imageUrl:publicImageUrl(row.imageUrl)})) }, { headers: { "Cache-Control": "public, max-age=300" } });
   }
 
@@ -191,12 +195,13 @@ export async function handleView(request: Request, path: string) {
     if (view === "stores") return json({ stores: await db.select().from(branches).orderBy(desc(branches.createdAt)) });
     if (view === "staff") {
       const [staff, stores] = await Promise.all([
-        db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, phone: users.phone, role: users.role, homeBranchId: users.homeBranchId, isActive: users.isActive }).from(users).where(ne(users.role, "CUSTOMER")).orderBy(desc(users.createdAt)),
+        db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, phone: users.phone, role: users.role, homeBranchId: users.homeBranchId, isActive: users.isActive, twoFactorEnabled: users.twoFactorEnabled }).from(users).where(and(ne(users.role, "CUSTOMER"), isNull(users.deletedAt))).orderBy(desc(users.createdAt)),
         db.select({ id: branches.id, name: branches.name }).from(branches),
       ]);
       return json({ staff, stores });
     }
     if (view === "settings") return json({ settings: (await db.select().from(siteSettings).limit(1))[0] ?? null });
+    if(view==="blogs")return json({posts:await db.select().from(blogPosts).orderBy(desc(blogPosts.createdAt))});
     if (view === "products") {
       const [catalog, categoryRows, conditions, mappings] = await Promise.all([
         db.select().from(products).orderBy(desc(products.createdAt)),

@@ -1,21 +1,8 @@
-import { Heart, Share2, ShoppingCart } from "lucide-react";
-
-export function ProductActions({ productId, productName, productUrl }: { productId: number; productName: string; productUrl: string }) {
-  const shareUrl = `https://wa.me/?text=${encodeURIComponent(`${productName} — ${productUrl}`)}`;
-  return (
-    <div className="product-actions">
-      <form action="/api/cart" method="post">
-        <input type="hidden" name="productId" value={productId}/>
-        <input type="hidden" name="return" value={`/products/${productId}`}/>
-        <label>Quantity<input name="quantity" type="number" min="1" max="99" defaultValue="1"/></label>
-        <button type="submit"><ShoppingCart/> Add to cart</button>
-      </form>
-      <form action="/api/wishlist" method="post">
-        <input type="hidden" name="productId" value={productId}/>
-        <input type="hidden" name="return" value={`/products/${productId}`}/>
-        <button type="submit"><Heart/> Wishlist</button>
-      </form>
-      <a href={shareUrl} target="_blank" rel="noreferrer"><Share2/> Share</a>
-    </div>
-  );
+"use client";
+import { Heart, Minus, Plus, Share2, ShoppingBag, ShoppingCart } from "lucide-react";
+import { useState } from "react";
+export function ProductActions({ productId, productName, productUrl }: { productId:number; productName:string; productUrl:string }) {
+  const [quantity,setQuantity]=useState(1);
+  const shareUrl=`https://wa.me/?text=${encodeURIComponent(`${productName} — ${productUrl}`)}`;
+  return <div className="product-actions compact-product-actions"><form action="/api/cart" method="post"><input type="hidden" name="productId" value={productId}/><input type="hidden" name="return" value={`/products/${productId}`}/><input type="hidden" name="quantity" value={quantity}/><span className="quantity-stepper"><button type="button" onClick={()=>setQuantity(v=>Math.max(1,v-1))} aria-label="Decrease quantity" title="Decrease quantity"><Minus/></button><b>{quantity}</b><button type="button" onClick={()=>setQuantity(v=>Math.min(99,v+1))} aria-label="Increase quantity" title="Increase quantity"><Plus/></button></span><button className="primary-cart-action" type="submit"><ShoppingCart/> <span>Add to cart</span></button></form><a className="icon-product-action view-cart-action" href="/cart" aria-label="View cart" title="View cart"><ShoppingBag/></a><form className="icon-action-form" action="/api/wishlist" method="post"><input type="hidden" name="productId" value={productId}/><input type="hidden" name="return" value={`/products/${productId}`}/><button className="icon-product-action" type="submit" aria-label="Add to wishlist" title="Wishlist"><Heart/></button></form><a className="icon-product-action" href={shareUrl} target="_blank" rel="noreferrer" aria-label={`Share ${productName}`} title="Share"><Share2/></a></div>;
 }

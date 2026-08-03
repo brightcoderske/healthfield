@@ -6,6 +6,8 @@ import { notFound } from "next/navigation";
 import { BackendError, backendJson } from "@/lib/backend-api";
 import { ProductActions } from "./product-actions";
 import { RichText } from "../rich-text";
+import Image from "next/image";
+import { ProductReviewForm } from "@/app/product-review-form";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +17,7 @@ type Product = {
   packSize: string | null; shortDescription: string | null; description: string | null; usageInformation: string | null;
   warnings: string | null; storageInformation: string | null; prescriptionRequired: boolean;
 };
-type ProductData = { product: Product; rating: number | null; reviewCount: number; related: Recommendation[]; similar: Recommendation[]; bought: Recommendation[] };
+type ProductData = { product: Product; rating: number | null; reviewCount: number; reviews:Array<{id:number;rating:number;comment:string|null;createdAt:string;firstName:string}>; related: Recommendation[]; similar: Recommendation[]; bought: Recommendation[] };
 
 async function currentOrigin() {
   const requestHeaders = await headers();
@@ -73,11 +75,11 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   const id = Number((await params).id);
   const data = await dataFor(id);
   if (!data) notFound();
-  const { product, rating, reviewCount, related, similar, bought } = data;
+  const { product, rating, reviewCount, reviews, related, similar, bought } = data;
   const price = Number(product.discountPrice ?? product.price);
   const productUrl = `${await currentOrigin()}/products/${product.id}`;
   return <main className="product-detail">
-    <Link href="/#products"><ArrowLeft /> Back to products</Link>
+    <header className="product-page-header"><Link href="/"><Image src="/healthfield-logo-clean.png" alt="Healthfield Pharmacy" width={205} height={72}/></Link><Link href="/#products"><ArrowLeft /> Back to products</Link><Link href="/cart"><ShoppingCart/> View cart</Link></header>
     <section className="product-primary">
       <div className="product-detail-image">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} /> : <div><Package /><span>Product image has not been added</span></div>}</div>
       <div className="product-detail-copy">
@@ -96,6 +98,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
       {product.warnings && <article><h3>Important warnings</h3><p>{product.warnings}</p></article>}
       {product.storageInformation && <article><h3>Storage</h3><p>{product.storageInformation}</p></article>}
     </div></section>
+    <section className="product-reviews"><header><div><h2>Customer reviews</h2><p>{reviewCount ? `${rating?.toFixed(1)} from ${reviewCount} verified customer reviews` : "Be the first verified customer to review this product."}</p></div></header><div className="review-grid"><ProductReviewForm productId={product.id}/><div className="review-list">{reviews.map(review=><article key={review.id}><span>{"★".repeat(review.rating)}{"☆".repeat(5-review.rating)}</span><strong>{review.rating===5?"Recommend":review.rating===4?"Very good":review.rating===3?"Good":review.rating===2?"Fair":"Poor"}</strong><p>{review.comment}</p><small>{review.firstName} · verified purchase · {new Date(review.createdAt).toLocaleDateString("en-KE")}</small></article>)}</div></div></section>
     <ProductRail title="Frequently bought together" subtitle="Products customers often purchase in the same order." items={bought} />
     <ProductRail title="People also like" subtitle="Popular choices for similar health needs." items={similar} />
     <ProductRail title="More from this category" subtitle="Keep exploring products selected for you." items={related} />

@@ -55,12 +55,12 @@ export async function proxyToBackend(request: Request, path: string) {
   return new NextResponse(response.body, { status: response.status, headers: responseHeaders });
 }
 
-export async function proxyAuth(request: Request, action: "login" | "register" | "change-password") {
+export async function proxyAuth(request: Request, action: "login" | "register" | "change-password" | "verify-email" | "resend-verification" | "two-factor" | "two-factor-resend") {
   const contentType = request.headers.get("content-type") || "";
   const payload = contentType.includes("application/json") ? await request.json().catch(() => null) : Object.fromEntries(await request.formData());
   const response = await backendRequest(`/v1/auth/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-  const data = await response.json().catch(() => ({})) as { token?: string; redirectTo?: string; error?: string };
+  const data = await response.json().catch(() => ({})) as { token?: string; redirectTo?: string; error?: string; role?: string };
   const result = NextResponse.json(data, { status: response.status });
-  if (response.ok && data.token) result.cookies.set(SESSION_COOKIE, data.token, { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 60 * 60 * 8, path: "/" });
+  if (response.ok && data.token) result.cookies.set(SESSION_COOKIE, data.token, { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 60 * 60 * (data.role === "CUSTOMER" ? 8 : 12), path: "/" });
   return result;
 }

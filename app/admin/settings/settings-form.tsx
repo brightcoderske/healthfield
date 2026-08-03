@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, Save, Settings } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, useState } from "react";
 
 type SettingsValue = {
   pharmacyName: string; phone: string | null; whatsapp: string | null;
@@ -9,14 +9,21 @@ type SettingsValue = {
   deliveryMessage: string; freeDeliveryThreshold: string | null;
   bulkSmsApiUrl: string | null; bulkSmsApiKey: string | null; bulkSmsSenderId: string | null;
   facebookUrl:string|null; instagramUrl:string|null; xUrl:string|null; tiktokUrl:string|null;
+  licenceTitle:string|null;licenceNumber:string|null;licenceImageUrl:string|null;
 } | null;
 
 export function SettingsForm({ initial }: { initial: SettingsValue }) {
   const [message, setMessage] = useState("");
+  const [licenceFile,setLicenceFile]=useState<File|null>(null);
+  const [licencePreview,setLicencePreview]=useState(initial?.licenceImageUrl??"");
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
-    const payload = Object.fromEntries(new FormData(event.currentTarget));
+    const formData=new FormData(event.currentTarget);
+    let licenceImageUrl=String(formData.get("licenceImageUrl")||"");
+    if(licenceFile){const upload=new FormData();upload.set("image",licenceFile);const uploadResponse=await fetch("/api/products/image",{method:"POST",body:upload}),uploadData=await uploadResponse.json().catch(()=>({}));if(!uploadResponse.ok){setMessage(uploadData.error||"Licence image could not be uploaded.");return}licenceImageUrl=uploadData.imageUrl}
+    formData.delete("licenceFile");
+    const payload = {...Object.fromEntries(formData),licenceImageUrl};
     const response = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await response.json();
     setMessage(response.ok ? "Settings saved." : data.error ?? "Unable to save settings.");
@@ -43,6 +50,7 @@ export function SettingsForm({ initial }: { initial: SettingsValue }) {
           <label className="full">Header delivery message<input name="deliveryMessage" defaultValue={initial?.deliveryMessage ?? "Fast Delivery Across Kenya"} required /></label>
           <label>Free-delivery threshold (KES)<input name="freeDeliveryThreshold" type="number" min="0" defaultValue={initial?.freeDeliveryThreshold ?? ""} /></label>
         </div></section>
+        <section><h2>Pharmacy licence</h2><p>Upload the licence here. It is displayed prominently above the website footer.</p><div><label>Licence title<input name="licenceTitle" defaultValue={initial?.licenceTitle??"Pharmacy Licence"} required/></label><label>Licence number<input name="licenceNumber" defaultValue={initial?.licenceNumber??""} required/></label><input type="hidden" name="licenceImageUrl" value={initial?.licenceImageUrl??""}/><label className="full">Licence image<input name="licenceFile" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event:ChangeEvent<HTMLInputElement>)=>{const file=event.target.files?.[0]||null;if(file&&file.size>2*1024*1024){event.target.value="";setMessage("Licence image must be 2 MB or smaller.");return}setLicenceFile(file);if(file)setLicencePreview(URL.createObjectURL(file))}}/><small>JPEG, PNG or WebP, maximum 2 MB.</small></label>{licencePreview&&<div className="licence-admin-preview full"><img src={licencePreview} alt="Licence preview"/><button type="button" onClick={()=>{setLicenceFile(null);setLicencePreview("")}}>Remove licence image</button></div>}</div></section>
         <section><h2>Bulk SMS API</h2><p>Healthfield sends JSON containing recipients, message and senderId to this provider.</p><div>
           <label className="full">SMS API URL<input name="bulkSmsApiUrl" type="url" defaultValue={initial?.bulkSmsApiUrl ?? ""} placeholder="https://provider.example/api/messages" /></label>
           <label>API key<input name="bulkSmsApiKey" type="password" defaultValue={initial?.bulkSmsApiKey ?? ""} autoComplete="off" /></label>

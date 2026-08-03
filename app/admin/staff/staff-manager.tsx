@@ -1,12 +1,64 @@
 "use client";
-import { FormEvent,useMemo,useState } from "react";
-import { Plus,Search,UserRound,X } from "lucide-react";
-type Store={id:number;name:string}; type Staff={id:number;firstName:string;lastName:string;email:string;phone:string|null;role:"STAFF"|"ADMIN"|"SUPER_ADMIN";homeBranchId:number|null;isActive:boolean};
-export function StaffManager({initialStaff,stores}:{initialStaff:Staff[];stores:Store[]}){
- const [rows,setRows]=useState(initialStaff),[query,setQuery]=useState(""),[editing,setEditing]=useState<Staff|"new"|null>(null),[saving,setSaving]=useState<number|"new"|null>(null),[error,setError]=useState("");
- const shown=useMemo(()=>rows.filter(r=>`${r.firstName} ${r.lastName} ${r.email}`.toLowerCase().includes(query.toLowerCase())),[rows,query]);
- async function save(e:FormEvent<HTMLFormElement>){e.preventDefault();if(!editing)return;const f=new FormData(e.currentTarget),payload={firstName:String(f.get("firstName")),lastName:String(f.get("lastName")),email:String(f.get("email")),phone:String(f.get("phone")||""),role:String(f.get("role")),homeBranchId:f.get("homeBranchId")?Number(f.get("homeBranchId")):null,password:String(f.get("password")||"")||undefined,isActive:f.get("isActive")==="on"},isNew=editing==="new",id=isNew?"new":editing.id;setSaving(id);setError("");try{const res=await fetch(isNew?"/api/staff":`/api/staff/${id}`,{method:isNew?"POST":"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}),data=await res.json();if(!res.ok)return setError(data.error||"Staff account could not be saved.");const clean={...payload,password:undefined} as unknown as Staff;if(isNew)setRows(c=>[{...clean,id:data.id},...c]);else setRows(c=>c.map(r=>r.id===id?{...r,...clean,email:r.email}:r));setEditing(null)}finally{setSaving(null)}}
- const current=editing==="new"?null:editing;
- return <main className="compact-admin-page"><header><div><a href="/admin">← Dashboard</a><h1>Staff</h1><p>Staff access, assigned store and account status.</p></div><button onClick={()=>setEditing("new")}><Plus/> Add staff</button></header><div className="compact-table-tools"><label><Search/><input placeholder="Search staff name or email" value={query} onChange={e=>setQuery(e.target.value)}/></label><span>{shown.length} accounts</span></div><div className="compact-table"><div className="compact-table-head manager-row"><span>Staff member</span><span>Role</span><span>Store</span><span>Phone</span><span>Status</span></div>{shown.map(r=><div className={`compact-table-row manager-row ${saving===r.id?"row-saving":""}`} key={r.id}><span><UserRound/><button className="row-link" onClick={()=>setEditing(r)}>{r.firstName} {r.lastName}</button><small>{r.email}</small></span><b>{r.role.replace("_"," ")}</b><span>{stores.find(s=>s.id===r.homeBranchId)?.name||"Not assigned"}</span><span>{r.phone||"—"}</span><span className={r.isActive?"status-active":"status-inactive"}>{saving===r.id?"Saving…":r.isActive?"Active":"Inactive"}</span></div>)}</div>
- {editing&&<div className="product-modal" onClick={()=>setEditing(null)}><form onSubmit={save} onClick={e=>e.stopPropagation()}><header><h2>{editing==="new"?"Add staff":"Edit staff"}</h2><button type="button" onClick={()=>setEditing(null)}><X/></button></header><div className="product-form-grid"><label>First name<input name="firstName" defaultValue={current?.firstName||""} required/></label><label>Last name<input name="lastName" defaultValue={current?.lastName||""} required/></label><label>Email<input type="email" name="email" defaultValue={current?.email||""} readOnly={editing!=="new"} required/></label><label>Phone<input name="phone" defaultValue={current?.phone||""}/></label><label>Role<select name="role" defaultValue={current?.role==="ADMIN"?"ADMIN":"STAFF"}><option value="STAFF">Staff</option><option value="ADMIN">Administrator</option></select></label><label>Assigned store<select name="homeBranchId" defaultValue={current?.homeBranchId||""}><option value="">Not assigned</option>{stores.map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><label className="full">{editing==="new"?"Temporary password":"New password (leave blank to keep)"}<input type="password" name="password" minLength={8} required={editing==="new"}/></label><label className="check-label"><input type="checkbox" name="isActive" defaultChecked={current?.isActive??true}/> Active</label></div>{error&&<div className="auth-error">{error}</div>}<footer><button type="button" onClick={()=>setEditing(null)}>Cancel</button><button disabled={saving!==null}>{saving?"Saving…":"Save staff"}</button></footer></form></div>}</main>
+
+import { FormEvent, useMemo, useState } from "react";
+import { Plus, Search, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
+
+type Store = { id: number; name: string };
+type Staff = { id: number; firstName: string; lastName: string; email: string; phone: string | null; role: "STAFF" | "ADMIN" | "SUPER_ADMIN"; homeBranchId: number | null; isActive: boolean; twoFactorEnabled: boolean };
+
+export function StaffManager({ initialStaff, stores }: { initialStaff: Staff[]; stores: Store[] }) {
+  const [rows, setRows] = useState(initialStaff);
+  const [query, setQuery] = useState("");
+  const [editing, setEditing] = useState<Staff | "new" | null>(null);
+  const [saving, setSaving] = useState<number | "new" | null>(null);
+  const [error, setError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const shown = useMemo(() => rows.filter((row) => `${row.firstName} ${row.lastName} ${row.email}`.toLowerCase().includes(query.toLowerCase())), [rows, query]);
+  const current = editing === "new" ? null : editing;
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editing) return;
+    const form = new FormData(event.currentTarget);
+    const payload = { firstName: String(form.get("firstName")), lastName: String(form.get("lastName")), email: String(form.get("email")), phone: String(form.get("phone") || ""), role: String(form.get("role")), homeBranchId: form.get("homeBranchId") ? Number(form.get("homeBranchId")) : null, password: String(form.get("password") || "") || undefined, isActive: form.get("isActive") === "on" };
+    const isNew = editing === "new", id = isNew ? "new" : editing.id;
+    setSaving(id); setError("");
+    try {
+      const response = await fetch(isNew ? "/api/staff" : `/api/staff/${id}`, { method: isNew ? "POST" : "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const data = await response.json();
+      if (!response.ok) { setError(data.error || "Staff account could not be saved."); return; }
+      if (isNew) setRows((items) => [{ ...payload, id: data.id, phone: payload.phone || null, role: payload.role as Staff["role"], twoFactorEnabled: false } as Staff, ...items]);
+      else setRows((items) => items.map((row) => row.id === id ? { ...row, ...payload, phone: payload.phone || null, role: payload.role as Staff["role"], email: row.email } : row));
+      setEditing(null);
+    } finally { setSaving(null); }
+  }
+
+  async function remove() {
+    if (!current) return;
+    setSaving(current.id); setError("");
+    try {
+      const response = await fetch(`/api/staff/${current.id}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) { setError(data.error || "Staff account could not be deleted."); return; }
+      setRows((items) => items.filter((row) => row.id !== current.id));
+      setEditing(null); setConfirmDelete(false);
+    } finally { setSaving(null); }
+  }
+
+  return <main className="compact-admin-page">
+    <header><div><a href="/admin">← Dashboard</a><h1>Staff</h1><p>Staff access, assigned store and account security.</p></div><button onClick={() => { setEditing("new"); setConfirmDelete(false); }}><Plus /> Add staff</button></header>
+    <div className="compact-table-tools"><label><Search /><input placeholder="Search staff name or email" value={query} onChange={(event) => setQuery(event.target.value)} /></label><span>{shown.length} accounts</span></div>
+    <div className="compact-table"><div className="compact-table-head manager-row"><span>Staff member</span><span>Role</span><span>Store</span><span>Phone</span><span>Status</span></div>{shown.map((row) => <div className={`compact-table-row manager-row ${saving === row.id ? "row-saving" : ""}`} key={row.id}>
+      <span><UserRound /><button className="row-link" onClick={() => { setEditing(row); setConfirmDelete(false); }}>{row.firstName} {row.lastName}</button><small>{row.email}</small></span>
+      <b>{row.role.replace("_", " ")}</b><span>{stores.find((store) => store.id === row.homeBranchId)?.name || "Not assigned"}</span><span>{row.phone || "—"}</span>
+      <span className={row.isActive ? "status-active" : "status-inactive"}>{saving === row.id ? "Saving…" : row.isActive ? "Active" : "Suspended"}<small className="staff-2fa-state"><ShieldCheck /> {row.twoFactorEnabled ? "Email 2FA active" : "Starts at next login"}</small></span>
+    </div>)}</div>
+    {editing && <div className="product-modal" onClick={() => setEditing(null)}><form onSubmit={save} onClick={(event) => event.stopPropagation()}>
+      <header><h2>{editing === "new" ? "Add staff" : "Edit staff"}</h2><button type="button" onClick={() => setEditing(null)}><X /></button></header>
+      <div className="product-form-grid"><label>First name<input name="firstName" defaultValue={current?.firstName || ""} required /></label><label>Last name<input name="lastName" defaultValue={current?.lastName || ""} required /></label><label>Email<input type="email" name="email" defaultValue={current?.email || ""} readOnly={editing !== "new"} required /></label><label>Phone<input name="phone" defaultValue={current?.phone || ""} /></label><label>Role<select name="role" defaultValue={current?.role === "ADMIN" ? "ADMIN" : "STAFF"}><option value="STAFF">Staff</option><option value="ADMIN">Administrator</option></select></label><label>Assigned store<select name="homeBranchId" defaultValue={current?.homeBranchId || ""}><option value="">Not assigned</option>{stores.map((store) => <option value={store.id} key={store.id}>{store.name}</option>)}</select></label><label className="full">{editing === "new" ? "Temporary password" : "New password (leave blank to keep)"}<input type="password" name="password" minLength={8} required={editing === "new"} /></label><label className="check-label"><input type="checkbox" name="isActive" defaultChecked={current?.isActive ?? true} /> Active account</label></div>
+      {current && confirmDelete && <div className="staff-delete-warning"><strong>Delete {current.firstName}’s staff account?</strong><p>Login access will end immediately. Historical order and audit records will remain intact.</p><button type="button" onClick={remove} disabled={saving !== null}><Trash2 /> Permanently disable account</button></div>}
+      {error && <div className="auth-error">{error}</div>}
+      <footer>{current && current.role !== "SUPER_ADMIN" ? <button className="staff-delete-trigger" type="button" onClick={() => setConfirmDelete((value) => !value)}><Trash2 /> Delete account</button> : null}<button type="button" onClick={() => setEditing(null)}>Cancel</button><button disabled={saving !== null}>{saving ? "Saving…" : "Save staff"}</button></footer>
+    </form></div>}
+  </main>;
 }

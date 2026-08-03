@@ -1,6 +1,16 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
+import "./enhancements.css";
+import "./latest-fixes.css";
+import "./licence-admin.css";
+import "./product-actions-compact.css";
+import "./product-card-layout-fix.css";
+import "./blog-admin-polish.css";
+import "./call-menu.css";
+import "./condition-matrix.css";
+import "./footer-licence.css";
+import "./two-factor.css";
 
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 
@@ -10,9 +20,8 @@ export const metadata: Metadata = {
     default: "Healthfield Pharmacy",
     template: "%s | Healthfield Pharmacy",
   },
-  description:
-    "Shop medicines, skincare, wellness and personal-care products from Healthfield Pharmacy.",
-  keywords:["online pharmacy Kenya","medicines Kenya","skincare Kenya","vitamins and supplements","Healthfield Pharmacy"],
+  description:"Healthfield Pharmacy serves Juja, Nairobi, Kahawa West and Thika Road with genuine medicines, pharmacist support, prescription fulfilment and wellness products.",
+  keywords:["pharmacy in Juja","pharmacy in Nairobi","pharmacy in Kahawa West","pharmacy Thika Road","pharmacy near me","chemist around me","pharmacist near me","online pharmacy Kenya","medicines Kenya"],
   openGraph:{type:"website",siteName:"Healthfield Pharmacy",title:"Healthfield Pharmacy",description:"Shop medicines, skincare, wellness and personal-care products online.",images:["/healthfield-hero-pharmacist.png"]},
   manifest: "/manifest.webmanifest",
   icons: {
@@ -26,7 +35,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className={geist.variable}><script type="application/ld+json" dangerouslySetInnerHTML={{__html:JSON.stringify({"@context":"https://schema.org","@type":"Pharmacy",name:"Healthfield Pharmacy",url:process.env.APP_URL??"https://healthfieldpharmacy.co.ke",logo:`${(process.env.APP_URL??"https://healthfieldpharmacy.co.ke").replace(/\/$/,"")}/healthfield-logo-clean.png`}).replace(/</g,"\\u003c")}}/>{children}</body>
+      <body className={geist.variable}><script type="application/ld+json" dangerouslySetInnerHTML={{__html:JSON.stringify({"@context":"https://schema.org","@type":"Pharmacy",name:"Healthfield Pharmacy",url:process.env.APP_URL??"https://healthfieldpharmacy.co.ke",logo:`${(process.env.APP_URL??"https://healthfieldpharmacy.co.ke").replace(/\/$/,"")}/healthfield-logo-clean.png`,areaServed:["Juja","Nairobi","Kahawa West","Thika Road"],medicalSpecialty:"Pharmacy"}).replace(/</g,"\\u003c")}}/>{children}</body>
     </html>
   );
 }

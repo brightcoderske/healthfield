@@ -7,8 +7,8 @@ import { CART_COOKIE, parseCart, parseWishlist, WISHLIST_COOKIE } from "@/lib/sh
 export const dynamic = "force-dynamic";
 
 type HomeData = {
-  catalog: Array<{ id:number; name:string; price:number; imageUrl:string|null; packSize:string|null; brand:string|null; categoryId:number; shortDescription:string|null; conditionIds:number[]; rating:number|null; reviewCount:number; discountPrice:number|null }>;
-  contact: { phone:string; whatsapp:string; supportEmail:string; address:string; openingHours:string; deliveryMessage:string; facebookUrl:string; instagramUrl:string; xUrl:string; tiktokUrl:string };
+  catalog: Array<{ id:number; name:string; price:number; imageUrl:string|null; packSize:string|null; brand:string|null; categoryId:number; shortDescription:string|null; description:string|null; conditionIds:number[]; rating:number|null; reviewCount:number; discountPrice:number|null }>;
+  contact: { phone:string; whatsapp:string; supportEmail:string; address:string; openingHours:string; deliveryMessage:string; facebookUrl:string; instagramUrl:string; xUrl:string; tiktokUrl:string;licenceTitle:string;licenceNumber:string;licenceImageUrl:string|null };
   categories: Array<{id:number;name:string;slug:string}>;
   conditions: Array<{id:number;name:string;slug:string}>;
 };
@@ -25,12 +25,13 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ o
     brand: string | null;
     categoryId: number;
     shortDescription: string | null;
+    description: string | null;
     conditionIds: number[];
     rating: number | null;
     reviewCount: number;
     discountPrice: number | null;
   }> = [];
-  let contact = { phone: "", whatsapp: "", supportEmail:"", address:"", openingHours:"", deliveryMessage: "Fast Delivery Across Kenya", facebookUrl: "", instagramUrl: "", xUrl: "", tiktokUrl: "" };
+  let contact = { phone: "", whatsapp: "", supportEmail:"", address:"", openingHours:"", deliveryMessage: "Fast Delivery Across Kenya", facebookUrl: "", instagramUrl: "", xUrl: "", tiktokUrl: "",licenceTitle:"",licenceNumber:"",licenceImageUrl:null as string|null };
   let categoryRows: Array<{ id: number; name: string; slug: string }> = [];
   let conditionRows: Array<{ id: number; name: string; slug: string }> = [];
   if (data) {

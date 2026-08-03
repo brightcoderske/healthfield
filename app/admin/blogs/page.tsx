@@ -1,0 +1,1 @@
+import{backendJson}from"@/lib/backend-api";import{BlogManager}from"./blog-manager";export default async function Page(){const{posts}=await backendJson<{posts:any[]}>("/v1/views/admin/blogs");return <BlogManager initial={posts}/>}

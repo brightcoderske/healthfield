@@ -1,0 +1,2 @@
+.licence-admin-preview{padding:12px;border:1px solid #ded4e1;border-radius:10px;background:#f8f4f9;display:flex;align-items:center;gap:14px}.licence-admin-preview img{width:220px;max-height:150px;object-fit:contain;background:white}.licence-admin-preview button{padding:9px 12px;border:0;border-radius:7px;color:white;background:#a72e58}
+@media(max-width:700px){.licence-admin-preview{align-items:flex-start;flex-direction:column}.licence-admin-preview img{width:100%}}

@@ -33,5 +33,5 @@ export default async function AdminOrderPage({ params }: { params: Promise<{ id:
     if (error instanceof BackendError && error.status === 404) notFound();
     throw error;
   }
-  return <OrderStatusManager order={{ ...data.order, id }} items={data.items ?? []} stores={data.stores ?? []} fulfilments={data.fulfilments ?? []} stock={data.stock ?? []} />;
+  return <><a style={{position:"fixed",zIndex:20,right:24,top:18,padding:"10px 14px",borderRadius:8,color:"white",background:"#1d4d83",fontSize:11,fontWeight:800}} href={`/admin/receipts/orders/${id}`} target="_blank">Print colour receipt</a><OrderStatusManager order={{ ...data.order, id }} items={data.items ?? []} stores={data.stores ?? []} fulfilments={data.fulfilments ?? []} stock={data.stock ?? []} /></>;
 }
