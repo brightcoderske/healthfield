@@ -2,7 +2,7 @@ import { createHash, randomInt, randomUUID, timingSafeEqual } from "node:crypto"
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import bcrypt, { hash } from "bcryptjs";
-import { and, desc, eq, gte, inArray, isNull, ne, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, orderItemFulfilments, orderItems, orders,
@@ -16,6 +16,8 @@ import { json, publicImageUrl, safeFilename } from "./http";
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
 const twoFactorResendWindowMs = 45 * 60_000;
+const twoFactorValidityMs = 10 * 60_000;
+const twoFactorMaximumAttempts = 10;
 const orderStatuses = ["NEW", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"] as const;
 
 function storefrontOrigin() {
@@ -29,19 +31,20 @@ const secureHashEqual = (left: string, right: string) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 const teamRedirect = (user: { role: string; forcePasswordChange: boolean }) => user.forcePasswordChange ? "/change-password" : user.role === "STAFF" ? "/staff" : "/admin";
+const exposeDevelopmentTwoFactorCode = () => process.env.NODE_ENV !== "production" && process.env.AUTH_DEV_EXPOSE_2FA_CODE === "true" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(process.env.APP_URL || "");
 
 async function createEmailTwoFactorChallenge(user: { id: number; email: string; firstName: string }) {
   const rawChallenge = randomUUID() + randomUUID();
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   const now = Date.now();
   const db = getDb();
-  await db.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, user.id));
+  await db.delete(twoFactorChallenges).where(and(eq(twoFactorChallenges.userId, user.id), or(isNotNull(twoFactorChallenges.usedAt), lt(twoFactorChallenges.expiresAtMs, now))));
   await db.insert(twoFactorChallenges).values({
     userId: user.id,
     tokenHash: tokenHash(rawChallenge),
     codeHash: twoFactorCodeHash(rawChallenge, code),
-    expiresAt: new Date(now + 10 * 60_000),
-    expiresAtMs: now + 10 * 60_000,
+    expiresAt: new Date(now + twoFactorValidityMs),
+    expiresAtMs: now + twoFactorValidityMs,
     lastSentAtMs: now,
   });
   try {
@@ -58,7 +61,7 @@ async function createEmailTwoFactorChallenge(user: { id: number; email: string; 
   }
   const [name, domain] = user.email.split("@");
   const maskedEmail = `${name.slice(0, 2)}${"*".repeat(Math.max(2, name.length - 2))}@${domain}`;
-  return { challengeToken: rawChallenge, maskedEmail };
+  return { challengeToken: rawChallenge, maskedEmail, ...(exposeDevelopmentTwoFactorCode() ? { developmentCode: code } : {}) };
 }
 async function sendVerificationEmail(user: { id: number; email: string; firstName: string }) {
   const raw = randomUUID() + randomUUID();
@@ -114,17 +117,18 @@ export async function handleAuth(request: Request, action: string) {
     if (!parsed.success) return json({ error: "Enter the 6-digit code sent to your email." }, { status: 400 });
     const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, tokenHash(parsed.data.challengeToken))).limit(1);
     if (!challenge || challenge.usedAt) return json({ error: "This login request is no longer valid. Return to login." }, { status: 401 });
-    if (challenge.attemptCount >= 5) return json({ error: "Too many incorrect attempts. Select Send another code below." }, { status: 401 });
-    if (!challenge.expiresAtMs || challenge.expiresAtMs < Date.now()) return json({ error: "This code has expired. Select Send another code below." }, { status: 401 });
+    if (challenge.attemptCount >= twoFactorMaximumAttempts) return json({ error: "Too many incorrect attempts. Select Send another code below." }, { status: 401 });
+    if (!challenge.lastSentAtMs || Date.now() - challenge.lastSentAtMs > twoFactorValidityMs) return json({ error: "This code has expired. Select Send another code below." }, { status: 401 });
     const expected = twoFactorCodeHash(parsed.data.challengeToken, parsed.data.code);
     if (!secureHashEqual(challenge.codeHash, expected)) {
       await db.update(twoFactorChallenges).set({ attemptCount: challenge.attemptCount + 1 }).where(eq(twoFactorChallenges.id, challenge.id));
-      return json({ error: challenge.attemptCount >= 4 ? "Too many incorrect attempts. Select Send another code below." : "That security code is incorrect." }, { status: 401 });
+      return json({ error: challenge.attemptCount >= twoFactorMaximumAttempts - 1 ? "Too many incorrect attempts. Select Send another code below." : `That security code is incorrect. ${twoFactorMaximumAttempts - challenge.attemptCount - 1} attempts remain.` }, { status: 401 });
     }
     const [user] = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
     if (!user || !user.isActive || !team.includes(user.role as typeof team[number])) return json({ error: "This login request is no longer valid." }, { status: 401 });
     const [claimed] = await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.id, challenge.id), isNull(twoFactorChallenges.usedAt)));
     if (claimed.affectedRows !== 1) return json({ error: "This security code has already been used." }, { status: 401 });
+    await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.userId, challenge.userId), isNull(twoFactorChallenges.usedAt)));
     await db.update(users).set({ twoFactorEnabled: true, lastLoginAt: new Date() }).where(eq(users.id, user.id));
     const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
     return json({ token: await createSessionToken(session), session, role: user.role, redirectTo: teamRedirect(user) });
@@ -147,8 +151,8 @@ export async function handleAuth(request: Request, action: string) {
       return json({ error: "The new code could not be sent. Please try again shortly." }, { status: 503 });
     }
     const now = Date.now();
-    await db.update(twoFactorChallenges).set({ codeHash: twoFactorCodeHash(parsed.data.challengeToken, code), attemptCount: 0, resendCount: challenge.resendCount + 1, expiresAt: new Date(now + 10 * 60_000), expiresAtMs: now + 10 * 60_000, lastSentAtMs: now, createdAt: new Date() }).where(eq(twoFactorChallenges.id, challenge.id));
-    return json({ ok: true, message: "A new security code has been sent." });
+    await db.update(twoFactorChallenges).set({ codeHash: twoFactorCodeHash(parsed.data.challengeToken, code), attemptCount: 0, resendCount: challenge.resendCount + 1, expiresAt: new Date(now + twoFactorValidityMs), expiresAtMs: now + twoFactorValidityMs, lastSentAtMs: now, createdAt: new Date() }).where(eq(twoFactorChallenges.id, challenge.id));
+    return json({ ok: true, message: "A new security code has been sent.", ...(exposeDevelopmentTwoFactorCode() ? { developmentCode: code } : {}) });
   }
   if (action === "forgot-password" && request.method === "POST") {
     const parsed = z.object({ email: z.string().trim().toLowerCase().email() }).safeParse(await body(request));

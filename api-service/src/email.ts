@@ -33,7 +33,9 @@ export async function sendEmail(input: EmailInput) {
   const config = configuration(channel);
   if (!config) { console.error(`[email:${channel}] SMTP is not configured.`); return { sent: false, reason: "not-configured" } as const; }
   try {
-    await config.transport.sendMail({ from: config.from, to: Array.isArray(input.to) ? input.to.join(",") : input.to, subject: input.subject, text: input.message, html: input.html || messageHtml(input.subject, input.message, input.action) });
+    const delivery = await config.transport.sendMail({ from: config.from, to: Array.isArray(input.to) ? input.to.join(",") : input.to, subject: input.subject, text: input.message, html: input.html || messageHtml(input.subject, input.message, input.action) });
+    if (!delivery.accepted?.length || delivery.rejected?.length) throw new Error(`SMTP rejected one or more recipients (${delivery.rejected?.length || 0} rejected).`);
+    console.info(`[email:${channel}] SMTP accepted message ${delivery.messageId || "without-message-id"}.`);
     config.transport.close();
     return { sent: true } as const;
   } catch (error) {

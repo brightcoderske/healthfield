@@ -14,6 +14,7 @@ export function LoginForm() {
   const [maskedEmail, setMaskedEmail] = useState("");
   const [notice, setNotice] = useState("");
   const [securityCode, setSecurityCode] = useState("");
+  const [developmentCode, setDevelopmentCode] = useState("");
   const urlError = searchParams.get("error");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -36,6 +37,7 @@ export function LoginForm() {
       if (data.requiresTwoFactor) {
         setChallengeToken(data.challengeToken);
         setMaskedEmail(data.maskedEmail);
+        setDevelopmentCode(data.developmentCode || "");
         setLoading(false);
         return;
       }
@@ -66,7 +68,7 @@ export function LoginForm() {
     try {
       const response = await fetch("/api/auth/two-factor-resend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ challengeToken }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) setError(data.error ?? "A new code could not be sent."); else { setSecurityCode(""); setNotice("A new code was sent. It is valid for 10 minutes."); }
+      if (!response.ok) setError(data.error ?? "A new code could not be sent."); else { setSecurityCode(""); setDevelopmentCode(data.developmentCode || ""); setNotice("A new code was sent. It is valid for 10 minutes."); }
     } catch { setError("A new code could not be sent. Please try again."); }
     setLoading(false);
   }
@@ -79,13 +81,14 @@ export function LoginForm() {
         <h1>{challengeToken ? "Security verification" : "Log in"}</h1>
         {challengeToken ? <>
           <p className="two-factor-intro">For staff account protection, enter the one-time code sent to <strong>{maskedEmail}</strong>.</p>
+          {developmentCode && <div className="auth-notice" role="status">Local development code: <strong>{developmentCode}</strong></div>}
           <form onSubmit={verifyCode} className="two-factor-form">
             <label><span>6-digit security code</span><div><KeyRound /><input name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={securityCode} onChange={(event) => setSecurityCode(event.target.value.replace(/\D/g, "").slice(0, 6))} autoFocus required /></div></label>
             {error && <div className="auth-error" role="alert">{error}</div>}
             {notice && <div className="auth-notice" role="status">{notice}</div>}
             <button className="auth-submit" disabled={loading}>{loading ? "Verifying…" : "Verify and continue"}</button>
           </form>
-          <div className="two-factor-options"><button type="button" onClick={resendCode} disabled={loading}>Send another code</button><button type="button" onClick={() => { setChallengeToken(""); setMaskedEmail(""); setSecurityCode(""); setError(""); setNotice(""); }}><ArrowLeft /> Back to login</button></div>
+          <div className="two-factor-options"><button type="button" onClick={resendCode} disabled={loading}>Send another code</button><button type="button" onClick={() => { setChallengeToken(""); setMaskedEmail(""); setSecurityCode(""); setDevelopmentCode(""); setError(""); setNotice(""); }}><ArrowLeft /> Back to login</button></div>
         </> : <><form onSubmit={submit} method="post" action="/api/auth/login">
           <label><span>Email address</span><div><Mail /><input name="email" type="email" autoComplete="email" required /></div></label>
           <label><span>Password</span><div><LockKeyhole /><input name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" minLength={8} required /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff /> : <Eye />}</button></div></label>
