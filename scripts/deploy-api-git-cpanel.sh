@@ -8,6 +8,8 @@ STORAGE_ROOT="/home/healthfi/healthfield-storage"
 RELEASE_STAGE="${APPLICATION_ROOT}/.release.next"
 RELEASE_PREVIOUS="${APPLICATION_ROOT}/.release.previous"
 DEPENDENCY_MARKER="${APPLICATION_ROOT}/.pnpm-lock.sha256"
+WORKER_LIST_FILE="$(mktemp "${APPLICATION_ROOT}/.deploy-workers.XXXXXX")"
+trap 'rm -f "${WORKER_LIST_FILE}"' EXIT
 
 if [[ ! -f "${VIRTUAL_ENV}" ]]; then
   echo "Node.js virtual environment was not found: ${VIRTUAL_ENV}" >&2
@@ -56,21 +58,29 @@ find_api_workers() {
   done
 }
 
-mapfile -t API_WORKERS < <(find_api_workers)
+load_api_workers() {
+  API_WORKERS=()
+  find_api_workers > "${WORKER_LIST_FILE}"
+  while IFS= read -r process_id; do
+    if [[ -n "${process_id}" ]]; then API_WORKERS+=("${process_id}"); fi
+  done < "${WORKER_LIST_FILE}"
+}
+
+load_api_workers
 if [[ "${#API_WORKERS[@]}" -gt 0 ]]; then
   echo "Stopping lingering API workers after verifying their application directory: ${API_WORKERS[*]}"
   kill -TERM "${API_WORKERS[@]}" 2>/dev/null || true
   sleep 5
 fi
 
-mapfile -t API_WORKERS < <(find_api_workers)
+load_api_workers
 if [[ "${#API_WORKERS[@]}" -gt 0 ]]; then
   echo "Graceful stop timed out; force-stopping verified API workers: ${API_WORKERS[*]}"
   kill -KILL "${API_WORKERS[@]}" 2>/dev/null || true
   sleep 2
 fi
 
-mapfile -t API_WORKERS < <(find_api_workers)
+load_api_workers
 if [[ "${#API_WORKERS[@]}" -gt 0 ]]; then
   echo "API workers keep respawning: ${API_WORKERS[*]}" >&2
   echo "Stop health_field/api-service from cPanel before deploying, then try again." >&2
