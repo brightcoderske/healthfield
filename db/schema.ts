@@ -212,6 +212,7 @@ export const siteSettings = mysqlTable("site_settings", {
   licenceTitle: varchar("licence_title", { length: 190 }),
   licenceNumber: varchar("licence_number", { length: 120 }),
   licenceImageUrl: varchar("licence_image_url", { length: 500 }),
+  requireTeamTwoFactor: boolean("require_team_two_factor").default(false).notNull(),
   updatedBy: int("updated_by").references(() => users.id),
   ...timestamps,
 });

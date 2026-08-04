@@ -10,12 +10,14 @@ type SettingsValue = {
   bulkSmsApiUrl: string | null; bulkSmsApiKey: string | null; bulkSmsSenderId: string | null;
   facebookUrl:string|null; instagramUrl:string|null; xUrl:string|null; tiktokUrl:string|null;
   licenceTitle:string|null;licenceNumber:string|null;licenceImageUrl:string|null;
+  requireTeamTwoFactor:boolean;
 } | null;
 
 export function SettingsForm({ initial }: { initial: SettingsValue }) {
   const [message, setMessage] = useState("");
   const [licenceFile,setLicenceFile]=useState<File|null>(null);
   const [licencePreview,setLicencePreview]=useState(initial?.licenceImageUrl??"");
+  const [requireTeamTwoFactor,setRequireTeamTwoFactor]=useState(initial?.requireTeamTwoFactor??false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
@@ -23,7 +25,9 @@ export function SettingsForm({ initial }: { initial: SettingsValue }) {
     let licenceImageUrl=String(formData.get("licenceImageUrl")||"");
     if(licenceFile){const upload=new FormData();upload.set("image",licenceFile);const uploadResponse=await fetch("/api/products/image",{method:"POST",body:upload}),uploadData=await uploadResponse.json().catch(()=>({}));if(!uploadResponse.ok){setMessage(uploadData.error||"Licence image could not be uploaded.");return}licenceImageUrl=uploadData.imageUrl}
     formData.delete("licenceFile");
-    const payload = {...Object.fromEntries(formData),licenceImageUrl};
+    const requireTeamTwoFactor=formData.has("requireTeamTwoFactor");
+    formData.delete("requireTeamTwoFactor");
+    const payload = {...Object.fromEntries(formData),licenceImageUrl,requireTeamTwoFactor};
     const response = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await response.json();
     setMessage(response.ok ? "Settings saved." : data.error ?? "Unable to save settings.");
@@ -50,6 +54,7 @@ export function SettingsForm({ initial }: { initial: SettingsValue }) {
           <label className="full">Header delivery message<input name="deliveryMessage" defaultValue={initial?.deliveryMessage ?? "Fast Delivery Across Kenya"} required /></label>
           <label>Free-delivery threshold (KES)<input name="freeDeliveryThreshold" type="number" min="0" defaultValue={initial?.freeDeliveryThreshold ?? ""} /></label>
         </div></section>
+        <section className="security-settings"><h2>Admin and staff security</h2><p>Control whether every administrator and staff login must be confirmed with a code sent by email.</p><label className="security-toggle"><input name="requireTeamTwoFactor" type="checkbox" checked={requireTeamTwoFactor} onChange={(event)=>setRequireTeamTwoFactor(event.target.checked)}/><span><strong>Require email 2FA for administrators and staff</strong><small>{requireTeamTwoFactor ? "Active: team members must enter an emailed code after their password." : "Inactive: team members sign in with their password only."}</small></span></label><p className="security-warning">Keep this inactive until security emails are reliably arriving. Suspended and deleted accounts remain blocked either way.</p></section>
         <section><h2>Pharmacy licence</h2><p>Upload the licence here. It is displayed prominently above the website footer.</p><div><label>Licence title<input name="licenceTitle" defaultValue={initial?.licenceTitle??"Pharmacy Licence"} required/></label><label>Licence number<input name="licenceNumber" defaultValue={initial?.licenceNumber??""} required/></label><input type="hidden" name="licenceImageUrl" value={initial?.licenceImageUrl??""}/><label className="full">Licence image<input name="licenceFile" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event:ChangeEvent<HTMLInputElement>)=>{const file=event.target.files?.[0]||null;if(file&&file.size>2*1024*1024){event.target.value="";setMessage("Licence image must be 2 MB or smaller.");return}setLicenceFile(file);if(file)setLicencePreview(URL.createObjectURL(file))}}/><small>JPEG, PNG or WebP, maximum 2 MB.</small></label>{licencePreview&&<div className="licence-admin-preview full"><img src={licencePreview} alt="Licence preview"/><button type="button" onClick={()=>{setLicenceFile(null);setLicencePreview("")}}>Remove licence image</button></div>}</div></section>
         <section><h2>Bulk SMS API</h2><p>Healthfield sends JSON containing recipients, message and senderId to this provider.</p><div>
           <label className="full">SMS API URL<input name="bulkSmsApiUrl" type="url" defaultValue={initial?.bulkSmsApiUrl ?? ""} placeholder="https://provider.example/api/messages" /></label>

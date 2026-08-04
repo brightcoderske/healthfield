@@ -100,12 +100,15 @@ export async function handleAuth(request: Request, action: string) {
     if (user.role === "CUSTOMER" && !user.emailVerifiedAt) return json({ error: "Verify your email before signing in.", code: "EMAIL_NOT_VERIFIED" }, { status: 403 });
     const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
     if (team.includes(user.role as typeof team[number])) {
-      try {
-        const challenge = await createEmailTwoFactorChallenge(user);
-        return json({ requiresTwoFactor: true, ...challenge });
-      } catch (error) {
-        console.error("Two-factor email failed", error);
-        return json({ error: "Your secure login code could not be sent. Please try again shortly." }, { status: 503 });
+      const [settings] = await db.select({ requireTeamTwoFactor: siteSettings.requireTeamTwoFactor }).from(siteSettings).limit(1);
+      if (settings?.requireTeamTwoFactor) {
+        try {
+          const challenge = await createEmailTwoFactorChallenge(user);
+          return json({ requiresTwoFactor: true, ...challenge });
+        } catch (error) {
+          console.error("Two-factor email failed", error);
+          return json({ error: "Your secure login code could not be sent. Please try again shortly." }, { status: 503 });
+        }
       }
     }
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
@@ -575,7 +578,7 @@ export async function handleSettings(request: Request) {
     pharmacyName: z.string().trim().min(2).max(150), phone: z.string().trim().max(30), whatsapp: z.string().trim().max(30), supportEmail: z.string().trim().email().or(z.literal("")),
     address: z.string().trim().max(1000), openingHours: z.string().trim().max(255), deliveryMessage: z.string().trim().min(2).max(255), freeDeliveryThreshold: z.coerce.number().nonnegative().optional(),
     bulkSmsApiUrl: z.string().trim().url().or(z.literal("")), bulkSmsApiKey: z.string().trim().max(500), bulkSmsSenderId: z.string().trim().max(50),
-    facebookUrl: z.string().trim().url().or(z.literal("")), instagramUrl: z.string().trim().url().or(z.literal("")), xUrl: z.string().trim().url().or(z.literal("")), tiktokUrl: z.string().trim().url().or(z.literal("")), licenceTitle:z.string().trim().max(190),licenceNumber:z.string().trim().max(120),licenceImageUrl:z.string().trim().max(500),
+    facebookUrl: z.string().trim().url().or(z.literal("")), instagramUrl: z.string().trim().url().or(z.literal("")), xUrl: z.string().trim().url().or(z.literal("")), tiktokUrl: z.string().trim().url().or(z.literal("")), licenceTitle:z.string().trim().max(190),licenceNumber:z.string().trim().max(120),licenceImageUrl:z.string().trim().max(500), requireTeamTwoFactor: z.boolean(),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid settings." }, { status: 400 });
   const data = parsed.data;

@@ -1,0 +1,1 @@
+ALTER TABLE `site_settings` ADD `require_team_two_factor` boolean DEFAULT false NOT NULL;

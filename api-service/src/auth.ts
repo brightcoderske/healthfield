@@ -65,9 +65,8 @@ export async function requestSession(request: Request, allowUploadToken = false)
       audience: allowUploadToken ? ["healthfield-web", "healthfield-upload"] : "healthfield-web",
     });
     const session = payload as unknown as Session;
-    const [user] = await getDb().select({ role: users.role, isActive: users.isActive, twoFactorEnabled: users.twoFactorEnabled }).from(users).where(and(eq(users.id, session.userId), isNull(users.deletedAt))).limit(1);
+    const [user] = await getDb().select({ role: users.role, isActive: users.isActive }).from(users).where(and(eq(users.id, session.userId), isNull(users.deletedAt))).limit(1);
     if (!user || !user.isActive || user.role !== session.role) return null;
-    if (user.role !== "CUSTOMER" && !user.twoFactorEnabled) return null;
     return session;
   } catch {
     return null;

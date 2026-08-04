@@ -1,0 +1,98 @@
+Already up to date
+Done in 1.3s using pnpm v11.9.0
+▲ Next.js 16.2.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://0.0.0.0:3000
+- Environments: .env.local
+✓ Ready in 4.7s
+- Experiments (use with caution):
+  · cpus: 1
+  · staticGenerationMaxConcurrency: 1
+  · staticGenerationMinPagesPerWorker: 1000
+  · staticGenerationRetryCount: 1
+
+ GET /login 200 in 2.8s (next.js: 743ms, proxy.ts: 914ms, application-code: 1104ms)
+ GET /api/auth/me 401 in 1858ms (next.js: 1789ms, application-code: 70ms)
+ GET /login 200 in 535ms (next.js: 59ms, proxy.ts: 57ms, application-code: 419ms)
+ GET /login 200 in 325ms (next.js: 28ms, proxy.ts: 22ms, application-code: 276ms)
+ POST /api/auth/login 503 in 1001ms (next.js: 184ms, application-code: 817ms)
+  Reload env: .env.local
+✓ Compiled in 658ms
+ GET /login 200 in 634ms (next.js: 239ms, proxy.ts: 219ms, application-code: 176ms)
+ GET /login 200 in 176ms (next.js: 31ms, proxy.ts: 17ms, application-code: 129ms)
+ GET /login 200 in 146ms (next.js: 29ms, proxy.ts: 22ms, application-code: 95ms)
+ GET /login 200 in 337ms (next.js: 26ms, proxy.ts: 18ms, application-code: 292ms)
+ GET /login 200 in 578ms (next.js: 27ms, proxy.ts: 22ms, application-code: 530ms)
+ GET /login 200 in 1022ms (next.js: 41ms, proxy.ts: 37ms, application-code: 944ms)
+ GET /login 200 in 1020ms (next.js: 183ms, proxy.ts: 31ms, application-code: 807ms)
+ GET /login 200 in 755ms (next.js: 57ms, proxy.ts: 45ms, application-code: 653ms)
+ GET /login 200 in 755ms (next.js: 216ms, proxy.ts: 49ms, application-code: 491ms)
+ GET /login 200 in 1032ms (next.js: 333ms, proxy.ts: 51ms, application-code: 648ms)
+ GET /login 200 in 1027ms (next.js: 460ms, proxy.ts: 44ms, application-code: 523ms)
+ GET /login 200 in 492ms (next.js: 70ms, proxy.ts: 58ms, application-code: 365ms)
+ GET /login 200 in 481ms (next.js: 164ms, proxy.ts: 61ms, application-code: 256ms)
+ GET /login 200 in 814ms (next.js: 84ms, proxy.ts: 51ms, application-code: 679ms)
+ GET /login 200 in 777ms (next.js: 251ms, proxy.ts: 41ms, application-code: 486ms)
+ GET /login 200 in 808ms (next.js: 186ms, proxy.ts: 50ms, application-code: 572ms)
+ GET /login 200 in 835ms (next.js: 403ms, proxy.ts: 44ms, application-code: 388ms)
+ GET /login 200 in 332ms (next.js: 33ms, proxy.ts: 30ms, application-code: 269ms)
+ GET /login 200 in 321ms (next.js: 154ms, proxy.ts: 21ms, application-code: 147ms)
+ GET /login 200 in 751ms (next.js: 38ms, proxy.ts: 33ms, application-code: 680ms)
+ POST /api/auth/login 200 in 3.6s (next.js: 139ms, application-code: 3.5s)
+ POST /api/auth/two-factor 401 in 978ms (next.js: 879ms, application-code: 99ms)
+ GET /login 200 in 160ms (next.js: 12ms, proxy.ts: 7ms, application-code: 141ms)
+ POST /api/auth/login 200 in 3.0s (next.js: 10ms, application-code: 3.0s)
+✓ Compiled in 121ms
+ GET /login 200 in 320ms (next.js: 172ms, proxy.ts: 63ms, application-code: 85ms)
+  Reload env: .env.local
+✓ Compiled in 477ms
+ GET /login 200 in 7.8s (next.js: 315ms, proxy.ts: 94ms, application-code: 7.4s)
+ GET /login 200 in 324ms (next.js: 120ms, proxy.ts: 73ms, application-code: 131ms)
+ GET /login 200 in 193ms (next.js: 17ms, proxy.ts: 10ms, application-code: 165ms)
+ GET /login 200 in 232ms (next.js: 14ms, proxy.ts: 12ms, application-code: 206ms)
+ GET /login 200 in 732ms (next.js: 17ms, proxy.ts: 9ms, application-code: 706ms)
+ GET /login 200 in 621ms (next.js: 128ms, proxy.ts: 51ms, application-code: 442ms)
+ GET /login 200 in 622ms (next.js: 220ms, proxy.ts: 54ms, application-code: 348ms)
+ GET /login 200 in 630ms (next.js: 56ms, proxy.ts: 51ms, application-code: 524ms)
+ GET /login 200 in 715ms (next.js: 306ms, proxy.ts: 70ms, application-code: 339ms)
+ GET /login 200 in 713ms (next.js: 403ms, proxy.ts: 57ms, application-code: 254ms)
+ GET /login 200 in 716ms (next.js: 34ms, proxy.ts: 17ms, application-code: 666ms)
+ GET /login 200 in 619ms (next.js: 49ms, proxy.ts: 37ms, application-code: 533ms)
+ GET /login 200 in 619ms (next.js: 125ms, proxy.ts: 38ms, application-code: 456ms)
+ GET /login 200 in 619ms (next.js: 228ms, proxy.ts: 43ms, application-code: 349ms)
+ GET /login 200 in 723ms (next.js: 322ms, proxy.ts: 42ms, application-code: 358ms)
+ GET /login 200 in 705ms (next.js: 131ms, proxy.ts: 321ms, application-code: 254ms)
+ GET /login 200 in 167ms (next.js: 30ms, proxy.ts: 15ms, application-code: 122ms)
+ GET /login 200 in 362ms (next.js: 14ms, proxy.ts: 10ms, application-code: 338ms)
+ POST /api/auth/login 200 in 2.9s (next.js: 92ms, application-code: 2.8s)
+ POST /api/auth/two-factor 200 in 122ms (next.js: 63ms, application-code: 59ms)
+ GET /admin 200 in 754ms (next.js: 154ms, proxy.ts: 22ms, application-code: 578ms)
+ GET /admin 200 in 602ms (next.js: 25ms, proxy.ts: 38ms, application-code: 539ms)
+ POST /api/auth/logout 303 in 569ms (next.js: 547ms, application-code: 23ms)
+ GET / 200 in 553ms (next.js: 102ms, application-code: 452ms)
+✓ Compiled in 1075ms
+ GET / 200 in 775ms (next.js: 358ms, application-code: 417ms)
+ GET / 200 in 101ms (next.js: 17ms, application-code: 84ms)
+ GET / 200 in 563ms (next.js: 14ms, application-code: 550ms)
+ GET / 200 in 189ms (next.js: 9ms, application-code: 179ms)
+ GET / 200 in 273ms (next.js: 10ms, application-code: 262ms)
+✓ Compiled in 369ms
+ GET / 200 in 559ms (next.js: 347ms, application-code: 211ms)
+ GET / 200 in 391ms (next.js: 11ms, application-code: 380ms)
+ GET / 200 in 209ms (next.js: 14ms, application-code: 195ms)
+✓ Compiled in 312ms
+ GET / 200 in 330ms (next.js: 170ms, application-code: 160ms)
+ GET /products/1 200 in 2.9s (next.js: 2.3s, application-code: 610ms)
+✓ Compiled in 541ms
+ GET / 200 in 384ms (next.js: 199ms, application-code: 185ms)
+ GET /products/1 200 in 802ms (next.js: 276ms, application-code: 525ms)
+✓ Compiled in 254ms
+ GET / 200 in 590ms (next.js: 309ms, application-code: 281ms)
+ GET / 200 in 387ms (next.js: 13ms, application-code: 373ms)
+ GET / 200 in 244ms (next.js: 10ms, application-code: 234ms)
+ GET /login 200 in 415ms (next.js: 50ms, proxy.ts: 181ms, application-code: 184ms)
+ POST /api/auth/login 200 in 3.1s (next.js: 94ms, application-code: 3.0s)
+ POST /api/auth/two-factor 200 in 113ms (next.js: 70ms, application-code: 42ms)
+ GET /admin 200 in 521ms (next.js: 88ms, proxy.ts: 24ms, application-code: 409ms)
+ POST /api/auth/logout 303 in 94ms (next.js: 79ms, application-code: 15ms)
+ GET / 200 in 234ms (next.js: 10ms, application-code: 224ms)
