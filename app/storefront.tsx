@@ -129,6 +129,7 @@ export function Storefront({
       ? { icon: Upload, color: "green" }
       : categoryPresentation[index % categoryPresentation.length]),
   }));
+  const prescriptionCategory = displayedCategories.find((category) => `${category.name} ${category.slug}`.toLowerCase().includes("prescription"));
   useEffect(() => {
     const category = new URLSearchParams(window.location.search).get(
       "category",
@@ -267,19 +268,28 @@ export function Storefront({
           </a>
         </div>
         <nav className="desktop-store-nav">
-          <a className={!selectedCategory ? "active" : ""} href="/">
-            Home
-          </a>
+          <a className={!selectedCategory ? "active" : ""} href="/">Home</a>
           <a href="/prescriptions/upload">Upload prescription</a>
-          {displayedCategories.map((category) => (
-            <a
-              key={category.id}
-              className={selectedCategory === category.id ? "active" : ""}
-              href={`/?category=${category.slug}#products`}
-            >
-              {category.name}
-            </a>
-          ))}
+          <div className="desktop-nav-dropdown">
+            <button type="button">Shop by category <ChevronDown/></button>
+            <div className="desktop-nav-grid category-nav-grid">
+              {displayedCategories.map((category) => <a key={category.id} className={selectedCategory===category.id?"active":""} href={`/?category=${category.slug}#products`}>{category.name}</a>)}
+            </div>
+          </div>
+          <div className="desktop-nav-dropdown">
+            <button type="button">Shop by condition <ChevronDown/></button>
+            <div className="desktop-nav-grid condition-nav-grid">
+              {initialConditions.map((condition) => <a key={condition.id} className={selectedCondition===condition.id?"active":""} href={`/?condition=${condition.slug}#products`}>{condition.name}</a>)}
+              <a href="/conditions">View all conditions</a>
+            </div>
+          </div>
+          {prescriptionCategory&&<a href={`/?category=${prescriptionCategory.slug}#products`}>Prescription Medicines</a>}
+          <div className="desktop-nav-dropdown services-nav-dropdown">
+            <button type="button">Our services <ChevronDown/></button>
+            <div className="desktop-nav-grid services-nav-grid">
+              <a href="/contact">Pharmacist advice</a><a href="/prescriptions/upload">Prescription fulfilment</a><a href="/chat">Chat with our pharmacy</a><a href="/shipping-policy">Medicine delivery</a><a href="/account#orders">Track an order</a><a href="/conditions">Shop by health need</a>
+            </div>
+          </div>
           <a href="/?offers=1#products">Offers</a>
           <a href="/blog">Blogs</a>
         </nav>
@@ -418,7 +428,7 @@ export function Storefront({
         </div>
       </header>
 
-      <main className="approved-content">
+      <main className={`approved-content ${query.trim() ? "search-results-active" : ""}`}>
         {!query.trim() && <div className="desktop-hero-row">
           <aside>
             <h2>
@@ -468,6 +478,17 @@ export function Storefront({
             </div>
           </section>
         </div>}
+        {query.trim() && <aside className="desktop-search-categories">
+          <h2><Menu /> Shop by Category</h2>
+          {displayedCategories.map(({ name, icon: Icon, id }) => (
+            <button type="button" className={selectedCategory===id?"active":""} onClick={()=>{setSelectedCategory(selectedCategory===id?null:id);setVisibleCount(24)}} key={id}>
+              <Icon />
+              {name}
+              <span>â€º</span>
+            </button>
+          ))}
+          <button type="button" onClick={()=>{setSelectedCategory(null);setVisibleCount(24)}}>View All Categories â†’</button>
+        </aside>}
         <label className="approved-search">
           <Search />
           <input

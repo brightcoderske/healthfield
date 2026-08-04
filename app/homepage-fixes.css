@@ -25,13 +25,43 @@
 }
 
 .approved-product .discount-badge {
-  top: 5px !important;
-  left: 5px !important;
-  padding: 2px 5px !important;
-  border-radius: 9px !important;
-  box-shadow: 0 2px 6px #6c174933 !important;
-  font-size: 7px !important;
-  line-height: 1.2 !important;
+  top: 4px !important;
+  left: 4px !important;
+  padding: 1px 3px !important;
+  border-radius: 4px !important;
+  box-shadow: 0 1px 3px #6c17492b !important;
+  font-size: 5px !important;
+  line-height: 1.1 !important;
+}
+
+.product-card-prices { min-width:0;display:flex;align-items:baseline;gap:4px;white-space:nowrap; }
+.product-card-prices strong { font-size:12px;line-height:1;font-weight:850; }
+.product-card-prices del { color:#8a838c;font-size:7px;line-height:1; }
+
+.desktop-search-categories { display:none; }
+@media(min-width:821px) {
+  .desktop-store-nav { position:relative;gap:25px !important;overflow:visible; }
+  .desktop-nav-dropdown { position:relative;height:40px;display:flex;align-items:center; }
+  .desktop-nav-dropdown>button { height:40px;padding:0;border:0;color:inherit;background:transparent;display:flex;align-items:center;gap:4px;font:inherit;font-weight:650;cursor:pointer; }
+  .desktop-nav-dropdown>button svg { width:12px;transition:transform .16s ease; }
+  .desktop-nav-grid { visibility:hidden;opacity:0;pointer-events:none;position:absolute;z-index:60;top:calc(100% - 1px);left:50%;width:min(660px,calc(100vw - 44px));padding:13px;border:1px solid #e5dce8;border-radius:0 0 12px 12px;background:#fff;box-shadow:0 16px 35px #33123a24;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;transform:translate(-50%,8px);transition:opacity .16s ease,transform .16s ease,visibility .16s; }
+  .desktop-nav-dropdown:hover .desktop-nav-grid,.desktop-nav-dropdown:focus-within .desktop-nav-grid { visibility:visible;opacity:1;pointer-events:auto;transform:translate(-50%,0); }
+  .desktop-nav-dropdown:hover>button svg,.desktop-nav-dropdown:focus-within>button svg { transform:rotate(180deg); }
+  .desktop-nav-grid a { min-height:34px !important;height:auto !important;padding:7px 9px;border:0 !important;border-radius:7px;color:#4b444e;background:#faf7fb;display:flex;align-items:center;font-size:9px; }
+  .desktop-nav-grid a:hover,.desktop-nav-grid a.active { color:#792587;background:#f1e6f4; }
+  .condition-nav-grid { max-height:330px;overflow-y:auto;grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .services-nav-dropdown .desktop-nav-grid { left:auto;right:0;width:390px;grid-template-columns:repeat(2,minmax(0,1fr));transform:translate(0,8px); }
+  .services-nav-dropdown:hover .desktop-nav-grid,.services-nav-dropdown:focus-within .desktop-nav-grid { transform:translate(0,0); }
+  .approved-content.search-results-active { display:grid;grid-template-columns:245px minmax(0,1fr);gap:14px;align-items:start; }
+  .search-results-active .desktop-search-categories { grid-column:1;grid-row:1;display:block;padding:10px;border-radius:11px;background:#faf7fb; }
+  .search-results-active #products { grid-column:2;grid-row:1;margin-top:0;min-width:0; }
+  .desktop-search-categories h2 { min-height:40px;margin:0 -1px 6px;padding:0 12px;border-radius:9px 9px 0 0;color:#fff;background:linear-gradient(90deg,#782481,#e33176);display:flex;align-items:center;gap:9px;font-size:12px; }
+  .desktop-search-categories h2 svg { width:16px; }
+  .desktop-search-categories button { width:100%;min-height:34px;padding:0 8px;border:0;border-bottom:1px solid #eee9f0;color:inherit;background:transparent;display:grid;grid-template-columns:23px 1fr 10px;align-items:center;gap:5px;text-align:left;font-size:10px;font-weight:650;cursor:pointer; }
+  .desktop-search-categories button svg { width:15px;color:#bc2788; }
+  .desktop-search-categories button span { font-size:16px; }
+  .desktop-search-categories button.active { color:#792587;background:#f2e8f5; }
+  .desktop-search-categories button:last-child { min-height:35px;margin-top:7px;border:1px solid #eadfeb;border-radius:8px;color:#bd2784;background:#fff;display:block;text-align:center;font-weight:750; }
 }
 
 /* Recommendation sections are full-width retail grids, not product-detail columns. */
