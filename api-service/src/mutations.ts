@@ -15,6 +15,7 @@ import { json, publicImageUrl, safeFilename } from "./http";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
+const twoFactorResendWindowMs = 45 * 60_000;
 const orderStatuses = ["NEW", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"] as const;
 
 function storefrontOrigin() {
@@ -107,13 +108,13 @@ export async function handleAuth(request: Request, action: string) {
     const parsed = z.object({ challengeToken: z.string().min(60).max(100), code: z.string().trim().regex(/^\d{6}$/) }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Enter the 6-digit code sent to your email." }, { status: 400 });
     const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, tokenHash(parsed.data.challengeToken))).limit(1);
-    if (!challenge || challenge.usedAt || !challenge.expiresAtMs || challenge.expiresAtMs < Date.now() || challenge.attemptCount >= 5) {
-      return json({ error: "This login code has expired. Return to login and request a new one." }, { status: 401 });
-    }
+    if (!challenge || challenge.usedAt) return json({ error: "This login request is no longer valid. Return to login." }, { status: 401 });
+    if (challenge.attemptCount >= 5) return json({ error: "Too many incorrect attempts. Select Send another code below." }, { status: 401 });
+    if (!challenge.expiresAtMs || challenge.expiresAtMs < Date.now()) return json({ error: "This code has expired. Select Send another code below." }, { status: 401 });
     const expected = twoFactorCodeHash(parsed.data.challengeToken, parsed.data.code);
     if (!secureHashEqual(challenge.codeHash, expected)) {
       await db.update(twoFactorChallenges).set({ attemptCount: challenge.attemptCount + 1 }).where(eq(twoFactorChallenges.id, challenge.id));
-      return json({ error: challenge.attemptCount >= 4 ? "Too many incorrect attempts. Return to login for a new code." : "That security code is incorrect." }, { status: 401 });
+      return json({ error: challenge.attemptCount >= 4 ? "Too many incorrect attempts. Select Send another code below." : "That security code is incorrect." }, { status: 401 });
     }
     const [user] = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
     if (!user || !user.isActive || !team.includes(user.role as typeof team[number])) return json({ error: "This login request is no longer valid." }, { status: 401 });
@@ -128,7 +129,7 @@ export async function handleAuth(request: Request, action: string) {
     if (!parsed.success) return json({ error: "This login request is invalid." }, { status: 400 });
     const hash = tokenHash(parsed.data.challengeToken);
     const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, hash)).limit(1);
-    if (!challenge || challenge.usedAt || !challenge.expiresAtMs || challenge.expiresAtMs < Date.now() || challenge.resendCount >= 3) return json({ error: "Return to login to request a new security code." }, { status: 429 });
+    if (!challenge || challenge.usedAt || !challenge.lastSentAtMs || Date.now() - challenge.lastSentAtMs > twoFactorResendWindowMs || challenge.resendCount >= 3) return json({ error: "This secure login request has ended. Return to login to start again." }, { status: 429 });
     if (challenge.lastSentAtMs && Date.now() - challenge.lastSentAtMs < 60_000) return json({ error: "Please wait one minute before requesting another code." }, { status: 429 });
     const [user] = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
     if (!user || !user.isActive || !team.includes(user.role as typeof team[number])) return json({ error: "This login request is no longer valid." }, { status: 401 });
@@ -377,6 +378,7 @@ export async function handleProducts(request: Request, id?: number) {
     const parsed = productSchema.safeParse(await body(request));
     if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid product." }, { status: 400 });
     const values = parsed.data;
+    if (values.discountPrice !== null && values.discountPrice !== undefined && values.discountPrice >= values.price) return json({ error: "The selling price must be lower than the regular price to create a discount." }, { status: 400 });
     const suffix = Date.now().toString(36);
     const baseSlug = values.name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const created = await db.transaction(async (tx) => {
@@ -401,6 +403,7 @@ export async function handleProducts(request: Request, id?: number) {
   if (request.method === "PATCH") {
     const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(10000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), prescriptionRequired: z.boolean().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional() }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Invalid product update." }, { status: 400 });
+    if (parsed.data.price !== undefined && parsed.data.discountPrice !== null && parsed.data.discountPrice !== undefined && parsed.data.discountPrice >= parsed.data.price) return json({ error: "The selling price must be lower than the regular price to create a discount." }, { status: 400 });
     const { conditionIds, ...update } = parsed.data;
     const normalized = { ...update, imageUrl: parsed.data.imageUrl === undefined ? undefined : normalizeStoredImageUrl(parsed.data.imageUrl) };
     await db.transaction(async (tx) => {
@@ -611,19 +614,19 @@ export async function handleStores(request: Request, id?: number) {
   if ("response" in auth) return auth.response;
   const db = getDb();
   if (request.method === "GET" && !id) return json({ stores: await db.select().from(branches).orderBy(desc(branches.createdAt)) });
-  const schema = z.object({ name: z.string().trim().min(2).max(150), code: z.string().trim().min(2).max(30).transform((value) => value.toUpperCase()), phone: z.string().trim().min(7).max(30), email: z.string().trim().email().or(z.literal("")), address: z.string().trim().min(4) });
+  const schema = z.object({ name: z.string().trim().min(2).max(150), code: z.string().trim().min(2).max(30).transform((value) => value.toUpperCase()), phone: z.string().trim().min(7).max(30), email: z.string().trim().email().or(z.literal("")), address: z.string().trim().min(4), latitude:z.coerce.number().min(-90).max(90).nullable().optional(), longitude:z.coerce.number().min(-180).max(180).nullable().optional(), openingHours:z.record(z.string(),z.string()).nullable().optional(), deliveryAreas:z.array(z.string().trim().min(1).max(120)).max(100).optional() });
   if (request.method === "POST" && !id) {
     const parsed = schema.safeParse(await body(request));
     if (!parsed.success) return json({ error: parsed.error.issues[0]?.message || "Check the store details." }, { status: 400 });
     try {
-      const created = await db.transaction(async (tx) => { const [store] = await tx.insert(branches).values({ ...parsed.data, email: parsed.data.email || null, isActive: true }); const catalogue = await tx.select({ id: products.id }).from(products); if (catalogue.length) await tx.insert(branchInventory).values(catalogue.map((product) => ({ branchId: store.insertId, productId: product.id, quantityAvailable: 0, quantityReserved: 0, reorderLevel: 5, updatedBy: auth.session.userId }))); return store; });
+      const created = await db.transaction(async (tx) => { const [store] = await tx.insert(branches).values({ ...parsed.data, latitude:parsed.data.latitude?.toString()??null,longitude:parsed.data.longitude?.toString()??null,email: parsed.data.email || null, isActive: true }); const catalogue = await tx.select({ id: products.id }).from(products); if (catalogue.length) await tx.insert(branchInventory).values(catalogue.map((product) => ({ branchId: store.insertId, productId: product.id, quantityAvailable: 0, quantityReserved: 0, reorderLevel: 5, updatedBy: auth.session.userId }))); return store; });
       return json({ id: created.insertId }, { status: 201 });
     } catch { return json({ error: "That store code is already in use." }, { status: 409 }); }
   }
   if (request.method === "PATCH" && id) {
     const parsed = schema.partial().extend({ isActive: z.boolean().optional() }).safeParse(await body(request));
     if (!parsed.success) return json({ error: parsed.error.issues[0]?.message || "Check the store details." }, { status: 400 });
-    await db.update(branches).set({ ...parsed.data, email: parsed.data.email === "" ? null : parsed.data.email }).where(eq(branches.id, id));
+    await db.update(branches).set({ ...parsed.data, latitude:parsed.data.latitude===undefined?undefined:parsed.data.latitude?.toString()??null,longitude:parsed.data.longitude===undefined?undefined:parsed.data.longitude?.toString()??null,email: parsed.data.email === "" ? null : parsed.data.email }).where(eq(branches.id, id));
     return json({ ok: true });
   }
   return json({ error: "Method not allowed." }, { status: 405 });

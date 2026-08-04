@@ -11,6 +11,9 @@ import "./call-menu.css";
 import "./condition-matrix.css";
 import "./footer-licence.css";
 import "./two-factor.css";
+import "./homepage-fixes.css";
+import "./product-page-polish.css";
+import "./registration-notice.css";
 
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 
@@ -21,7 +24,7 @@ export const metadata: Metadata = {
     template: "%s | Healthfield Pharmacy",
   },
   description:"Healthfield Pharmacy serves Juja, Nairobi, Kahawa West and Thika Road with genuine medicines, pharmacist support, prescription fulfilment and wellness products.",
-  keywords:["pharmacy in Juja","pharmacy in Nairobi","pharmacy in Kahawa West","pharmacy Thika Road","pharmacy near me","chemist around me","pharmacist near me","online pharmacy Kenya","medicines Kenya"],
+  keywords:["pharmacy in Juja","pharmacy in Nairobi CBD","pharmacy in Nairobi","pharmacy in Thika","pharmacy in Kahawa West","pharmacy on Thika Road","pharmacy near me","chemist around me","pharmacist near me","online pharmacy Kenya","medicine delivery Kenya"],
   openGraph:{type:"website",siteName:"Healthfield Pharmacy",title:"Healthfield Pharmacy",description:"Shop medicines, skincare, wellness and personal-care products online.",images:["/healthfield-hero-pharmacist.png"]},
   manifest: "/manifest.webmanifest",
   icons: {

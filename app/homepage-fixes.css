@@ -1,0 +1,89 @@
+.store-utility-strip {
+  min-height: 22px;
+  padding: 3px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(10px, 4vw, 42px);
+  overflow: hidden;
+  color: #fff;
+  background: #176b42;
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.1;
+}
+.store-utility-strip span,.store-utility-strip a { display:flex;align-items:center;gap:4px;white-space:nowrap; }
+.store-utility-strip svg { width:12px;height:12px;flex:none; }
+@media(min-width:821px) {
+  .store-utility-strip { display:none; }
+}
+@media(max-width:600px) {
+  .store-utility-strip { justify-content:flex-start;gap:12px;font-size:7px; }
+  .store-utility-strip span:first-child { flex:1; }
+  .store-utility-strip span:last-child { max-width:48%;overflow:hidden;text-overflow:ellipsis; }
+  .store-utility-strip a { width:12px;overflow:hidden; }
+}
+
+.approved-product .discount-badge {
+  top: 5px !important;
+  left: 5px !important;
+  padding: 2px 5px !important;
+  border-radius: 9px !important;
+  box-shadow: 0 2px 6px #6c174933 !important;
+  font-size: 7px !important;
+  line-height: 1.2 !important;
+}
+
+/* Recommendation sections are full-width retail grids, not product-detail columns. */
+.product-detail > .recommendation-section {
+  display: block !important;
+  padding: 20px !important;
+}
+.recommendation-section > .recommendation-products {
+  width: 100% !important;
+  margin-top: 12px !important;
+  padding: 0 !important;
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, 205px) !important;
+  grid-template-rows: none !important;
+  grid-auto-flow: row !important;
+  gap: 10px !important;
+  justify-content: start !important;
+  overflow: visible !important;
+}
+.recommendation-section .approved-product {
+  width: 205px !important;
+  min-width: 205px !important;
+  height: 218px !important;
+  min-height: 218px !important;
+  padding: 0 !important;
+}
+.recommendation-section .approved-product-main > .approved-product-image {
+  width: 100% !important;
+  height: auto !important;
+  min-height: 0 !important;
+  flex: 1 1 auto !important;
+  padding: 5px !important;
+  display: block !important;
+}
+.recommendation-section .approved-product-main > .approved-product-info {
+  width: 100% !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 5px 5px 1px !important;
+  display: block !important;
+}
+
+@media(max-width:820px) {
+  .product-detail > .recommendation-section { padding:12px !important; }
+  .recommendation-section > .recommendation-products {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+  .recommendation-section .approved-product {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 204px !important;
+    min-height: 204px !important;
+  }
+}

@@ -1,0 +1,97 @@
+.compact-product-actions .quantity-stepper {
+  height: 38px !important;
+  padding: 3px;
+  gap: 3px;
+  border: 1px solid #d9cedd !important;
+  border-radius: 999px !important;
+  overflow: visible;
+  background: #faf7fb;
+}
+.compact-product-actions .quantity-stepper button {
+  width: 30px !important;
+  height: 30px !important;
+  border: 1px solid #e1d6e4 !important;
+  border-radius: 50% !important;
+  color: #70227b !important;
+  background: #fff !important;
+}
+.compact-product-actions .quantity-stepper input {
+  width: 34px !important;
+  height: 30px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  outline: 0;
+  text-align: center;
+  font-weight: 800;
+  appearance: textfield;
+}
+.compact-product-actions .quantity-stepper input::-webkit-inner-spin-button { appearance:none; }
+.compact-product-actions .primary-cart-action { height:38px !important;border-radius:10px !important;box-shadow:0 4px 12px #6f21762b; }
+.compact-product-actions .icon-product-action { width:38px !important;min-width:38px !important;height:38px !important;min-height:38px !important;border-radius:10px !important; }
+.compact-product-actions .share-product-action { border-color:transparent !important;background:transparent !important; }
+.compact-product-actions .share-product-action:hover { color:#70227b !important;background:#f4edf6 !important;border-color:transparent !important; }
+
+.product-detail { padding-bottom:24px !important; }
+.product-detail > section { margin-top:14px !important;margin-bottom:14px !important; }
+.product-detail > .product-primary { padding:20px !important;gap:24px !important; }
+.product-price-row { margin:12px 0;display:flex;align-items:center;gap:7px;flex-wrap:wrap; }
+.product-price-row > strong { font-size:24px;line-height:1; }
+.product-price-row > del { color:#8b838e;font-size:10px; }
+.product-price-row .availability-pill { margin:0 !important; }
+.detail-discount { padding:3px 6px;border-radius:999px;color:#fff;background:#d52e82;font-size:8px;font-weight:850; }
+.product-detail-image { min-height:315px !important; }
+.product-detail-image img { max-height:295px !important; }
+.product-information { padding:17px !important; }
+.product-information > h2 { margin-bottom:10px !important;font-size:18px; }
+.product-information > div { gap:9px !important; }
+.product-information article { padding:10px !important; }
+.product-description-empty { margin:0 !important;padding:5px 0;color:#77717c !important;font-size:9px !important; }
+
+.product-detail > .product-reviews {
+  display: block !important;
+  padding:16px !important;
+}
+.product-reviews > header h2 { margin:0;font-size:18px; }
+.product-reviews > header p { margin:3px 0 10px;color:#77717c;font-size:9px; }
+.product-reviews .review-grid { grid-template-columns:minmax(260px,340px) 1fr;gap:12px; }
+.compact-review-form { padding:10px 12px;border-radius:10px;background:#faf7fb;gap:5px !important; }
+.compact-review-form h3 { margin:0;font-size:12px; }
+.compact-review-form .review-stars button { font-size:23px;line-height:1; }
+.compact-review-form > button { width:max-content;min-height:32px !important;padding:0 12px;border-radius:7px; }
+.compact-review-form > p { margin:3px 0 0;font-size:9px; }
+.product-reviews .review-list { display:flex !important;gap:7px !important;overflow-x:auto; }
+.product-reviews .review-list article { min-width:190px;max-width:250px;padding:8px !important; }
+.recommendation-section { padding:16px !important; }
+.recommendation-section h2 { font-size:17px !important; }
+
+@media(max-width:700px) {
+  .product-detail { padding:8px 8px 18px !important; }
+  .product-page-header { height:52px;margin:0 !important;padding:4px 2px !important;gap:6px !important;border-bottom:1px solid #e7e0e9; }
+  .product-page-header img { width:104px !important;height:auto !important; }
+  .product-page-header > a:first-child { margin-right:auto !important; }
+  .product-page-header > a:not(:first-child) { min-height:34px;padding:0 8px;border-radius:8px;background:#fff;font-size:0 !important;box-shadow:0 1px 5px #33113b12; }
+  .product-page-header > a:not(:first-child) svg { width:17px; }
+  .product-page-header > a:nth-child(2)::after { content:"Products";font-size:9px; }
+  .product-page-header > a:nth-child(3)::after { content:"Cart";font-size:9px; }
+  .product-detail > .product-primary { padding:10px !important;gap:10px !important; }
+  .product-detail-image { min-height:165px !important; }
+  .product-detail-image img { max-height:155px !important; }
+  .product-detail-copy h1 { margin:4px 0 !important;font-size:21px !important; }
+  .product-detail-copy > p { margin:4px 0 !important;font-size:10px; }
+  .product-price-row { margin:6px 0;gap:5px; }
+  .product-price-row > strong { font-size:19px; }
+  .product-price-row .availability-pill { padding:4px 7px !important; }
+  .contact-pharmacy { margin-top:7px !important;font-size:9px; }
+  .compact-product-actions { flex-wrap:wrap !important; }
+  .compact-product-actions > form:first-child { width:100%; }
+  .compact-product-actions .primary-cart-action { flex:1; }
+  .compact-product-actions .view-cart-action,.compact-product-actions .wishlist-product-action { border:1px solid #ddd3e0 !important;background:#fff !important; }
+  .product-reviews .review-grid { grid-template-columns:1fr; }
+  .review-list:empty { display:none; }
+  .product-detail > .product-reviews { padding:10px !important; }
+  .product-reviews > header p { margin-bottom:6px !important; }
+  .compact-review-form { padding:7px 9px !important; }
+  .product-detail > .product-reviews,.product-information,.product-detail > .recommendation-section { margin-top:7px !important;margin-bottom:7px !important; }
+  .recommendation-section header p { display:none; }
+}

@@ -1,4 +1,4 @@
-import { ArrowLeft, Heart, Package, ShieldCheck, ShoppingCart, Star } from "lucide-react";
+import { ArrowLeft, Package, ShieldCheck, ShoppingCart, Star } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { headers } from "next/headers";
@@ -8,6 +8,9 @@ import { ProductActions } from "./product-actions";
 import { RichText } from "../rich-text";
 import Image from "next/image";
 import { ProductReviewForm } from "@/app/product-review-form";
+import { ProductCard } from "@/app/product-card";
+import { PublicFooter, type PublicContact } from "@/app/public-footer";
+import { getSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +48,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   return {
     title: product.name,
     description,
+    alternates: { canonical: `/products/${product.id}` },
     openGraph: { title: product.name, description, type: "website", images: [{ url: previewImage, alt: product.name }] },
     twitter: { card: "summary_large_image", title: product.name, description, images: [previewImage] },
   };
@@ -54,46 +58,36 @@ function ProductRail({ title, subtitle, items }: { title: string; subtitle: stri
   if (!items.length) return null;
   return <section className="recommendation-section">
     <header><div><h2>{title}</h2><p>{subtitle}</p></div><Link href="/#products">View more</Link></header>
-    <div className="approved-products recommendation-products">{items.map((item) => <article className="approved-product" key={item.id}>
-      <Link className="approved-product-main" href={`/products/${item.id}`}>
-        <div className="approved-product-image">{item.imageUrl ? <img src={item.imageUrl} alt={item.name} /> : <div className="product-image-missing"><Package /><small>Image pending</small></div>}</div>
-        <div className="approved-product-info"><h3>{item.name}</h3>{item.packSize && <small>{item.packSize}</small>}</div>
-      </Link>
-      <form action="/api/wishlist" method="post" className="product-wishlist-form">
-        <input type="hidden" name="productId" value={item.id} /><input type="hidden" name="return" value={`/products/${item.id}`} />
-        <button className="approved-wishlist" aria-label={`Save ${item.name}`}><Heart /></button>
-      </form>
-      <div className="product-card-footer"><strong>KES {Number(item.discountPrice ?? item.price).toLocaleString()}</strong><form action="/api/cart" method="post">
-        <input type="hidden" name="productId" value={item.id} /><input type="hidden" name="action" value="add" /><input type="hidden" name="return" value={`/products/${item.id}`} />
-        <button className="approved-cart" aria-label={`Add ${item.name} to cart`}><ShoppingCart /></button>
-      </form></div>
-    </article>)}</div>
+    <div className="approved-products recommendation-products">{items.map((item) => <ProductCard key={item.id} product={item} returnTo={`/products/${item.id}`} />)}</div>
   </section>;
 }
 
 export default async function ProductPage({ params }: { params: Promise<{ id: string }> }) {
   const id = Number((await params).id);
-  const data = await dataFor(id);
+  const [data, home, session] = await Promise.all([dataFor(id), backendJson<{contact:PublicContact}>("/v1/views/home").catch(()=>null), getSession()]);
   if (!data) notFound();
   const { product, rating, reviewCount, reviews, related, similar, bought } = data;
   const price = Number(product.discountPrice ?? product.price);
+  const regularPrice = Number(product.price);
+  const discountPercent = product.discountPrice && regularPrice > Number(product.discountPrice) ? Math.round((1 - Number(product.discountPrice) / regularPrice) * 100) : 0;
   const productUrl = `${await currentOrigin()}/products/${product.id}`;
-  return <main className="product-detail">
+  const productSchema={"@context":"https://schema.org","@type":"Product",name:product.name,description:product.description||`Buy ${product.name} from Healthfield Pharmacy.`,image:product.imageUrl?[product.imageUrl]:undefined,brand:{"@type":"Brand",name:product.brand||"Healthfield Pharmacy"},offers:{"@type":"Offer",url:productUrl,priceCurrency:"KES",price,availability:"https://schema.org/InStock",itemCondition:"https://schema.org/NewCondition",seller:{"@type":"Organization",name:"Healthfield Pharmacy"}},...(rating&&reviewCount?{aggregateRating:{"@type":"AggregateRating",ratingValue:rating,reviewCount}}:{})};
+  return <><main className="product-detail"><script type="application/ld+json" dangerouslySetInnerHTML={{__html:JSON.stringify(productSchema).replace(/</g,"\\u003c")}}/>
     <header className="product-page-header"><Link href="/"><Image src="/healthfield-logo-clean.png" alt="Healthfield Pharmacy" width={205} height={72}/></Link><Link href="/#products"><ArrowLeft /> Back to products</Link><Link href="/cart"><ShoppingCart/> View cart</Link></header>
     <section className="product-primary">
       <div className="product-detail-image">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} /> : <div><Package /><span>Product image has not been added</span></div>}</div>
       <div className="product-detail-copy">
         <span>{product.brand || "Healthfield Pharmacy"}</span><h1>{product.name}</h1>
         {rating && <div className="detail-rating"><Star />{rating.toFixed(1)} <small>{reviewCount} verified {reviewCount === 1 ? "review" : "reviews"}</small></div>}
-        {product.packSize && <p>{product.packSize}</p>}<strong>KES {price.toLocaleString()}</strong>
-        <div className="availability-pill">Available to order</div>
+        {product.packSize && <p>{product.packSize}</p>}
+        <div className="product-price-row"><strong>KES {price.toLocaleString()}</strong>{discountPercent>0&&<><del>KES {regularPrice.toLocaleString()}</del><span className="detail-discount">Save {discountPercent}%</span></>}<span className="availability-pill">Available to order</span></div>
         {product.prescriptionRequired && <div className="prescription-note"><ShieldCheck />A valid prescription is required before this order can be processed. <Link href="/prescriptions/upload">Upload prescription</Link></div>}
         <ProductActions productId={product.id} productName={product.name} productUrl={productUrl} />
         <Link className="contact-pharmacy" href="/contact">Need advice? Contact our pharmacy team</Link>
       </div>
     </section>
     <section className="product-information"><h2>Product information</h2><div>
-      {product.description && <article><h3>Details</h3><RichText value={product.description}/></article>}
+      {product.description ? <article><h3>Description</h3><RichText value={product.description}/></article> : <p className="product-description-empty">Product description has not been added yet.</p>}
       {product.usageInformation && <article><h3>How to use</h3><p>{product.usageInformation}</p></article>}
       {product.warnings && <article><h3>Important warnings</h3><p>{product.warnings}</p></article>}
       {product.storageInformation && <article><h3>Storage</h3><p>{product.storageInformation}</p></article>}
@@ -102,5 +96,5 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
     <ProductRail title="Frequently bought together" subtitle="Products customers often purchase in the same order." items={bought} />
     <ProductRail title="People also like" subtitle="Popular choices for similar health needs." items={similar} />
     <ProductRail title="More from this category" subtitle="Keep exploring products selected for you." items={related} />
-  </main>;
+  </main>{home?.contact&&<PublicFooter contact={home.contact} signedIn={!!session}/>}</>;
 }

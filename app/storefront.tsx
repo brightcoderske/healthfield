@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ProductCard } from "./product-card";
 
 type CatalogProduct = {
   id: number;
@@ -43,19 +44,13 @@ type CatalogCategory = { id: number; name: string; slug: string };
 type HealthCondition = { id: number; name: string; slug: string };
 
 const categoryPresentation = [
-  { icon: Upload, color: "green" },
-  { icon: Pill, color: "purple" },
+  { icon: Pill, color: "green" },
+  { icon: Sparkles, color: "purple" },
   { icon: Sparkles, color: "pink" },
   { icon: Package, color: "blue" },
   { icon: HeartPulse, color: "pink" },
   { icon: Package, color: "green" },
 ];
-
-// Keep server and phone output identical; mobile ICU data can format KES differently.
-function formatKes(value: number) {
-  const rounded = Math.round(value).toString();
-  return `KES ${rounded.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
-}
 
 export function Storefront({
   initialProducts,
@@ -123,9 +118,16 @@ export function Storefront({
       offersOnly,
     ],
   );
-  const displayedCategories = initialCategories.map((category, index) => ({
+  const orderedCategories = [...initialCategories].sort((left, right) => {
+    const isPrescription = (category: CatalogCategory) =>
+      `${category.name} ${category.slug}`.toLowerCase().includes("prescription");
+    return Number(isPrescription(left)) - Number(isPrescription(right));
+  });
+  const displayedCategories = orderedCategories.map((category, index) => ({
     ...category,
-    ...categoryPresentation[index % categoryPresentation.length],
+    ...(`${category.name} ${category.slug}`.toLowerCase().includes("prescription")
+      ? { icon: Upload, color: "green" }
+      : categoryPresentation[index % categoryPresentation.length]),
   }));
   useEffect(() => {
     const category = new URLSearchParams(window.location.search).get(
@@ -181,20 +183,22 @@ export function Storefront({
 
   return (
     <div className="approved-app">
+      <div className="store-utility-strip">
+        <span><Truck /> {contact.deliveryMessage || "Delivery across Kenya"}</span>
+        <a href={contact.phone ? `tel:${contact.phone.replace(/\s/g, "")}` : contact.whatsapp ? `https://wa.me/${contact.whatsapp.replace(/\D/g, "")}` : "/contact"}><Phone /> {contact.phone || contact.whatsapp || "Call pharmacy"}</a>
+        {contact.licenceNumber && <span><ShieldCheck /> Pharmacy licence: {contact.licenceNumber}</span>}
+      </div>
       <div className="desktop-store">
         <div className="desktop-trust">
-          <span>
-            <Truck /> {contact.deliveryMessage}
-          </span>
           <span>
             <ShieldCheck /> 100% Genuine Products
           </span>
           <span>
             <Package /> Secure Payments
           </span>
-          {(contact.phone || contact.whatsapp) && (
+          {contact.licenceNumber && (
             <span>
-              <Phone /> Call/WhatsApp: {contact.whatsapp || contact.phone}
+              <ShieldCheck /> Pharmacy licence: {contact.licenceNumber}
             </span>
           )}
           <a
@@ -236,7 +240,7 @@ export function Storefront({
           <label>
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => { setQuery(event.target.value); setSelectedCategory(null); setSelectedCondition(null); setVisibleCount(24); }}
               placeholder="Search for medicines, health & wellness products..."
             />
             <button>
@@ -292,7 +296,7 @@ export function Storefront({
             <Search />
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => { setQuery(event.target.value); setSelectedCategory(null); setSelectedCondition(null); setVisibleCount(24); }}
               placeholder="Search products"
             />
           </label>
@@ -469,6 +473,8 @@ export function Storefront({
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
+              setSelectedCategory(null);
+              setSelectedCondition(null);
               setVisibleCount(24);
             }}
             placeholder="Search products, categories..."
@@ -476,7 +482,7 @@ export function Storefront({
           />
         </label>
 
-        <section className="approved-section" id="categories">
+        {!query.trim() && <section className="approved-section" id="categories">
           <div className="approved-title">
             <h1>Categories</h1>
             <button
@@ -521,7 +527,7 @@ export function Storefront({
               </button>
             ))}
           </div>
-        </section>
+        </section>}
 
         <section className="approved-section" id="products">
           <div className="approved-title">
@@ -560,88 +566,7 @@ export function Storefront({
             className={`approved-products ${selectedCategory || selectedCondition || query || offersOnly ? "catalogue-expanded" : ""}`}
             ref={productRail}
           >
-            {filtered.slice(0, visibleCount).map((product) => (
-              <article className="approved-product" key={product.id}>
-                <a
-                  className="approved-product-main"
-                  href={`/products/${product.id}`}
-                  aria-label={`View ${product.name}`}
-                >
-                  <div className="approved-product-image">
-                    {product.discountPrice !== null &&
-                      product.price > product.discountPrice && (
-                        <span className="discount-badge">
-                          Save{" "}
-                          {Math.round(
-                            (1 - product.discountPrice / product.price) * 100,
-                          )}
-                          %
-                        </span>
-                      )}
-                    {product.imageUrl ? (
-                      <img src={product.imageUrl} alt={product.name} />
-                    ) : (
-                      <div className="product-image-missing">
-                        <Package />
-                        <small>Image pending</small>
-                      </div>
-                    )}
-                  </div>
-                  <div className="approved-product-info">
-                    <h3>{product.name}</h3>
-                    {product.rating && (
-                      <div
-                        className="approved-rating"
-                        aria-label={`${product.rating.toFixed(1)} from ${product.reviewCount} reviews`}
-                      >
-                        ★ {product.rating.toFixed(1)}{" "}
-                        <small>({product.reviewCount})</small>
-                      </div>
-                    )}
-                  </div>
-                </a>
-                <form
-                  action="/api/wishlist"
-                  method="post"
-                  className="product-wishlist-form"
-                >
-                  <input type="hidden" name="productId" value={product.id} />
-                  <input type="hidden" name="return" value="/#products" />
-                  <button
-                    type="submit"
-                    className={`approved-wishlist ${wishlist.includes(product.id) ? "active" : ""}`}
-                    aria-label={`Save ${product.name}`}
-                  >
-                    <Heart />
-                  </button>
-                </form>
-                <div className="product-card-footer">
-                  <strong>
-                    {formatKes(product.discountPrice ?? product.price)}
-                  </strong>
-                  <form
-                    action="/api/cart"
-                    method="post"
-                    onSubmit={(event) => addToCart(event, product.id)}
-                  >
-                    <input type="hidden" name="productId" value={product.id} />
-                    <input type="hidden" name="action" value="add" />
-                    <input type="hidden" name="return" value="/#products" />
-                    <button
-                      type="submit"
-                      className="approved-cart"
-                      aria-label={`Add ${product.name} to cart`}
-                    >
-                      {cart[product.id] ? (
-                        <b>{cart[product.id]}</b>
-                      ) : (
-                        <ShoppingCart />
-                      )}
-                    </button>
-                  </form>
-                </div>
-              </article>
-            ))}
+            {filtered.slice(0, visibleCount).map((product) => <ProductCard key={product.id} product={product} wishlistActive={wishlist.includes(product.id)} cartQuantity={cart[product.id]} returnTo="/#products" onAddToCart={addToCart} />)}
           </div>
           {visibleCount < filtered.length && (
             <button
@@ -842,6 +767,7 @@ export function Storefront({
           <a href="/about">About Healthfield</a>
           <a href="/faq">Frequently asked questions</a>
           <a href="/contact">Contact us</a>
+          <a href="/pharmacy/juja">Pharmacy service areas</a>
           <a href="/shipping-policy">Shipping & delivery</a>
           <a href="/returns-policy">Returns & refunds</a>
         </nav>

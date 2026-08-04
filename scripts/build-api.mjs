@@ -5,7 +5,9 @@ import { build } from "esbuild";
 const root = resolve(import.meta.dirname, "..");
 const service = resolve(root, "api-service");
 const output = resolve(process.env.HEALTHFIELD_API_OUTPUT || resolve(service, "dist"));
+const drizzleOutput = resolve(process.env.HEALTHFIELD_API_DRIZZLE_OUTPUT || resolve(service, "drizzle"));
 if (relative(service, output).startsWith("..")) throw new Error("HEALTHFIELD_API_OUTPUT must be inside api-service.");
+if (relative(service, drizzleOutput).startsWith("..")) throw new Error("HEALTHFIELD_API_DRIZZLE_OUTPUT must be inside api-service.");
 
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
@@ -23,6 +25,6 @@ await build({
   legalComments: "none",
 });
 
-rmSync(resolve(service, "drizzle"), { recursive: true, force: true });
-cpSync(resolve(root, "drizzle"), resolve(service, "drizzle"), { recursive: true });
+rmSync(drizzleOutput, { recursive: true, force: true });
+cpSync(resolve(root, "drizzle"), drizzleOutput, { recursive: true });
 console.log(`Healthfield API bundle created: ${output}`);

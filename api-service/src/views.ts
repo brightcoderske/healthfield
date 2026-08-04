@@ -98,6 +98,10 @@ async function requireAdmin(request: Request) {
 export async function handleView(request: Request, path: string) {
   const url = new URL(request.url);
   if (path === "home") return json(await home(), { headers: { "Cache-Control": "public, max-age=30" } });
+  if (path === "locations") {
+    const stores = await getDb().select({ id:branches.id,name:branches.name,code:branches.code,phone:branches.phone,email:branches.email,address:branches.address,latitude:branches.latitude,longitude:branches.longitude,openingHours:branches.openingHours,deliveryAreas:branches.deliveryAreas,updatedAt:branches.updatedAt }).from(branches).where(eq(branches.isActive,true)).orderBy(asc(branches.name));
+    return json({ stores }, { headers: { "Cache-Control": "public, max-age=300" } });
+  }
   if (path === "conditions") {
     const rows = await getDb().select().from(healthConditions).where(eq(healthConditions.isActive, true)).orderBy(asc(healthConditions.displayOrder), asc(healthConditions.name));
     return json({ conditions: rows }, { headers: { "Cache-Control": "public, max-age=300" } });
@@ -153,7 +157,7 @@ export async function handleView(request: Request, path: string) {
     return json({ products: productRows }, { headers: { "Cache-Control": "public, max-age=300" } });
   }
   if (path === "merchant") {
-    const rows = await getDb().select({ id:products.id,sku:products.sku,name:products.name,description:products.description,shortDescription:products.shortDescription,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice,brand:products.brand,barcode:products.barcode,packSize:products.packSize,category:categories.name,rating:sql<string|null>`avg(case when ${productReviews.isApproved}=true then ${productReviews.rating} end)`,reviewCount:sql<number>`count(case when ${productReviews.isApproved}=true then 1 end)` }).from(products).innerJoin(categories,eq(categories.id,products.categoryId)).leftJoin(productReviews,eq(productReviews.productId,products.id)).where(eq(products.isActive,true)).groupBy(products.id,categories.name);
+    const rows = await getDb().select({ id:products.id,sku:products.sku,name:products.name,description:products.description,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice,brand:products.brand,barcode:products.barcode,packSize:products.packSize,category:categories.name,prescriptionRequired:products.prescriptionRequired,rating:sql<string|null>`avg(case when ${productReviews.isApproved}=true then ${productReviews.rating} end)`,reviewCount:sql<number>`count(case when ${productReviews.isApproved}=true then 1 end)` }).from(products).innerJoin(categories,eq(categories.id,products.categoryId)).leftJoin(productReviews,eq(productReviews.productId,products.id)).where(eq(products.isActive,true)).groupBy(products.id,categories.name);
     return json({ products: rows.map((row)=>({...row,imageUrl:publicImageUrl(row.imageUrl)})) }, { headers: { "Cache-Control": "public, max-age=300" } });
   }
 

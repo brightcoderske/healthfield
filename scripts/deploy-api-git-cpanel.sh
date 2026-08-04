@@ -5,21 +5,19 @@ REPOSITORY_ROOT="/home/healthfi/health_field"
 APPLICATION_ROOT="${REPOSITORY_ROOT}/api-service"
 VIRTUAL_ENV="/home/healthfi/nodevenv/health_field/api-service/24/bin/activate"
 STORAGE_ROOT="/home/healthfi/healthfield-storage"
-RELEASE_ARCHIVE="${REPOSITORY_ROOT}/deploy/healthfield-api-production.tar.gz"
 RELEASE_STAGE="${APPLICATION_ROOT}/.release.next"
 RELEASE_PREVIOUS="${APPLICATION_ROOT}/.release.previous"
+DEPENDENCY_MARKER="${APPLICATION_ROOT}/.pnpm-lock.sha256"
 
 if [[ ! -f "${VIRTUAL_ENV}" ]]; then
   echo "Node.js virtual environment was not found: ${VIRTUAL_ENV}" >&2
   exit 1
 fi
-
 if [[ ! -f "${APPLICATION_ROOT}/.env" ]]; then
-  echo "Missing ${APPLICATION_ROOT}/.env. Create it in cPanel before deploying." >&2
+  echo "Missing ${APPLICATION_ROOT}/.env. The server-managed environment file must remain in place." >&2
   exit 1
 fi
 
-# cPanel creates this activation script for the configured Node.js 24 app.
 set +u
 source "${VIRTUAL_ENV}"
 set -u
@@ -27,88 +25,107 @@ cd "${REPOSITORY_ROOT}"
 
 export NODE_ENV=production
 export CI=true
-# Dependencies are normally installed through cPanel only when package dependencies change.
-# The production API bundle itself is built locally and delivered as a release archive.
 export PNPM_CONFIG_NETWORK_CONCURRENCY=1
 export PNPM_CONFIG_CHILD_CONCURRENCY=1
 export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy
-# pnpm 11 uses this worker pool while importing packages from its store.
 export PNPM_MAX_WORKERS=1
-# esbuild is a Go binary; shared hosting exposes many CPUs but restricts threads.
 export GOMAXPROCS=1
+
+if command -v pnpm >/dev/null 2>&1; then
+  PNPM_COMMAND=(pnpm)
+elif command -v corepack >/dev/null 2>&1; then
+  PNPM_COMMAND=(corepack pnpm)
+else
+  PNPM_COMMAND=(npx --yes pnpm@11.9.0)
+fi
 
 DEPLOY_COMMIT="$(git rev-parse HEAD)"
 DEPLOY_SHORT_COMMIT="$(git rev-parse --short HEAD)"
 DEPLOY_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-echo "Deploying repository commit ${DEPLOY_SHORT_COMMIT} at ${DEPLOY_STARTED_AT}..."
+echo "Building repository commit ${DEPLOY_SHORT_COMMIT} on cPanel at ${DEPLOY_STARTED_AT}..."
 
-# Set INSTALL_DEPS=1 only after changing runtime dependencies in package.json.
-if [[ "${INSTALL_DEPS:-0}" == "1" ]]; then
-  echo "Installing changed dependencies with cPanel-safe limits..."
-  if command -v corepack >/dev/null 2>&1; then
-    corepack pnpm install --frozen-lockfile --prod=false --network-concurrency=1 --child-concurrency=1
-  else
-    npx --yes pnpm@10.15.0 install --frozen-lockfile --prod=false --network-concurrency=1 --child-concurrency=1
-  fi
-else
-  echo "Using existing cPanel dependencies (set INSTALL_DEPS=1 only for dependency changes)."
+# Stop the application from cPanel before deploying. LiteSpeed sometimes leaves lsnode
+# workers alive afterward, so clean up only processes whose resolved working directory is
+# exactly this API root. Never match by a broad process name or affect the legacy app path.
+find_api_workers() {
+  for process_directory in /proc/[0-9]*; do
+    process_cwd="$(readlink "${process_directory}/cwd" 2>/dev/null || true)"
+    if [[ "${process_cwd}" == "${APPLICATION_ROOT}" ]]; then
+      printf '%s\n' "${process_directory##*/}"
+    fi
+  done
+}
+
+mapfile -t API_WORKERS < <(find_api_workers)
+if [[ "${#API_WORKERS[@]}" -gt 0 ]]; then
+  echo "Stopping lingering API workers after verifying their application directory: ${API_WORKERS[*]}"
+  kill -TERM "${API_WORKERS[@]}" 2>/dev/null || true
+  sleep 5
 fi
 
-if [[ ! -f "${RELEASE_ARCHIVE}" ]]; then
-  echo "Missing locally built API release archive: ${RELEASE_ARCHIVE}" >&2
+mapfile -t API_WORKERS < <(find_api_workers)
+if [[ "${#API_WORKERS[@]}" -gt 0 ]]; then
+  echo "Graceful stop timed out; force-stopping verified API workers: ${API_WORKERS[*]}"
+  kill -KILL "${API_WORKERS[@]}" 2>/dev/null || true
+  sleep 2
+fi
+
+mapfile -t API_WORKERS < <(find_api_workers)
+if [[ "${#API_WORKERS[@]}" -gt 0 ]]; then
+  echo "API workers keep respawning: ${API_WORKERS[*]}" >&2
+  echo "Stop health_field/api-service from cPanel before deploying, then try again." >&2
   exit 1
 fi
+echo "No health_field/api-service workers remain; continuing with the source build."
 
-# Extract the Git-delivered local build away from the live runtime directories.
+LOCK_FINGERPRINT="$(sha256sum pnpm-lock.yaml | awk '{print $1}')"
+INSTALLED_FINGERPRINT="$(cat "${DEPENDENCY_MARKER}" 2>/dev/null || true)"
+if [[ -d node_modules && -z "${INSTALLED_FINGERPRINT}" && "${INSTALL_DEPS:-0}" != "1" ]]; then
+  echo "Bootstrapping the dependency marker from the existing cPanel installation."
+  printf '%s\n' "${LOCK_FINGERPRINT}" > "${DEPENDENCY_MARKER}"
+  INSTALLED_FINGERPRINT="${LOCK_FINGERPRINT}"
+fi
+if [[ "${INSTALL_DEPS:-0}" == "1" || ! -d node_modules || "${LOCK_FINGERPRINT}" != "${INSTALLED_FINGERPRINT}" ]]; then
+  echo "Dependency lockfile changed or dependencies are missing; installing with cPanel-safe limits..."
+  "${PNPM_COMMAND[@]}" install --frozen-lockfile --prod=false --network-concurrency=1 --child-concurrency=1
+  printf '%s\n' "${LOCK_FINGERPRINT}" > "${DEPENDENCY_MARKER}"
+else
+  echo "Dependency lockfile unchanged; using existing cPanel dependencies."
+fi
+
 rm -rf "${RELEASE_STAGE}"
 mkdir -p "${RELEASE_STAGE}"
-tar -xzf "${RELEASE_ARCHIVE}" -C "${RELEASE_STAGE}"
+
+echo "Type-checking the API..."
+"${PNPM_COMMAND[@]}" run check:api
+
+echo "Building the API into an isolated release stage..."
+HEALTHFIELD_API_OUTPUT="${RELEASE_STAGE}/dist" \
+HEALTHFIELD_API_DRIZZLE_OUTPUT="${RELEASE_STAGE}/drizzle" \
+node scripts/build-api.mjs
 test -s "${RELEASE_STAGE}/dist/server.mjs"
 test -d "${RELEASE_STAGE}/drizzle"
-test -s "${RELEASE_STAGE}/.release-manifest.json"
-ARCHIVE_SOURCE_COMMIT="$(node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!/^[a-f0-9]{40}$/.test(p.sourceCommit||""))process.exit(1);process.stdout.write(p.sourceCommit)' "${RELEASE_STAGE}/.release-manifest.json")"
-if ! git merge-base --is-ancestor "${ARCHIVE_SOURCE_COMMIT}" HEAD; then
-  echo "API release archive was built from an unrelated commit: ${ARCHIVE_SOURCE_COMMIT}" >&2
-  exit 1
-fi
-if ! git diff --quiet "${ARCHIVE_SOURCE_COMMIT}" HEAD -- api-service/src db/schema.ts drizzle package.json pnpm-lock.yaml scripts/build-api.mjs; then
-  echo "API source, schema, migrations, or dependencies changed after the release archive was built." >&2
-  echo "Run pnpm release:api locally, commit deploy/healthfield-api-production.tar.gz, then deploy again." >&2
-  exit 1
-fi
-echo "Local API release archive extracted and verified."
 
-# Fail before replacing the live runtime if the database cannot migrate.
+echo "Applying database migrations before the runtime swap..."
 node scripts/migrate-api.mjs
 
-# Retain exactly one rollback release. The app root and private .env are never renamed.
 rm -rf "${RELEASE_PREVIOUS}"
 mkdir -p "${RELEASE_PREVIOUS}"
 if [[ -d "${APPLICATION_ROOT}/dist" ]]; then mv "${APPLICATION_ROOT}/dist" "${RELEASE_PREVIOUS}/dist"; fi
 if [[ -d "${APPLICATION_ROOT}/drizzle" ]]; then mv "${APPLICATION_ROOT}/drizzle" "${RELEASE_PREVIOUS}/drizzle"; fi
 mv "${RELEASE_STAGE}/dist" "${APPLICATION_ROOT}/dist"
 mv "${RELEASE_STAGE}/drizzle" "${APPLICATION_ROOT}/drizzle"
-# The archive also carries package metadata for manual recovery; it is not part of the live app root.
 rm -rf "${RELEASE_STAGE}"
 
-# This stamp is written only after type-check, bundle, and migrations succeed.
-# /health returns it after the Node application has actually reloaded.
 DEPLOY_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-printf '{"commit":"%s","builtAt":"%s"}\n' "${DEPLOY_COMMIT}" "${DEPLOY_COMPLETED_AT}" > "${APPLICATION_ROOT}/.healthfield-build.json"
+printf '{"commit":"%s","builtAt":"%s","buildMode":"cpanel-source"}\n' "${DEPLOY_COMMIT}" "${DEPLOY_COMPLETED_AT}" > "${APPLICATION_ROOT}/.healthfield-build.json"
 
-# Uploaded images and prescriptions live outside Git, builds, and application restarts.
-mkdir -p "${STORAGE_ROOT}/uploads/products" "${STORAGE_ROOT}/prescriptions"
+mkdir -p "${STORAGE_ROOT}/uploads/products" "${STORAGE_ROOT}/prescriptions" "${APPLICATION_ROOT}/tmp"
 chmod 750 "${STORAGE_ROOT}" "${STORAGE_ROOT}/uploads" "${STORAGE_ROOT}/uploads/products" "${STORAGE_ROOT}/prescriptions"
-
-# Preserve images from the former in-repository location during the first deployment.
 if [[ -d "${REPOSITORY_ROOT}/public/uploads/products" ]]; then
   cp -an "${REPOSITORY_ROOT}/public/uploads/products/." "${STORAGE_ROOT}/uploads/products/"
 fi
 
-mkdir -p "${APPLICATION_ROOT}/tmp"
-touch "${APPLICATION_ROOT}/tmp/restart.txt"
-
-echo "Local release extraction, migrations, and runtime swap completed: ${DEPLOY_SHORT_COMMIT} at ${DEPLOY_COMPLETED_AT}"
-echo "Rollback release retained at ${RELEASE_PREVIOUS} (replaced on the next successful deployment)."
-echo "Restart signal written to ${APPLICATION_ROOT}/tmp/restart.txt."
-echo "After cPanel reloads the Node application, verify: curl -fsS https://api.healthfieldpharmacy.co.ke/health"
+echo "Source build, migrations, and runtime swap completed: ${DEPLOY_SHORT_COMMIT} at ${DEPLOY_COMPLETED_AT}"
+echo "Rollback release retained at ${RELEASE_PREVIOUS}."
+echo "Start health_field/api-service from cPanel, then verify the worker start time and live feature routes."

@@ -37,7 +37,8 @@ export async function backendJson<T>(path: string, init: RequestInit = {}): Prom
 }
 
 export async function proxyToBackend(request: Request, path: string) {
-  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  const encodedToken = request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1);
+  const token = encodedToken ? decodeURIComponent(encodedToken) : undefined;
   const headers = new Headers();
   const contentType = request.headers.get("content-type");
   if (contentType) headers.set("Content-Type", contentType);
