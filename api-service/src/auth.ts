@@ -23,6 +23,16 @@ export async function createSessionToken(session: Session) {
     .sign(secret());
 }
 
+export async function createUploadToken(session: Session) {
+  return new SignJWT(session)
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .setIssuer("healthfield-pharmacy")
+    .setAudience("healthfield-upload")
+    .sign(secret());
+}
+
 export async function createPasswordResetToken(user: { userId: number; email: string }) {
   return new SignJWT({ userId: user.userId, email: user.email, purpose: "password-reset" })
     .setProtectedHeader({ alg: "HS256" })

@@ -270,6 +270,7 @@ export function Storefront({
           <a className={!selectedCategory ? "active" : ""} href="/">
             Home
           </a>
+          <a href="/prescriptions/upload">Upload prescription</a>
           {displayedCategories.map((category) => (
             <a
               key={category.id}
@@ -418,7 +419,7 @@ export function Storefront({
       </header>
 
       <main className="approved-content">
-        <div className="desktop-hero-row">
+        {!query.trim() && <div className="desktop-hero-row">
           <aside>
             <h2>
               <Menu /> Shop by Category
@@ -466,7 +467,7 @@ export function Storefront({
               </span>
             </div>
           </section>
-        </div>
+        </div>}
         <label className="approved-search">
           <Search />
           <input

@@ -1,4 +1,3 @@
-import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -13,50 +12,21 @@ export type Session = {
   forcePasswordChange: boolean;
 };
 
-function getSecret() {
-  const value = process.env.AUTH_SECRET;
-  if (!value || value.length < 32) {
-    throw new Error("AUTH_SECRET must contain at least 32 characters.");
-  }
-  return new TextEncoder().encode(value);
-}
-
-export async function createSessionToken(session: Session) {
-  return new SignJWT(session)
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime("8h")
-    .setIssuer("healthfield-pharmacy")
-    .setAudience("healthfield-web")
-    .sign(getSecret());
-}
-
-export async function createUploadToken(session: Session) {
-  return new SignJWT(session)
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime("5m")
-    .setIssuer("healthfield-pharmacy")
-    .setAudience("healthfield-upload")
-    .sign(getSecret());
-}
-
-export async function verifySessionToken(token: string) {
-  const { payload } = await jwtVerify(token, getSecret(), {
-    issuer: "healthfield-pharmacy",
-    audience: "healthfield-web",
-  });
-  return payload as unknown as Session;
-}
-
 export async function getSession() {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
-  try {
-    return await verifySessionToken(token);
-  } catch {
-    return null;
-  }
+  const apiBase = (process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+  const apiKey = process.env.API_SHARED_SECRET;
+  if (!apiBase || !apiKey) throw new Error("Authentication service is not configured.");
+  const response = await fetch(`${apiBase}/v1/auth/session`, {
+    headers: { Authorization: `Bearer ${token}`, "X-Healthfield-Key": apiKey },
+    cache: "no-store",
+  });
+  if (response.status === 401 || response.status === 403) return null;
+  if (!response.ok) throw new Error(`Authentication service returned ${response.status}.`);
+  const data = await response.json() as { session?: Session };
+  if (!data.session) throw new Error("Authentication service returned an invalid response.");
+  return data.session;
 }
 
 export async function requireRole(allowed: Role[]) {

@@ -8,7 +8,7 @@ import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, orderItemFulfilments, orderItems, orders,
   activityLogs, blogPosts, categories, emailVerificationTokens, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, twoFactorChallenges, users,
 } from "../../db/schema";
-import { createPasswordResetToken, createSessionToken, requireSession, requestSession, verifyPasswordResetToken } from "./auth";
+import { createPasswordResetToken, createSessionToken, createUploadToken, requireSession, requestSession, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
 import { orderEmailHtml, sendBulkEmail, sendEmail } from "./email";
 import { json, publicImageUrl, safeFilename } from "./http";
@@ -82,6 +82,11 @@ export async function handleAuth(request: Request, action: string) {
     const auth = await requireSession(request);
     if ("response" in auth) return auth.response;
     return json({ authenticated: true, session: auth.session }, { headers: { "Cache-Control": "private, no-store" } });
+  }
+  if (action === "upload-token" && request.method === "POST") {
+    const auth = await requireSession(request);
+    if ("response" in auth) return auth.response;
+    return json({ token: await createUploadToken(auth.session), expiresIn: 300 }, { headers: { "Cache-Control": "private, no-store" } });
   }
   if (action === "login" && request.method === "POST") {
     const parsed = z.object({ email: z.string().trim().toLowerCase().email(), password: z.string().min(8).max(128) }).safeParse(await body(request));
@@ -293,18 +298,19 @@ export async function handleOrders(request: Request, id?: number) {
   const subtotal = lines.reduce((sum, line) => sum + line.total, 0);
   const deliveryFee = parsed.data.fulfilmentMethod === "DELIVERY" ? 250 : 0;
   const session = await requestSession(request);
+  const customerSession = session?.role === "CUSTOMER" ? session : null;
   const requiresPrescription = catalog.some(product => product.prescriptionRequired);
   let customerPrescription: typeof prescriptions.$inferSelect | undefined;
   if (requiresPrescription) {
-    if (!session || session.role !== "CUSTOMER") return json({ error: "Sign in and upload a prescription before ordering prescription medicine.", code: "PRESCRIPTION_REQUIRED" }, { status: 409 });
-    [customerPrescription] = await db.select().from(prescriptions).where(and(eq(prescriptions.customerId, session.userId), isNull(prescriptions.orderId))).orderBy(desc(prescriptions.createdAt)).limit(1);
+    if (!customerSession) return json({ error: "Sign in and upload a prescription before ordering prescription medicine.", code: "PRESCRIPTION_REQUIRED" }, { status: 409 });
+    [customerPrescription] = await db.select().from(prescriptions).where(and(eq(prescriptions.customerId, customerSession.userId), isNull(prescriptions.orderId))).orderBy(desc(prescriptions.createdAt)).limit(1);
     if (!customerPrescription) return json({ error: "Upload a prescription before placing this order.", code: "PRESCRIPTION_REQUIRED" }, { status: 409 });
     if (customerPrescription.status === "DECLINED") return json({ error: "Your latest prescription was declined. Upload a new valid prescription.", code: "PRESCRIPTION_REQUIRED" }, { status: 409 });
   }
-  const orderEmail = session?.role === "CUSTOMER" ? session.email.trim().toLowerCase() : (parsed.data.email || "").trim().toLowerCase();
+  const orderEmail = customerSession ? customerSession.email.trim().toLowerCase() : (parsed.data.email || "").trim().toLowerCase();
   const orderNumber = `HF-${Date.now().toString().slice(-8)}`;
   const result = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: session?.role === "CUSTOMER" ? session.userId : null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: requiresPrescription ? "UNDER_REVIEW" : "NEW", prescriptionStatus: requiresPrescription ? customerPrescription!.status : "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
+    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: requiresPrescription ? "UNDER_REVIEW" : "NEW", prescriptionStatus: requiresPrescription ? customerPrescription!.status : "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
     await tx.insert(orderItems).values(lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })));
     if (customerPrescription) await tx.update(prescriptions).set({ orderId: created.insertId }).where(eq(prescriptions.id, customerPrescription.id));
     return created;

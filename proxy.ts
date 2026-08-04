@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { jwtVerify } from "jose";
 import { requestUrl } from "@/lib/request-url";
 
 const protectedAreas: Array<{ prefix: string; roles: string[] }> = [
@@ -27,14 +26,6 @@ export async function proxy(request: NextRequest) {
   }
 
   try {
-    const secret = new TextEncoder().encode(process.env.AUTH_SECRET);
-    const { payload } = await jwtVerify(token, secret, {
-      issuer: "healthfield-pharmacy",
-      audience: "healthfield-web",
-    });
-    if (!rule.roles.includes(String(payload.role))) {
-      return NextResponse.redirect(requestUrl(request,"/unauthorized"));
-    }
     const apiBase = (process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
     const apiKey = process.env.API_SHARED_SECRET;
     if (!apiBase || !apiKey) return new NextResponse("Authentication service is not configured.", { status: 503 });
@@ -53,6 +44,9 @@ export async function proxy(request: NextRequest) {
       return response;
     }
     if (!validation.ok) return new NextResponse("Authentication service is temporarily unavailable.", { status: 503, headers: { "Retry-After": "30" } });
+    const validated = await validation.json().catch(() => null) as { session?: { role?: string } } | null;
+    if (!validated?.session?.role) return new NextResponse("Authentication service returned an invalid response.", { status: 503 });
+    if (!rule.roles.includes(validated.session.role)) return NextResponse.redirect(requestUrl(request,"/unauthorized"));
     return NextResponse.next();
   } catch {
     const response = NextResponse.redirect(requestUrl(request,"/login"));
