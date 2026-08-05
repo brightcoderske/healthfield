@@ -27,11 +27,17 @@
 .approved-product .discount-badge {
   top: 4px !important;
   left: 4px !important;
-  padding: 1px 3px !important;
-  border-radius: 4px !important;
-  box-shadow: 0 1px 3px #6c17492b !important;
-  font-size: 5px !important;
-  line-height: 1.1 !important;
+  width: max-content !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 0 2px !important;
+  border-radius: 3px !important;
+  box-shadow: none !important;
+  font-size: 9px !important;
+  line-height: 1.15 !important;
+  white-space: nowrap !important;
+  display: inline-block !important;
 }
 
 .product-card-prices { min-width:0;display:flex;align-items:baseline;gap:4px;white-space:nowrap; }

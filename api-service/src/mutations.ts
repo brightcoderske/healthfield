@@ -113,7 +113,7 @@ export async function handleAuth(request: Request, action: string) {
     }
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
     if (user.role === "CUSTOMER") await db.update(orders).set({ customerId: user.id }).where(and(isNull(orders.customerId), eq(orders.email, user.email)));
-    return json({ token: await createSessionToken(session), session, role: user.role, redirectTo: user.forcePasswordChange ? "/change-password" : user.role === "CUSTOMER" ? "/#products" : user.role === "STAFF" ? "/staff" : "/admin" });
+    return json({ token: await createSessionToken(session), session, role: user.role, redirectTo: user.forcePasswordChange ? "/change-password" : user.role === "CUSTOMER" ? "/account" : user.role === "STAFF" ? "/staff" : "/admin" });
   }
   if (action === "two-factor" && request.method === "POST") {
     const parsed = z.object({ challengeToken: z.string().min(60).max(100), code: z.string().trim().regex(/^\d{6}$/) }).safeParse(await body(request));
@@ -492,10 +492,20 @@ export async function handleProductImage(request: Request) {
   const extension = types.get(image.type.toLowerCase());
   if (!extension) return json({ error: "Use JPEG, PNG, WebP, GIF, AVIF, BMP or TIFF." }, { status: 415 });
   if (image.size <= 0 || image.size > 2 * 1024 * 1024) return json({ error: "Product images must be 2 MB or smaller." }, { status: 413 });
+  const bytes = new Uint8Array(await image.arrayBuffer());
+  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.slice(start, end));
+  const validSignature = image.type === "image/jpeg" ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    : image.type === "image/png" ? ascii(1, 4) === "PNG"
+    : image.type === "image/webp" ? ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP"
+    : image.type === "image/gif" ? ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a"
+    : image.type === "image/avif" ? ascii(4, 8) === "ftyp" && ["avif", "avis"].includes(ascii(8, 12))
+    : image.type === "image/bmp" ? ascii(0, 2) === "BM"
+    : (ascii(0, 4) === "II*\0" || ascii(0, 4) === "MM\0*");
+  if (!validSignature) return json({ error: "The uploaded file does not match its declared image type." }, { status: 415 });
   const filename = `${randomUUID()}.${extension}`;
   const directory = path.join(storageRoot(), "uploads", "products");
   await mkdir(directory, { recursive: true });
-  await writeFile(path.join(directory, filename), Buffer.from(await image.arrayBuffer()), { flag: "wx" });
+  await writeFile(path.join(directory, filename), bytes, { flag: "wx" });
   return json({ imageUrl: publicImageUrl(`/uploads/products/${filename}`) }, { status: 201 });
 }
 

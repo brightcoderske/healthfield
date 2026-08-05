@@ -9,6 +9,16 @@ const protectedAreas: Array<{ prefix: string; roles: string[] }> = [
 ];
 
 export async function proxy(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+    const fetchSite = request.headers.get("sec-fetch-site");
+    const origin = request.headers.get("origin");
+    const publicHost = request.headers.get("x-forwarded-host") || request.headers.get("host");
+    const publicProtocol = request.headers.get("x-forwarded-proto") || request.nextUrl.protocol.replace(":", "");
+    const expectedOrigin = publicHost ? `${publicProtocol}://${publicHost}` : request.nextUrl.origin;
+    if (fetchSite === "cross-site" || (origin && origin !== expectedOrigin)) {
+      return NextResponse.json({ error: "Cross-site request blocked." }, { status: 403 });
+    }
+  }
   if (request.nextUrl.pathname === "/login" && (request.nextUrl.searchParams.has("password") || request.nextUrl.searchParams.has("email"))) {
     const clean = request.nextUrl.clone();
     clean.searchParams.delete("email");
@@ -48,13 +58,12 @@ export async function proxy(request: NextRequest) {
     if (!validated?.session?.role) return new NextResponse("Authentication service returned an invalid response.", { status: 503 });
     if (!rule.roles.includes(validated.session.role)) return NextResponse.redirect(requestUrl(request,"/unauthorized"));
     return NextResponse.next();
-  } catch {
-    const response = NextResponse.redirect(requestUrl(request,"/login"));
-    response.cookies.delete("healthfield_session");
-    return response;
+  } catch (error) {
+    console.error("[auth.proxy] session validation failed", { name: error instanceof Error ? error.name : undefined });
+    return new NextResponse("Authentication service is temporarily unavailable.", { status: 503, headers: { "Retry-After": "30" } });
   }
 }
 
 export const config = {
-  matcher: ["/login", "/admin/:path*", "/staff/:path*", "/account/:path*", "/change-password"],
+  matcher: ["/api/:path*", "/login", "/admin/:path*", "/staff/:path*", "/account/:path*", "/change-password"],
 };

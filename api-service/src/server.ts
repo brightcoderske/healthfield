@@ -47,11 +47,11 @@ function securityHeaders(response: Response, origin: string | null) {
 }
 
 const attempts = new Map<string, { count: number; reset: number }>();
-function rateLimited(ip: string) {
-  const now = Date.now(), current = attempts.get(ip);
-  if (!current || current.reset < now) { attempts.set(ip, { count: 1, reset: now + 15 * 60_000 }); return false; }
+function rateLimited(key: string, maximum: number) {
+  const now = Date.now(), current = attempts.get(key);
+  if (!current || current.reset < now) { attempts.set(key, { count: 1, reset: now + 15 * 60_000 }); return false; }
   current.count += 1;
-  return current.count > 30;
+  return current.count > maximum;
 }
 
 async function responseOf(value: Promise<Response | undefined>) {
@@ -74,7 +74,12 @@ async function route(request: Request, ip: string): Promise<Response> {
   const suppliedKey = request.headers.get("x-healthfield-key") || "";
   const directUpload = request.method === "POST" && (url.pathname === "/v1/products/image" || url.pathname === "/v1/prescriptions") && Boolean(origin);
   if (!directUpload && (!expectedKey || !safeEqual(suppliedKey, expectedKey))) return json({ error: "API access denied." }, { status: 401 });
-  if (url.pathname.startsWith("/v1/auth/") && url.pathname !== "/v1/auth/session" && rateLimited(ip)) return json({ error: "Too many attempts. Try again later." }, { status: 429, headers: { "Retry-After": "900" } });
+  const trustedClientIp = request.headers.get("x-healthfield-client-ip")?.slice(0, 64) || ip;
+  if (url.pathname.startsWith("/v1/auth/") && url.pathname !== "/v1/auth/session") {
+    const action = url.pathname.slice("/v1/auth/".length);
+    const maximum = action === "login" ? 10 : action === "two-factor" ? 20 : 30;
+    if (rateLimited(`${trustedClientIp}:${action}`, maximum)) return json({ error: "Too many attempts. Try again later." }, { status: 429, headers: { "Retry-After": "900" } });
+  }
 
   if (url.pathname.startsWith("/v1/views/") && request.method === "GET") return responseOf(handleView(request, url.pathname.slice(10)));
   const authMatch = url.pathname.match(/^\/v1\/auth\/(login|register|forgot-password|reset-password|change-password|verify-email|resend-verification|two-factor|two-factor-resend|session|upload-token)$/);
