@@ -1,0 +1,5 @@
+Already up to date
+Done in 1s using pnpm v11.9.0
+$ node scripts/build-api.mjs && node --env-file=.env.local api-service/dist/server.mjs
+Healthfield API bundle created: C:\websites\healthfield\api-service\dist
+Healthfield API listening on 3001

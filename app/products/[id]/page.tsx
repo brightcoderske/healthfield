@@ -1,7 +1,7 @@
 import { ArrowLeft, Package, ShieldCheck, ShoppingCart, Star } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { BackendError, backendJson } from "@/lib/backend-api";
 import { ProductActions } from "./product-actions";
@@ -11,6 +11,7 @@ import { ProductReviewForm } from "@/app/product-review-form";
 import { ProductCard } from "@/app/product-card";
 import { PublicFooter, type PublicContact } from "@/app/public-footer";
 import { getSession } from "@/lib/auth";
+import { CART_COOKIE, parseCart } from "@/lib/shopping-state";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,8 @@ function ProductRail({ title, subtitle, items }: { title: string; subtitle: stri
 
 export default async function ProductPage({ params }: { params: Promise<{ id: string }> }) {
   const id = Number((await params).id);
+  const cart = parseCart((await cookies()).get(CART_COOKIE)?.value);
+  const cartCount = Object.values(cart).reduce<number>((total, quantity) => total + Number(quantity), 0);
   const [data, home, session] = await Promise.all([dataFor(id), backendJson<{contact:PublicContact}>("/v1/views/home").catch(()=>null), getSession()]);
   if (!data) notFound();
   const { product, rating, reviewCount, reviews, related, similar, bought } = data;
@@ -73,7 +76,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   const productUrl = `${await currentOrigin()}/products/${product.id}`;
   const productSchema={"@context":"https://schema.org","@type":"Product",name:product.name,description:product.description||`Buy ${product.name} from Healthfield Pharmacy.`,image:product.imageUrl?[product.imageUrl]:undefined,brand:{"@type":"Brand",name:product.brand||"Healthfield Pharmacy"},offers:{"@type":"Offer",url:productUrl,priceCurrency:"KES",price,availability:"https://schema.org/InStock",itemCondition:"https://schema.org/NewCondition",seller:{"@type":"Organization",name:"Healthfield Pharmacy"}},...(rating&&reviewCount?{aggregateRating:{"@type":"AggregateRating",ratingValue:rating,reviewCount}}:{})};
   return <><main className="product-detail"><script type="application/ld+json" dangerouslySetInnerHTML={{__html:JSON.stringify(productSchema).replace(/</g,"\\u003c")}}/>
-    <header className="product-page-header"><Link className="product-header-back" href="/#products"><ArrowLeft /><span>Back to products</span></Link><Link className="product-header-logo" href="/"><Image src="/healthfield-logo-clean.png" alt="Healthfield Pharmacy" width={205} height={72}/></Link><Link className="product-header-cart" href="/cart"><ShoppingCart/><span>View cart</span></Link></header>
+    <header className="product-page-header"><Link className="product-header-back" href="/#products"><ArrowLeft /><span>Back to products</span></Link><Link className="product-header-logo" href="/"><Image src="/healthfield-logo-clean.png" alt="Healthfield Pharmacy" width={205} height={72}/></Link><Link className="product-header-cart" href="/cart"><ShoppingCart/>{cartCount > 0 && <b aria-label={`${cartCount} items in cart`}>{cartCount > 99 ? "99+" : cartCount}</b>}<span>View cart</span></Link></header>
     <section className="product-primary">
       <div className="product-detail-image">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} /> : <div><Package /><span>Product image has not been added</span></div>}</div>
       <div className="product-detail-copy">
