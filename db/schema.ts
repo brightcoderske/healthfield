@@ -36,7 +36,7 @@ export const users = mysqlTable("users", {
   marketingConsent: boolean("marketing_consent").default(false).notNull(),
   marketingConsentAt: timestamp("marketing_consent_at"),
   emailVerifiedAt: timestamp("email_verified_at"),
-  deletedAt: timestamp("deleted_at"),
+  deletedAt: timestamp("deleted_at").default(sql`null`),
   ...timestamps,
 }, (table) => [
   uniqueIndex("users_email_unique").on(table.email),
