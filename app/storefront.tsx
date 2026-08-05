@@ -118,6 +118,14 @@ export function Storefront({
       offersOnly,
     ],
   );
+  const similarProducts = useMemo(() => {
+    const terms = query.toLowerCase().trim().split(/\s+/).filter((term) => term.length > 1);
+    if (!terms.length) return [];
+    return initialProducts.map((product) => {
+      const text = `${product.name} ${product.brand || ""} ${product.shortDescription || ""} ${product.description || ""} ${initialCategories.find((category) => category.id === product.categoryId)?.name || ""}`.replace(/<[^>]*>/g, " ").toLowerCase();
+      return { product, score: terms.reduce((total, term) => total + Number(text.includes(term)), 0) };
+    }).filter((entry) => !filtered.some((product) => product.id === entry.product.id)).sort((left, right) => right.score - left.score).slice(0, 6).map((entry) => entry.product);
+  }, [filtered.length, initialCategories, initialProducts, query]);
   const orderedCategories = [...initialCategories].sort((left, right) => {
     const isPrescription = (category: CatalogCategory) =>
       `${category.name} ${category.slug}`.toLowerCase().includes("prescription");
@@ -484,10 +492,10 @@ export function Storefront({
             <button type="button" className={selectedCategory===id?"active":""} onClick={()=>{setSelectedCategory(selectedCategory===id?null:id);setVisibleCount(24)}} key={id}>
               <Icon />
               {name}
-              <span>â€º</span>
+              <span>›</span>
             </button>
           ))}
-          <button type="button" onClick={()=>{setSelectedCategory(null);setVisibleCount(24)}}>View All Categories â†’</button>
+          <button type="button" onClick={()=>{setSelectedCategory(null);setSelectedCondition(null);setQuery("");setVisibleCount(24)}}>View All Categories →</button>
         </aside>}
         <label className="approved-search">
           <Search />
@@ -602,12 +610,9 @@ export function Storefront({
           )}
           {(selectedCategory || selectedCondition || query || offersOnly) &&
             filtered.length === 0 && (
-              <div className="catalogue-empty">
-                <Package />
-                <strong>No matching products</strong>
-                <span>Try another category or search term.</span>
-              </div>
+              <div className="catalogue-empty"><Package /><strong>No matching products</strong><span>Try another category or search term.</span></div>
             )}
+          {query.trim() && similarProducts.length > 0 && <section className="search-suggestions"><header><h3>{filtered.length ? "Mostly shopped with" : "Similar products you may need"}</h3><span>Available alternatives from our catalogue</span></header><div className="approved-products catalogue-expanded">{similarProducts.map((product) => <ProductCard key={product.id} product={product} wishlistActive={wishlist.includes(product.id)} cartQuantity={cart[product.id]} returnTo="/#products" onAddToCart={addToCart} />)}</div></section>}
         </section>
       </main>
 
