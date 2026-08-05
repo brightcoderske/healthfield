@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import bcrypt, { hash } from "bcryptjs";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
+import sharp from "sharp";
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, orderItemFulfilments, orderItems, orders,
@@ -487,6 +488,22 @@ function normalizeStoredImageUrl(value: string | null | undefined) {
   return value.startsWith("/uploads/products/") ? value : value;
 }
 
+async function optimizeProductImage(bytes: Buffer<ArrayBufferLike>, type: string): Promise<Buffer<ArrayBufferLike>> {
+  if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(type)) return bytes;
+  try {
+    const image = sharp(bytes, { limitInputPixels: 40_000_000 }).rotate();
+    const optimized = type === "image/png"
+      ? await image.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer()
+      : type === "image/webp"
+        ? await image.webp({ quality: 88, effort: 4 }).toBuffer()
+        : await image.jpeg({ quality: 88, progressive: true, mozjpeg: true }).toBuffer();
+    return optimized.length < bytes.length ? optimized : bytes;
+  } catch (error) {
+    console.warn("Product image optimization skipped", { name: error instanceof Error ? error.name : undefined });
+    return bytes;
+  }
+}
+
 export async function handleProductImage(request: Request) {
   const auth = await requireSession(request, [...admins], true);
   if ("response" in auth) return auth.response;
@@ -497,7 +514,7 @@ export async function handleProductImage(request: Request) {
   const extension = types.get(image.type.toLowerCase());
   if (!extension) return json({ error: "Use JPEG, PNG, WebP, GIF, AVIF, BMP or TIFF." }, { status: 415 });
   if (image.size <= 0 || image.size > 2 * 1024 * 1024) return json({ error: "Product images must be 2 MB or smaller." }, { status: 413 });
-  const bytes = new Uint8Array(await image.arrayBuffer());
+  let bytes: Buffer<ArrayBufferLike> = Buffer.from(await image.arrayBuffer());
   const ascii = (start: number, end: number) => String.fromCharCode(...bytes.slice(start, end));
   const validSignature = image.type === "image/jpeg" ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
     : image.type === "image/png" ? ascii(1, 4) === "PNG"
@@ -507,6 +524,7 @@ export async function handleProductImage(request: Request) {
     : image.type === "image/bmp" ? ascii(0, 2) === "BM"
     : (ascii(0, 4) === "II*\0" || ascii(0, 4) === "MM\0*");
   if (!validSignature) return json({ error: "The uploaded file does not match its declared image type." }, { status: 415 });
+  bytes = await optimizeProductImage(bytes, image.type.toLowerCase());
   const filename = `${randomUUID()}.${extension}`;
   const directory = path.join(storageRoot(), "uploads", "products");
   await mkdir(directory, { recursive: true });

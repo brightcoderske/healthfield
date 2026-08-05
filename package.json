@@ -25,7 +25,8 @@
     "db:migrate:api": "node scripts/migrate-api.mjs",
     "db:create": "node scripts/create-database.mjs",
     "db:seed": "node scripts/seed-admin.mjs",
-    "db:sync-inventory": "node scripts/sync-inventory.mjs"
+    "db:sync-inventory": "node scripts/sync-inventory.mjs",
+    "images:optimize-existing": "node --env-file=api-service/.env scripts/optimize-existing-product-images.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -37,6 +38,7 @@
     "nodemailer": "^9.0.3",
     "react": "19.2.6",
     "react-dom": "19.2.6",
+    "sharp": "^0.35.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

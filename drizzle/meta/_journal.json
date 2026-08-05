@@ -120,6 +120,13 @@
       "when": 1785914084135,
       "tag": "0016_calm_zaran",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1785915000000,
+      "tag": "0017_force_nullable_session_revocation",
+      "breakpoints": true
     }
   ]
 }
