@@ -1,0 +1,1 @@
+ALTER TABLE `auth_sessions` MODIFY COLUMN `revoked_at` timestamp DEFAULT null;

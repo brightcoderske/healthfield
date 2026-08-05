@@ -12,6 +12,7 @@ import {
   uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
+import { sql } from "drizzle-orm";
 
 const timestamps = {
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -240,7 +241,7 @@ export const authSessions = mysqlTable("auth_sessions", {
   tokenHash: varchar("token_hash", { length: 64 }).notNull(),
   expiresAt: timestamp("expires_at").notNull(),
   expiresAtMs: bigint("expires_at_ms", { mode: "number" }).notNull(),
-  revokedAt: timestamp("revoked_at"),
+  revokedAt: timestamp("revoked_at").default(sql`null`),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("auth_sessions_token_unique").on(table.tokenHash),
