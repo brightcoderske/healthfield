@@ -16,6 +16,7 @@ function secret() {
 
 const sessionTokenPrefix = "hfs_";
 const sessionTokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
+const hasStoredTimestamp = (value: Date | null) => value instanceof Date && !Number.isNaN(value.getTime());
 
 export async function createSessionToken(session: Session) {
   const now = Date.now();
@@ -28,6 +29,7 @@ export async function createSessionToken(session: Session) {
     tokenHash: sessionTokenHash(token),
     expiresAt: new Date(now + lifetimeMs),
     expiresAtMs: now + lifetimeMs,
+    revokedAt: null,
   });
   return token;
 }
@@ -77,14 +79,14 @@ export async function requestSession(request: Request, allowUploadToken = false)
         firstName: users.firstName,
         role: users.role,
         forcePasswordChange: users.forcePasswordChange,
+        revokedAt: authSessions.revokedAt,
+        deletedAt: users.deletedAt,
       }).from(authSessions).innerJoin(users, eq(authSessions.userId, users.id)).where(and(
         eq(authSessions.tokenHash, sessionTokenHash(token)),
         gt(authSessions.expiresAtMs, Date.now()),
-        isNull(authSessions.revokedAt),
-        isNull(users.deletedAt),
         eq(users.isActive, true),
       )).limit(1);
-      if (!session) {
+      if (!session || hasStoredTimestamp(session.revokedAt) || hasStoredTimestamp(session.deletedAt)) {
         console.error("[auth.session] rejected", { reason: "opaque_session_invalid" });
         return null;
       }
