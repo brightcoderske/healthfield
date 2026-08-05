@@ -81,3 +81,10 @@ export async function proxyAuth(request: Request, action: "login" | "register" |
   }
   return result;
 }
+
+export async function proxyLogout(request: Request) {
+  await backendRequest("/v1/auth/logout", { method: "POST" }).catch(() => null);
+  const result = NextResponse.redirect(new URL("/#products", request.url), 303);
+  result.cookies.delete(SESSION_COOKIE);
+  return result;
+}

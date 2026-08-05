@@ -20,7 +20,7 @@ Do not remove the existing NovaHost Next.js application until every check in the
 
 Generate two different random values of at least 32 characters:
 
-- `AUTH_SECRET`: identical on Vercel and NovaHost so the API can verify storefront sessions.
+- `AUTH_SECRET`: used by NovaHost to sign short-lived password-reset and upload tokens. Keep it only in the API environment.
 - `API_SHARED_SECRET`: identical on Vercel and NovaHost; never prefix it with `NEXT_PUBLIC_`.
 
 SMTP passwords may contain symbols such as `@` and `..`. Put such passwords inside double quotes:
@@ -50,7 +50,7 @@ Create `/home/healthfi/health_field/api-service/.env` from `api-service/.env.exa
 ```dotenv
 NODE_ENV=production
 DATABASE_URL=mysql://DATABASE_USER:DATABASE_PASSWORD@127.0.0.1:3306/DATABASE_NAME
-AUTH_SECRET=THE_SHARED_AUTH_SECRET
+AUTH_SECRET=THE_API_ONLY_AUTH_SECRET
 API_SHARED_SECRET=THE_PRIVATE_API_SECRET
 API_PUBLIC_URL=https://api.healthfieldpharmacy.co.ke
 APP_URL=https://healthfieldpharmacy.co.ke
@@ -95,13 +95,12 @@ Import the Git repository into Vercel as a Next.js project. Keep the repository 
 
 ```dotenv
 APP_URL=https://healthfieldpharmacy.co.ke
-AUTH_SECRET=THE_SAME_SHARED_AUTH_SECRET_AS_NOVA
 API_BASE_URL=https://api.healthfieldpharmacy.co.ke
 API_SHARED_SECRET=THE_SAME_PRIVATE_API_SECRET_AS_NOVA
 NEXT_PUBLIC_API_URL=https://api.healthfieldpharmacy.co.ke
 ```
 
-`NEXT_PUBLIC_API_URL` is intentionally public and contains only the API hostname. `API_SHARED_SECRET` and `AUTH_SECRET` must remain server-only.
+`NEXT_PUBLIC_API_URL` is intentionally public and contains only the API hostname. `API_SHARED_SECRET` must remain server-only. Browser login sessions are opaque, database-backed tokens created and validated exclusively by NovaHost.
 
 Deploy the API first, verify `https://api.healthfieldpharmacy.co.ke/health`, and then deploy Vercel. This prevents the storefront from being published before its data service is ready.
 

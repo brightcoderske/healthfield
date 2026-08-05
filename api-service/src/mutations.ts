@@ -6,9 +6,9 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, or } from "driz
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, orderItemFulfilments, orderItems, orders,
-  activityLogs, blogPosts, categories, emailVerificationTokens, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, twoFactorChallenges, users,
+  activityLogs, authSessions, blogPosts, categories, emailVerificationTokens, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, twoFactorChallenges, users,
 } from "../../db/schema";
-import { createPasswordResetToken, createSessionToken, createUploadToken, requireSession, requestSession, verifyPasswordResetToken } from "./auth";
+import { createPasswordResetToken, createSessionToken, createUploadToken, requireSession, requestSession, revokeSession, revokeUserSessions, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
 import { orderEmailHtml, sendBulkEmail, sendEmail } from "./email";
 import { json, publicImageUrl, safeFilename } from "./http";
@@ -85,6 +85,10 @@ export async function handleAuth(request: Request, action: string) {
     const auth = await requireSession(request);
     if ("response" in auth) return auth.response;
     return json({ authenticated: true, session: auth.session }, { headers: { "Cache-Control": "private, no-store" } });
+  }
+  if (action === "logout" && request.method === "POST") {
+    await revokeSession(request);
+    return json({ ok: true });
   }
   if (action === "upload-token" && request.method === "POST") {
     const auth = await requireSession(request);
@@ -176,6 +180,7 @@ export async function handleAuth(request: Request, action: string) {
     const [user] = await db.select().from(users).where(and(eq(users.id, reset.userId), eq(users.email, reset.email))).limit(1);
     if (!user || !user.isActive) return json({ error: "This reset link is invalid or has expired." }, { status: 400 });
     await db.update(users).set({ passwordHash: await bcrypt.hash(parsed.data.newPassword, 12), forcePasswordChange: false }).where(eq(users.id, user.id));
+    await revokeUserSessions(user.id);
     void sendEmail({ to: user.email, subject: "Your Healthfield password was changed", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy password was changed successfully. If you did not do this, contact the pharmacy immediately.`, action:{label:"Sign in securely",url:`${storefrontOrigin()}/login`}, channel:"security" });
     return json({ ok: true, message: "Password updated. You can sign in with your new password." });
   }
@@ -614,7 +619,10 @@ export async function handleStaff(request: Request, id?: number) {
     const { password, ...values } = parsed.data;
     if (id === auth.session.userId && values.isActive === false) return json({ error: "You cannot suspend your own account." }, { status: 400 });
     await db.update(users).set({ ...values, phone: values.phone === "" ? null : values.phone, ...(password ? { passwordHash: await hash(password, 12), forcePasswordChange: true } : {}) }).where(and(eq(users.id, id), isNull(users.deletedAt)));
-    if (values.isActive === false) await db.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, id));
+    if (values.isActive === false) {
+      await db.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, id));
+    }
+    if (values.isActive === false || password) await revokeUserSessions(id);
     return json({ ok: true });
   }
   if (request.method === "DELETE" && id) {
@@ -624,6 +632,7 @@ export async function handleStaff(request: Request, id?: number) {
     if (target.role === "SUPER_ADMIN") return json({ error: "The pharmacy owner account cannot be deleted here." }, { status: 403 });
     await db.transaction(async tx => {
       await tx.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, id));
+      await tx.update(authSessions).set({ revokedAt: new Date() }).where(and(eq(authSessions.userId, id), isNull(authSessions.revokedAt)));
       await tx.update(users).set({ isActive: false, twoFactorEnabled: false, deletedAt: new Date(), passwordHash: await hash(randomUUID() + randomUUID(), 12) }).where(eq(users.id, id));
       await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "STAFF_ACCOUNT_DELETED", entityType: "USER", entityId: String(id), metadata: { formerRole: target.role } });
     });

@@ -234,6 +234,20 @@ export const twoFactorChallenges = mysqlTable("two_factor_challenges", {
   index("two_factor_challenges_user_idx").on(table.userId),
 ]);
 
+export const authSessions = mysqlTable("auth_sessions", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("user_id").notNull().references(() => users.id),
+  tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  expiresAtMs: bigint("expires_at_ms", { mode: "number" }).notNull(),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("auth_sessions_token_unique").on(table.tokenHash),
+  index("auth_sessions_user_idx").on(table.userId),
+  index("auth_sessions_expiry_idx").on(table.expiresAtMs),
+]);
+
 export const chatConversations = mysqlTable("chat_conversations", {
   id: int("id").autoincrement().primaryKey(),
   customerId: int("customer_id").notNull().references(() => users.id),

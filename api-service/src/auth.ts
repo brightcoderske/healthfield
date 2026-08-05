@@ -1,6 +1,7 @@
+import { createHash, randomBytes } from "node:crypto";
 import { jwtVerify, SignJWT } from "jose";
-import { and, eq, isNull } from "drizzle-orm";
-import { users } from "../../db/schema";
+import { and, eq, gt, isNull, lt } from "drizzle-orm";
+import { authSessions, users } from "../../db/schema";
 import { getDb } from "./db";
 
 export type Role = "CUSTOMER" | "STAFF" | "ADMIN" | "SUPER_ADMIN";
@@ -13,16 +14,22 @@ function secret() {
   return new TextEncoder().encode(value);
 }
 
+const sessionTokenPrefix = "hfs_";
+const sessionTokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
+
 export async function createSessionToken(session: Session) {
-  const now = Math.floor(Date.now() / 1000);
-  const lifetimeSeconds = 60 * 60 * (session.role === "CUSTOMER" ? 8 : 12);
-  return new SignJWT(session)
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt(now)
-    .setExpirationTime(now + lifetimeSeconds)
-    .setIssuer("healthfield-pharmacy")
-    .setAudience("healthfield-web")
-    .sign(secret());
+  const now = Date.now();
+  const lifetimeMs = 60 * 60 * 1000 * (session.role === "CUSTOMER" ? 8 : 12);
+  const token = `${sessionTokenPrefix}${randomBytes(32).toString("base64url")}`;
+  const db = getDb();
+  await db.delete(authSessions).where(lt(authSessions.expiresAtMs, now));
+  await db.insert(authSessions).values({
+    userId: session.userId,
+    tokenHash: sessionTokenHash(token),
+    expiresAt: new Date(now + lifetimeMs),
+    expiresAtMs: now + lifetimeMs,
+  });
+  return token;
 }
 
 export async function createUploadToken(session: Session) {
@@ -61,35 +68,60 @@ export async function verifyPasswordResetToken(token: string): Promise<ResetPayl
 export async function requestSession(request: Request, allowUploadToken = false): Promise<Session | null> {
   const header = request.headers.get("authorization");
   if (!header?.startsWith("Bearer ")) return null;
+  const token = header.slice(7);
+  if (token.startsWith(sessionTokenPrefix)) {
+    try {
+      const [session] = await getDb().select({
+        userId: users.id,
+        email: users.email,
+        firstName: users.firstName,
+        role: users.role,
+        forcePasswordChange: users.forcePasswordChange,
+      }).from(authSessions).innerJoin(users, eq(authSessions.userId, users.id)).where(and(
+        eq(authSessions.tokenHash, sessionTokenHash(token)),
+        gt(authSessions.expiresAtMs, Date.now()),
+        isNull(authSessions.revokedAt),
+        isNull(users.deletedAt),
+        eq(users.isActive, true),
+      )).limit(1);
+      if (!session) {
+        console.error("[auth.session] rejected", { reason: "opaque_session_invalid" });
+        return null;
+      }
+      return session as Session;
+    } catch (error) {
+      console.error("[auth.session] rejected", { reason: "opaque_session_database_error", code: error && typeof error === "object" && "code" in error ? String(error.code) : undefined, name: error instanceof Error ? error.name : undefined });
+      return null;
+    }
+  }
+  if (!allowUploadToken) return null;
   try {
-    const { payload } = await jwtVerify(header.slice(7), secret(), {
+    const { payload } = await jwtVerify(token, secret(), {
       issuer: "healthfield-pharmacy",
-      audience: allowUploadToken ? ["healthfield-web", "healthfield-upload"] : "healthfield-web",
+      audience: "healthfield-upload",
       clockTolerance: 60,
     });
-    if (typeof payload.userId !== "number" || typeof payload.email !== "string" || typeof payload.firstName !== "string" || !["CUSTOMER", "STAFF", "ADMIN", "SUPER_ADMIN"].includes(String(payload.role)) || typeof payload.forcePasswordChange !== "boolean") {
-      console.error("[auth.session] rejected", { reason: "invalid_payload" });
-      return null;
-    }
-    const session = payload as unknown as Session;
-    const [user] = await getDb().select({ role: users.role, isActive: users.isActive }).from(users).where(and(eq(users.id, session.userId), isNull(users.deletedAt))).limit(1);
-    if (!user) {
-      console.error("[auth.session] rejected", { reason: "account_missing", userId: session.userId });
-      return null;
-    }
-    if (!user.isActive) {
-      console.error("[auth.session] rejected", { reason: "account_inactive", userId: session.userId });
-      return null;
-    }
-    if (user.role !== session.role) {
-      console.error("[auth.session] rejected", { reason: "role_changed", userId: session.userId });
-      return null;
-    }
-    return session;
-  } catch (error) {
-    console.error("[auth.session] rejected", { reason: "token_or_database_error", code: error && typeof error === "object" && "code" in error ? String(error.code) : undefined, name: error instanceof Error ? error.name : undefined });
+    if (typeof payload.userId !== "number" || typeof payload.email !== "string" || typeof payload.firstName !== "string" || !["CUSTOMER", "STAFF", "ADMIN", "SUPER_ADMIN"].includes(String(payload.role)) || typeof payload.forcePasswordChange !== "boolean") return null;
+    return payload as unknown as Session;
+  } catch {
     return null;
   }
+}
+
+export async function revokeSession(request: Request) {
+  const header = request.headers.get("authorization");
+  if (!header?.startsWith(`Bearer ${sessionTokenPrefix}`)) return;
+  await getDb().update(authSessions).set({ revokedAt: new Date() }).where(and(
+    eq(authSessions.tokenHash, sessionTokenHash(header.slice(7))),
+    isNull(authSessions.revokedAt),
+  ));
+}
+
+export async function revokeUserSessions(userId: number) {
+  await getDb().update(authSessions).set({ revokedAt: new Date() }).where(and(
+    eq(authSessions.userId, userId),
+    isNull(authSessions.revokedAt),
+  ));
 }
 
 export async function requireSession(request: Request, roles?: Role[], allowUploadToken = false) {
