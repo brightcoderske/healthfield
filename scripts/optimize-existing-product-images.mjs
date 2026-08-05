@@ -7,17 +7,22 @@ const limit = Math.max(1, Math.min(Number(limitArgument?.slice(8) || 20), 100));
 const storageRoot = path.resolve(process.env.STORAGE_ROOT || path.join(process.cwd(), "storage"));
 const productDirectory = path.join(storageRoot, "uploads", "products");
 const originalsDirectory = path.join(productDirectory, "originals");
-const files = (await readdir(productDirectory, { withFileTypes: true })).filter((entry) => entry.isFile() && /\.(?:jpe?g|png|webp)$/i.test(entry.name)).slice(0, limit);
+const candidates = (await readdir(productDirectory, { withFileTypes: true })).filter((entry) => entry.isFile() && /\.(?:jpe?g|png|webp)$/i.test(entry.name));
 
 await mkdir(originalsDirectory, { recursive: true });
+const files = [];
+for (const entry of candidates) {
+  try {
+    await stat(path.join(originalsDirectory, entry.name));
+  } catch {
+    files.push(entry);
+  }
+  if (files.length === limit) break;
+}
 let optimized = 0;
 for (const entry of files) {
   const source = path.join(productDirectory, entry.name);
   const backup = path.join(originalsDirectory, entry.name);
-  try {
-    await stat(backup);
-    continue;
-  } catch { /* Original has not been archived yet. */ }
   const extension = path.extname(entry.name).toLowerCase();
   const temporary = `${source}.optimizing`;
   try {
