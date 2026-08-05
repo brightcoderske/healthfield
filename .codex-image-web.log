@@ -54,3 +54,14 @@ $ next dev -H 0.0.0.0
 ✓ Compiled in 232ms
 ✓ Compiled in 313ms
 ✓ Compiled in 336ms
+ GET /products/1 200 in 1078ms (next.js: 403ms, application-code: 676ms)
+ GET /sw.js 404 in 117ms (next.js: 43ms, application-code: 74ms)
+✓ Compiled in 284ms
+✓ Compiled in 473ms
+ GET / 200 in 147ms (next.js: 25ms, application-code: 122ms)
+[browser] Detected `scroll-behavior: smooth` on the `<html>` element. To disable smooth scrolling during route transitions, add `data-scroll-behavior="smooth"` to your <html> element. Learn more: https://nextjs.org/docs/messages/missing-data-scroll-behavior
+✓ Compiled in 274ms
+ GET /login 200 in 556ms (next.js: 113ms, proxy.ts: 163ms, application-code: 280ms)
+ GET /sw.js 404 in 155ms (next.js: 27ms, application-code: 128ms)
+ POST /api/auth/login 401 in 546ms (next.js: 114ms, proxy.ts: 12ms, application-code: 420ms)
+ POST /api/auth/login 401 in 402ms (next.js: 8ms, proxy.ts: 11ms, application-code: 382ms)

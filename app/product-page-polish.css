@@ -50,10 +50,11 @@
 .detail-discount { padding:3px 6px;border-radius:999px;color:#fff;background:#d52e82;font-size:8px;font-weight:850; }
 .product-detail-image { min-height:315px !important; }
 .product-detail-image img { max-height:295px !important; }
-.product-information { padding:17px !important; }
+.product-information { padding:17px !important;display:block !important; }
 .product-information > h2 { margin-bottom:10px !important;font-size:18px; }
 .product-information > div { gap:9px !important; }
 .product-information article { padding:10px !important; }
+.product-information > div > article:first-child { grid-column:1 / -1; }
 .product-description-empty { margin:0 !important;padding:5px 0;color:#77717c !important;font-size:9px !important; }
 
 .product-detail > .product-reviews {

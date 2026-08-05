@@ -1,5 +1,6 @@
 "use client";
 
+import { MapPin } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import styles from "./order-status-manager.module.css";
 
@@ -7,7 +8,7 @@ const statuses = ["NEW", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIA
 const steps = ["NEW", "CONFIRMED", "BEING_FULFILLED", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "COMPLETED"];
 const packedStatuses = ["READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED"];
 
-type Order = { id: number; orderNumber: string; status: string; customerName: string; phone: string; email: string | null; fulfilmentMethod: string; paymentStatus: string; deliveryAddress: string | null; deliveryArea: string | null; total: string };
+type Order = { id: number; orderNumber: string; status: string; customerName: string; phone: string; email: string | null; fulfilmentMethod: string; paymentStatus: string; deliveryAddress: string | null; deliveryArea: string | null; deliveryLatitude: string | null; deliveryLongitude: string | null; total: string };
 type Item = { id: number; productId: number | null; productName: string; quantity: number; unitPrice: string; lineTotal: string };
 type Store = { id: number; name: string };
 type Fulfilment = { orderItemId: number; branchId: number; quantityReserved: number; quantityPacked: number; status: string };
@@ -29,6 +30,9 @@ export function OrderStatusManager({ order, items, stores = [], fulfilments = []
   const [assignments, setAssignments] = useState<Record<number, number>>(() => automaticAssignments(items, fulfilments, stock));
   const editable = !["READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"].includes(saved);
   const position = steps.indexOf(status);
+  const mapUrl = order.deliveryLatitude && order.deliveryLongitude
+    ? `https://www.google.com/maps?q=${encodeURIComponent(`${order.deliveryLatitude},${order.deliveryLongitude}`)}`
+    : order.deliveryAddress ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([order.deliveryAddress, order.deliveryArea].filter(Boolean).join(", "))}` : null;
   const fulfilmentPayload = useMemo(() => items.filter((item) => assignments[item.id]).map((item) => ({ orderItemId: item.id, branchId: assignments[item.id], quantityReserved: item.quantity, quantityPacked: packedStatuses.includes(status) ? item.quantity : 0, status: packedStatuses.includes(status) ? "READY" : "RESERVED" })), [items, assignments, status]);
 
   function availableAt(item: Item, storeId: number) {
@@ -45,5 +49,21 @@ export function OrderStatusManager({ order, items, stores = [], fulfilments = []
     setSaving(false);
   }
 
-  return <main className="order-detail admin-order-detail"><header><a href="/admin/orders">← All orders</a><a href={`tel:${order.phone}`}>Call customer</a></header><section><span className="order-status">{status.replaceAll("_", " ")}</span><h1>{order.orderNumber}</h1><div className="order-progress">{steps.map((step, index) => <span className={index <= position ? "done" : ""} key={step}><i>{index < position ? "✓" : index + 1}</i><small>{step === "READY_FOR_DISPATCH" ? "PACKAGED" : step.replaceAll("_", " ")}</small></span>)}</div><form className="order-status-form order-edit-form" onSubmit={submit}><label>Order status<select value={status} onChange={(event) => setStatus(event.target.value)}>{statuses.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}</select></label><label>Customer<input name="customerName" defaultValue={order.customerName} disabled={!editable} /></label><label>Phone<input name="phone" defaultValue={order.phone} disabled={!editable} /></label><label>Email<input name="email" type="email" defaultValue={order.email || ""} disabled={!editable} /></label><label>Area<input name="deliveryArea" defaultValue={order.deliveryArea || ""} disabled={!editable} /></label><label className="full">Address<input name="deliveryAddress" defaultValue={order.deliveryAddress || ""} disabled={!editable} /></label><div className={`${styles.items} full`}><div className={styles.head}><span>Product</span><span>Quantity</span><span>Amount</span><span>Serving store</span></div>{items.map((item) => <div className={styles.row} key={item.id}><strong>{item.productName}</strong><span>{item.quantity}</span><span>KES {Number(item.lineTotal).toLocaleString()}</span><label><select aria-label={`Serving store for ${item.productName}`} value={assignments[item.id] || ""} disabled={!editable} onChange={(event) => setAssignments((current) => ({ ...current, [item.id]: Number(event.target.value) || 0 }))}><option value="">No store with enough stock</option>{stores.map((store) => { const available = availableAt(item, store.id); return <option value={store.id} key={store.id} disabled={available !== null && available < item.quantity}>{store.name}{available === null ? "" : ` (${available} available)`}</option>; })}</select></label></div>)}</div><button disabled={saving}>{saving ? "Saving…" : "Save order"}</button></form>{message ? <div className="form-message">{message}</div> : null}<footer><span>Total</span><strong>KES {Number(order.total).toLocaleString()}</strong></footer></section></main>;
+  return <main className="order-detail admin-order-detail">
+    <header><a href="/admin/orders">← All orders</a><a href={`tel:${order.phone}`}>Call customer</a></header>
+    <section>
+      <span className="order-status">{status.replaceAll("_", " ")}</span><h1>{order.orderNumber}</h1>
+      <div className="order-progress">{steps.map((step, index) => <span className={index <= position ? "done" : ""} key={step}><i>{index < position ? "✓" : index + 1}</i><small>{step === "READY_FOR_DISPATCH" ? "PACKAGED" : step.replaceAll("_", " ")}</small></span>)}</div>
+      <form className="order-status-form order-edit-form" onSubmit={submit}>
+        <label>Order status<select value={status} onChange={(event) => setStatus(event.target.value)}>{statuses.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}</select></label>
+        <label>Customer<input name="customerName" defaultValue={order.customerName} disabled={!editable} /></label><label>Phone<input name="phone" defaultValue={order.phone} disabled={!editable} /></label>
+        <label>Email<input name="email" type="email" defaultValue={order.email || ""} disabled={!editable} /></label><label>Area<input name="deliveryArea" defaultValue={order.deliveryArea || ""} disabled={!editable} /></label>
+        <label className="full">Address<input name="deliveryAddress" defaultValue={order.deliveryAddress || ""} disabled={!editable} /></label>
+        {mapUrl && <a className={styles.mapLink} href={mapUrl} target="_blank" rel="noreferrer"><MapPin /> View exact delivery location</a>}
+        <div className={`${styles.items} full`}><div className={styles.head}><span>Product</span><span>Quantity</span><span>Amount</span><span>Serving store</span></div>{items.map((item) => <div className={styles.row} key={item.id}><strong>{item.productName}</strong><span>{item.quantity}</span><span>KES {Number(item.lineTotal).toLocaleString()}</span><label><select aria-label={`Serving store for ${item.productName}`} value={assignments[item.id] || ""} disabled={!editable} onChange={(event) => setAssignments((current) => ({ ...current, [item.id]: Number(event.target.value) || 0 }))}><option value="">No store with enough stock</option>{stores.map((store) => { const available = availableAt(item, store.id); return <option value={store.id} key={store.id} disabled={available !== null && available < item.quantity}>{store.name}{available === null ? "" : ` (${available} available)`}</option>; })}</select></label></div>)}</div>
+        <div className={styles.actions}><button disabled={saving}>{saving ? "Saving…" : "Save order"}</button></div>
+      </form>
+      {message ? <div className="form-message">{message}</div> : null}<footer><span>Total</span><strong>KES {Number(order.total).toLocaleString()}</strong></footer>
+    </section>
+  </main>;
 }

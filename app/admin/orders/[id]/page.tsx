@@ -16,6 +16,8 @@ type Data = {
     paymentStatus: string;
     deliveryAddress: string | null;
     deliveryArea: string | null;
+    deliveryLatitude: string | null;
+    deliveryLongitude: string | null;
     total: string;
   };
   items: Array<{ id: number; productId: number | null; productName: string; quantity: number; unitPrice: string; lineTotal: string }>;

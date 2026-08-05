@@ -29,6 +29,7 @@
     "images:optimize-existing": "node --env-file=api-service/.env scripts/optimize-existing-product-images.mjs"
   },
   "dependencies": {
+    "@react-pdf/renderer": "^4.5.1",
     "bcryptjs": "^3.0.3",
     "drizzle-orm": "0.45.2",
     "jose": "^6.2.4",
