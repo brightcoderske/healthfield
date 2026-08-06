@@ -65,3 +65,9 @@ $ next dev -H 0.0.0.0
  GET /sw.js 404 in 155ms (next.js: 27ms, application-code: 128ms)
  POST /api/auth/login 401 in 546ms (next.js: 114ms, proxy.ts: 12ms, application-code: 420ms)
  POST /api/auth/login 401 in 402ms (next.js: 8ms, proxy.ts: 11ms, application-code: 382ms)
+ GET / 200 in 770ms (next.js: 313ms, application-code: 458ms)
+ GET /sw.js 404 in 145ms (next.js: 50ms, application-code: 95ms)
+✓ Compiled in 99ms
+ GET / 200 in 392ms (next.js: 227ms, application-code: 166ms)
+✓ Compiled in 68ms
+ GET / 200 in 344ms (next.js: 209ms, application-code: 136ms)

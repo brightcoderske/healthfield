@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
 import {
   blogPosts, branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
   orderItemFulfilments, orderItems, orders, prescriptions, productHealthConditions, productReviews, products,
@@ -13,6 +13,15 @@ const teamRoles = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
 const productCard = {
   id: products.id, name: products.name, imageUrl: products.imageUrl, price: products.price,
   discountPrice: products.discountPrice, packSize: products.packSize,
+};
+const searchProductCard = {
+  ...productCard,
+  brand: products.brand,
+  categoryId: products.categoryId,
+  shortDescription: products.shortDescription,
+  description: products.description,
+  rating: sql<string | null>`avg(case when ${productReviews.isApproved} = true then ${productReviews.rating} end)`,
+  reviewCount: sql<number>`count(${productReviews.id})`,
 };
 
 function images<T extends { imageUrl?: string | null }>(rows: T[]) {
@@ -30,7 +39,7 @@ async function home() {
       reviewCount: sql<number>`count(case when ${productReviews.isApproved} = true then 1 end)`,
     }).from(products).leftJoin(productReviews, eq(productReviews.productId, products.id))
       .where(eq(products.isActive, true)).groupBy(products.id)
-      .orderBy(desc(products.isFeatured), desc(products.createdAt)),
+      .orderBy(desc(products.isFeatured), desc(products.createdAt)).limit(48),
     db.select().from(productHealthConditions),
     db.select().from(siteSettings).limit(1),
     db.select({ id: categories.id, name: categories.name, slug: categories.slug }).from(categories)
@@ -91,6 +100,17 @@ function idsFrom(url: URL) {
   return (url.searchParams.get("ids") || "").split(",").map(Number).filter((id) => Number.isInteger(id) && id > 0).slice(0, 100);
 }
 
+function searchTerms(value: string) {
+  return value.toLowerCase().trim().split(/\s+/).map((term) => term.replace(/[^\p{L}\p{N}-]/gu, "")).filter((term) => term.length > 1).slice(0, 6);
+}
+
+function matchesEveryTerm(terms: string[]) {
+  return terms.map((term) => {
+    const match = `%${term}%`;
+    return or(like(products.name, match), like(products.brand, match), like(products.shortDescription, match), like(products.description, match));
+  });
+}
+
 async function requireAdmin(request: Request) {
   return requireSession(request, [...adminRoles]);
 }
@@ -108,6 +128,29 @@ export async function handleView(request: Request, path: string) {
   }
   if(path==="blogs")return json({posts:await getDb().select().from(blogPosts).where(eq(blogPosts.isPublished,true)).orderBy(desc(blogPosts.publishedAt))},{headers:{"Cache-Control":"public, max-age=300"}});
   const blogMatch=path.match(/^blogs\/([^/]+)$/);if(blogMatch){const [post]=await getDb().select().from(blogPosts).where(and(eq(blogPosts.slug,decodeURIComponent(blogMatch[1])),eq(blogPosts.isPublished,true))).limit(1);return post?json({post}):json({error:"Article not found."},{status:404})}
+  if (path === "search") {
+    const terms = searchTerms(url.searchParams.get("q") || "");
+    if (!terms.length) return json({ products: [], similar: [] }, { headers: { "Cache-Control": "no-store" } });
+    const matching = matchesEveryTerm(terms);
+    const anyMatch = or(...matching);
+    const [exact, alternatives] = await Promise.all([
+      getDb().select(searchProductCard).from(products).leftJoin(productReviews, eq(productReviews.productId, products.id)).where(and(eq(products.isActive, true), ...matching)).groupBy(products.id).orderBy(desc(products.isFeatured), desc(products.createdAt)).limit(48),
+      getDb().select(searchProductCard).from(products).leftJoin(productReviews, eq(productReviews.productId, products.id)).where(and(eq(products.isActive, true), anyMatch)).groupBy(products.id).orderBy(desc(products.isFeatured), desc(products.createdAt)).limit(12),
+    ]);
+    const all = [...exact, ...alternatives];
+    const mappings = all.length ? await getDb().select().from(productHealthConditions).where(inArray(productHealthConditions.productId, [...new Set(all.map((product) => product.id))])) : [];
+    const shape = (rows: typeof all) => rows.map((product) => ({
+      ...product,
+      imageUrl: publicImageUrl(product.imageUrl),
+      price: Number(product.price),
+      discountPrice: product.discountPrice === null ? null : Number(product.discountPrice),
+      rating: product.rating === null ? null : Number(product.rating),
+      reviewCount: Number(product.reviewCount),
+      conditionIds: mappings.filter((mapping) => mapping.productId === product.id).map((mapping) => mapping.conditionId),
+    }));
+    const exactIds = new Set(exact.map((product) => product.id));
+    return json({ products: shape(exact), similar: shape(alternatives.filter((product) => !exactIds.has(product.id)).slice(0, 6)) }, { headers: { "Cache-Control": "no-store" } });
+  }
   if (path === "catalogue") {
     const ids = idsFrom(url);
     const rows = ids.length
@@ -167,7 +210,8 @@ export async function handleView(request: Request, path: string) {
     const db = getDb();
     const view = path.slice(6);
     if (view === "dashboard") {
-      const [[{ newOrders }], [{ pendingPrescriptions }], [{ activeProducts }], [{ lowStock }], [{ customers }], [{ newChats }], recentOrders] = await Promise.all([
+      const since = new Date(Date.now() - 92 * 24 * 60 * 60 * 1000);
+      const [[{ newOrders }], [{ pendingPrescriptions }], [{ activeProducts }], [{ lowStock }], [{ customers }], [{ newChats }], recentOrders, analytics] = await Promise.all([
         db.select({ newOrders: count() }).from(orders).where(eq(orders.status, "NEW")),
         db.select({ pendingPrescriptions: count() }).from(prescriptions).where(eq(prescriptions.status, "RECEIVED")),
         db.select({ activeProducts: count() }).from(products).where(eq(products.isActive, true)),
@@ -175,8 +219,9 @@ export async function handleView(request: Request, path: string) {
         db.select({ customers: count() }).from(users).where(eq(users.role, "CUSTOMER")),
         db.select({ newChats: sql<number>`count(distinct ${chatMessages.conversationId})` }).from(chatMessages).innerJoin(users,eq(users.id,chatMessages.senderId)).where(and(eq(users.role,"CUSTOMER"),isNull(chatMessages.readAt))),
         db.select().from(orders).orderBy(desc(orders.createdAt)).limit(8),
+        db.select({ orderId: orders.id, createdAt: orders.createdAt, status: orders.status, total: orders.total, branch: branches.name, productName: orderItems.productName, quantity: orderItems.quantity, lineTotal: orderItems.lineTotal, category: categories.name }).from(orders).innerJoin(orderItems, eq(orderItems.orderId, orders.id)).leftJoin(products, eq(products.id, orderItems.productId)).leftJoin(categories, eq(categories.id, products.categoryId)).leftJoin(branches, eq(branches.id, orders.suggestedBranchId)).where(and(gte(orders.createdAt, since), ne(orders.status, "CANCELLED"))),
       ]);
-      return json({ newOrders, pendingPrescriptions, activeProducts, lowStock, customers, newChats:Number(newChats), recentOrders });
+      return json({ newOrders, pendingPrescriptions, activeProducts, lowStock, customers, newChats:Number(newChats), recentOrders, analytics });
     }
     if (view === "orders") return json({ orders: await db.select().from(orders).orderBy(sql`case when ${orders.status}='NEW' then 0 when ${orders.status} in ('CONFIRMED','UNDER_REVIEW') then 1 else 2 end`,desc(orders.createdAt)) });
     const orderMatch = view.match(/^orders\/(\d+)$/);
@@ -194,7 +239,7 @@ export async function handleView(request: Request, path: string) {
     }
     if (view === "customers") return json({ customers: await db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, phone: users.phone, isActive: users.isActive, createdAt: users.createdAt }).from(users).where(eq(users.role, "CUSTOMER")).orderBy(desc(users.createdAt)) });
     if (view === "chats") { const [chats,unread]=await Promise.all([db.select({ id: chatConversations.id, status: chatConversations.status, lastMessageAt: chatConversations.lastMessageAt, firstName: users.firstName, lastName: users.lastName, email: users.email }).from(chatConversations).innerJoin(users, eq(users.id, chatConversations.customerId)).orderBy(desc(chatConversations.lastMessageAt)),db.select({conversationId:chatMessages.conversationId,total:count()}).from(chatMessages).innerJoin(users,eq(users.id,chatMessages.senderId)).where(and(eq(users.role,"CUSTOMER"),isNull(chatMessages.readAt))).groupBy(chatMessages.conversationId)]);return json({chats:chats.map(chat=>({...chat,unread:Number(unread.find(row=>row.conversationId===chat.id)?.total||0)}))}); }
-    if (view === "prescriptions") return json({ prescriptions: await db.select().from(prescriptions).orderBy(desc(prescriptions.createdAt)) });
+    if (view === "prescriptions") return json({ prescriptions: await db.select({ id: prescriptions.id, customerId: prescriptions.customerId, orderId: prescriptions.orderId, senderName: sql<string | null>`coalesce(${prescriptions.senderName}, trim(concat(${users.firstName}, ' ', ${users.lastName})))`, storageKey: prescriptions.storageKey, originalFilename: prescriptions.originalFilename, mimeType: prescriptions.mimeType, sizeBytes: prescriptions.sizeBytes, status: prescriptions.status, pharmacistNotes: prescriptions.pharmacistNotes, reviewedBy: prescriptions.reviewedBy, reviewedAt: prescriptions.reviewedAt, createdAt: prescriptions.createdAt, updatedAt: prescriptions.updatedAt }).from(prescriptions).leftJoin(users, eq(users.id, prescriptions.customerId)).orderBy(desc(prescriptions.createdAt)) });
     if (view === "campaigns") return json({ campaigns: await db.select().from(campaigns).orderBy(desc(campaigns.createdAt)).limit(30) });
     if (view === "stores") return json({ stores: await db.select().from(branches).orderBy(desc(branches.createdAt)) });
     if (view === "staff") {
@@ -245,7 +290,7 @@ export async function handleView(request: Request, path: string) {
   if (path === "staff/prescriptions") {
     const auth = await requireSession(request, [...teamRoles]);
     if ("response" in auth) return auth.response;
-    return json({ prescriptions: await getDb().select().from(prescriptions).orderBy(desc(prescriptions.createdAt)) });
+    return json({ prescriptions: await getDb().select({ id: prescriptions.id, customerId: prescriptions.customerId, orderId: prescriptions.orderId, senderName: sql<string | null>`coalesce(${prescriptions.senderName}, trim(concat(${users.firstName}, ' ', ${users.lastName})))`, storageKey: prescriptions.storageKey, originalFilename: prescriptions.originalFilename, mimeType: prescriptions.mimeType, sizeBytes: prescriptions.sizeBytes, status: prescriptions.status, pharmacistNotes: prescriptions.pharmacistNotes, reviewedBy: prescriptions.reviewedBy, reviewedAt: prescriptions.reviewedAt, createdAt: prescriptions.createdAt, updatedAt: prescriptions.updatedAt }).from(prescriptions).leftJoin(users, eq(users.id, prescriptions.customerId)).orderBy(desc(prescriptions.createdAt)) });
   }
   if (path === "walk-in-sale") {
     const auth = await requireSession(request, [...teamRoles]);

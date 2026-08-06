@@ -19,7 +19,10 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   compress: true,
   images: {
-    remotePatterns: [{ protocol: "https", hostname: "api.healthfieldpharmacy.co.ke", pathname: "/uploads/products/**" }],
+    // Product media is optimized and served by the API/storage host. Keep the
+    // storefront out of the image-delivery path so Vercel never proxies or
+    // transforms those files through /_next/image.
+    unoptimized: true,
   },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];

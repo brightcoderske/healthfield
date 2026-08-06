@@ -20,6 +20,7 @@ import {
   ChevronLeft,
   ChevronRight,
   MessageCircle,
+  ArrowUp,
 } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -51,6 +52,13 @@ const categoryPresentation = [
   { icon: HeartPulse, color: "pink" },
   { icon: Package, color: "green" },
 ];
+
+function SocialIcon({ brand }: { brand: "facebook" | "instagram" | "tiktok" | "whatsapp" }) {
+  if (brand === "facebook") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.03 1.79-4.7 4.53-4.7 1.31 0 2.69.24 2.69.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.89v2.27h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07Z" /></svg>;
+  if (brand === "instagram") return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle cx="17.5" cy="6.5" r="1" /></svg>;
+  if (brand === "tiktok") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3c.6 2.4 2 3.8 4.5 4.1v3.1c-1.7 0-3.2-.5-4.5-1.5v6.1a5.3 5.3 0 1 1-4.6-5.2v3.2a2.2 2.2 0 1 0 1.5 2.1V3H15Z" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 3.5A11.8 11.8 0 0 0 2.8 18l-1 3.6 3.7-1A11.8 11.8 0 1 0 20.5 3.5Z" /><path d="M8.1 6.9c.2-.5.5-.5.8-.5h.7c.2 0 .5.1.6.5l.9 2.1c.1.3.1.5 0 .7l-.7 1c.5 1.1 1.4 2 2.5 2.5l1-.7c.2-.1.4-.1.7 0l2.1.9c.4.2.5.4.5.6v.7c0 .3 0 .6-.5.8-.5.2-1.5.5-2.6.1-1.1-.4-2.5-1.1-4.1-2.7-1.6-1.6-2.3-3-2.7-4.1-.4-1.1-.1-2.1.1-2.6Z" /></svg>;
+}
 
 export function Storefront({
   initialProducts,
@@ -94,11 +102,14 @@ export function Storefront({
   );
   const [conditionQuery, setConditionQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(24);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  const [searchResults, setSearchResults] = useState<{ products: CatalogProduct[]; similar: CatalogProduct[] } | null>(null);
+  const [searching, setSearching] = useState(false);
   const productRail = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(
     () =>
-      initialProducts.filter(
+      (query.trim() ? searchResults?.products || [] : initialProducts).filter(
         (product) =>
           `${product.name} ${product.brand || ""} ${product.shortDescription || ""} ${product.description || ""} ${initialCategories.find((category) => category.id === product.categoryId)?.name || ""}`
             .replace(/<[^>]*>/g, " ")
@@ -111,6 +122,7 @@ export function Storefront({
       ),
     [
       initialProducts,
+      searchResults,
       initialCategories,
       query,
       selectedCategory,
@@ -118,14 +130,7 @@ export function Storefront({
       offersOnly,
     ],
   );
-  const similarProducts = useMemo(() => {
-    const terms = query.toLowerCase().trim().split(/\s+/).filter((term) => term.length > 1);
-    if (!terms.length) return [];
-    return initialProducts.map((product) => {
-      const text = `${product.name} ${product.brand || ""} ${product.shortDescription || ""} ${product.description || ""} ${initialCategories.find((category) => category.id === product.categoryId)?.name || ""}`.replace(/<[^>]*>/g, " ").toLowerCase();
-      return { product, score: terms.reduce((total, term) => total + Number(text.includes(term)), 0) };
-    }).filter((entry) => !filtered.some((product) => product.id === entry.product.id)).sort((left, right) => right.score - left.score).slice(0, 6).map((entry) => entry.product);
-  }, [filtered.length, initialCategories, initialProducts, query]);
+  const similarProducts = searchResults?.similar || [];
   const orderedCategories = [...initialCategories].sort((left, right) => {
     const isPrescription = (category: CatalogCategory) =>
       `${category.name} ${category.slug}`.toLowerCase().includes("prescription");
@@ -151,6 +156,35 @@ export function Storefront({
       (item) => item.slug === condition,
     );
     if (conditionMatch) setSelectedCondition(conditionMatch.id);
+  }, []);
+  useEffect(() => {
+    const term = query.trim();
+    if (term.length < 2) {
+      setSearchResults(null);
+      setSearching(false);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setSearching(true);
+      try {
+        const response = await fetch(`/api/catalogue/search?q=${encodeURIComponent(term)}`, { signal: controller.signal });
+        const data = await response.json().catch(() => null) as { products?: CatalogProduct[]; similar?: CatalogProduct[] } | null;
+        if (!response.ok || !data) throw new Error("Search failed");
+        setSearchResults({ products: Array.isArray(data.products) ? data.products : [], similar: Array.isArray(data.similar) ? data.similar : [] });
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setSearchResults({ products: [], similar: [] });
+      } finally {
+        if (!controller.signal.aborted) setSearching(false);
+      }
+    }, 220);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [query]);
+  useEffect(() => {
+    const updateBackToTop = () => setShowBackToTop(window.scrollY > window.innerHeight * 0.6);
+    updateBackToTop();
+    window.addEventListener("scroll", updateBackToTop, { passive: true });
+    return () => window.removeEventListener("scroll", updateBackToTop);
   }, []);
   useEffect(() => {
     const button = document.querySelector<HTMLButtonElement>(
@@ -563,7 +597,7 @@ export function Storefront({
           <div className="approved-title">
             <div>
               <h2>Shop Health &amp; Wellness</h2>
-              <small>{filtered.length} products available</small>
+              <small>{searching ? "Searching the catalogue…" : "Search by product, brand or health need"}</small>
             </div>
             <div className="product-rail-controls">
               <button
@@ -745,7 +779,7 @@ export function Storefront({
                 rel="noreferrer"
                 aria-label="Facebook"
               >
-                f
+                <SocialIcon brand="facebook" />
               </a>
             )}
             {contact.instagramUrl && (
@@ -755,7 +789,7 @@ export function Storefront({
                 rel="noreferrer"
                 aria-label="Instagram"
               >
-                IG
+                <SocialIcon brand="instagram" />
               </a>
             )}
             {contact.xUrl && (
@@ -775,7 +809,12 @@ export function Storefront({
                 rel="noreferrer"
                 aria-label="TikTok"
               >
-                TT
+                <SocialIcon brand="tiktok" />
+              </a>
+            )}
+            {contact.whatsapp && (
+              <a href={`https://wa.me/${contact.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" aria-label="WhatsApp">
+                <SocialIcon brand="whatsapp" />
               </a>
             )}
           </div>
@@ -836,6 +875,9 @@ export function Storefront({
           </span>
         </div>
       </footer>
+      <button className={`back-to-top${showBackToTop ? " visible" : ""}`} type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} aria-label="Back to top" tabIndex={showBackToTop ? 0 : -1}>
+        <ArrowUp />
+      </button>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { BackendError, backendJson } from "@/lib/backend-api";
 import { OrderStatusManager } from "./order-status-manager";
+import { OrderReceiptActions } from "./order-receipt-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,9 @@ type Data = {
     email: string | null;
     fulfilmentMethod: string;
     paymentStatus: string;
+    paymentMethod: string;
+    paymentReference: string | null;
+    amountPaid: string;
     deliveryAddress: string | null;
     deliveryArea: string | null;
     deliveryLatitude: string | null;
@@ -35,5 +39,5 @@ export default async function AdminOrderPage({ params }: { params: Promise<{ id:
     if (error instanceof BackendError && error.status === 404) notFound();
     throw error;
   }
-  return <><a style={{position:"fixed",zIndex:20,right:24,top:18,padding:"10px 14px",borderRadius:8,color:"white",background:"#1d4d83",fontSize:11,fontWeight:800}} href={`/admin/receipts/orders/${id}`} target="_blank">Print colour receipt</a><OrderStatusManager order={{ ...data.order, id }} items={data.items ?? []} stores={data.stores ?? []} fulfilments={data.fulfilments ?? []} stock={data.stock ?? []} /></>;
+  return <><OrderReceiptActions orderId={id} /><OrderStatusManager order={{ ...data.order, id }} items={data.items ?? []} stores={data.stores ?? []} fulfilments={data.fulfilments ?? []} stock={data.stock ?? []} /></>;
 }

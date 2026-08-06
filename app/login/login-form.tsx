@@ -3,7 +3,10 @@
 import { ArrowLeft, Eye, EyeOff, KeyRound, LockKeyhole, Mail } from "lucide-react";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
+
+const twoFactorStorageKey = "healthfield.login.two-factor";
+type StoredChallenge = { challengeToken: string; maskedEmail: string };
 
 export function LoginForm() {
   const searchParams = useSearchParams();
@@ -15,10 +18,29 @@ export function LoginForm() {
   const [notice, setNotice] = useState("");
   const [securityCode, setSecurityCode] = useState("");
   const [developmentCode, setDevelopmentCode] = useState("");
+  const loginInFlight = useRef(false);
+  const verificationInFlight = useRef(false);
   const urlError = searchParams.get("error");
+
+  function clearChallenge() {
+    sessionStorage.removeItem(twoFactorStorageKey);
+    setChallengeToken(""); setMaskedEmail(""); setSecurityCode(""); setDevelopmentCode("");
+  }
+
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(twoFactorStorageKey) || "null") as StoredChallenge | null;
+      if (stored && /^.{60,100}$/.test(stored.challengeToken) && stored.maskedEmail) {
+        setChallengeToken(stored.challengeToken);
+        setMaskedEmail(stored.maskedEmail);
+      } else sessionStorage.removeItem(twoFactorStorageKey);
+    } catch { sessionStorage.removeItem(twoFactorStorageKey); }
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (loginInFlight.current) return;
+    loginInFlight.current = true;
     setLoading(true);
     setError("");
     const form = new FormData(event.currentTarget);
@@ -35,23 +57,28 @@ export function LoginForm() {
         return;
       }
       if (data.requiresTwoFactor) {
+        if (typeof data.challengeToken !== "string" || typeof data.maskedEmail !== "string") throw new Error("Invalid two-factor challenge response.");
+        sessionStorage.setItem(twoFactorStorageKey, JSON.stringify({ challengeToken: data.challengeToken, maskedEmail: data.maskedEmail } satisfies StoredChallenge));
         setChallengeToken(data.challengeToken);
         setMaskedEmail(data.maskedEmail);
         setDevelopmentCode(data.developmentCode || "");
         setLoading(false);
         return;
       }
+      sessionStorage.removeItem(twoFactorStorageKey);
       const requested = searchParams.get("next");
       const safeRequested=requested?.startsWith("/")&&!requested.startsWith("//")?requested:null;
       window.location.assign(data.redirectTo === "/change-password" ? data.redirectTo : safeRequested || data.redirectTo);
     } catch {
       setError("Healthfield could not connect to the login service. Please try again.");
       setLoading(false);
-    }
+    } finally { loginInFlight.current = false; }
   }
 
   async function verifyCode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (verificationInFlight.current || !challengeToken) return;
+    verificationInFlight.current = true;
     setLoading(true);
     setError("");
     setNotice("");
@@ -59,8 +86,10 @@ export function LoginForm() {
       const response = await fetch("/api/auth/two-factor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ challengeToken, code: securityCode }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) { setError(data.error ?? "The security code could not be verified."); setLoading(false); return; }
+      sessionStorage.removeItem(twoFactorStorageKey);
       window.location.assign(data.redirectTo);
     } catch { setError("Healthfield could not verify the security code. Please try again."); setLoading(false); }
+    finally { verificationInFlight.current = false; }
   }
 
   async function resendCode() {
@@ -88,7 +117,7 @@ export function LoginForm() {
             {notice && <div className="auth-notice" role="status">{notice}</div>}
             <button className="auth-submit" disabled={loading}>{loading ? "Verifying…" : "Verify and continue"}</button>
           </form>
-          <div className="two-factor-options"><button type="button" onClick={resendCode} disabled={loading}>Send another code</button><button type="button" onClick={() => { setChallengeToken(""); setMaskedEmail(""); setSecurityCode(""); setDevelopmentCode(""); setError(""); setNotice(""); }}><ArrowLeft /> Back to login</button></div>
+          <div className="two-factor-options"><button type="button" onClick={resendCode} disabled={loading}>Send another code</button><button type="button" onClick={() => { clearChallenge(); setError(""); setNotice(""); }}><ArrowLeft /> Back to login</button></div>
         </> : <><form onSubmit={submit} method="post" action="/api/auth/login">
           <label><span>Email address</span><div><Mail /><input name="email" type="email" autoComplete="email" required /></div></label>
           <label><span>Password</span><div><LockKeyhole /><input name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" minLength={8} required /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff /> : <Eye />}</button></div></label>

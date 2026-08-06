@@ -123,10 +123,13 @@ export async function handleAuth(request: Request, action: string) {
   if (action === "two-factor" && request.method === "POST") {
     const parsed = z.object({ challengeToken: z.string().min(60).max(100), code: z.string().trim().regex(/^\d{6}$/) }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Enter the 6-digit code sent to your email." }, { status: 400 });
-    const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, tokenHash(parsed.data.challengeToken))).limit(1);
-    if (!challenge || challenge.usedAt) return json({ error: "This login request is no longer valid. Return to login." }, { status: 401 });
+    const challengeHash = tokenHash(parsed.data.challengeToken);
+    const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, challengeHash)).limit(1);
+    if (!challenge) { console.warn("2FA verification failed", { reason: "challenge_not_found", challengeHash: challengeHash.slice(0, 12) }); return json({ error: "This login request was not found. Return to login and start again." }, { status: 401 }); }
+    if (challenge.usedAt) { console.warn("2FA verification failed", { reason: "challenge_already_completed", challengeId: challenge.id }); return json({ error: "This login request has already been completed. Return to login and start again." }, { status: 401 }); }
     if (challenge.attemptCount >= twoFactorMaximumAttempts) return json({ error: "Too many incorrect attempts. Select Send another code below." }, { status: 401 });
-    if (!challenge.lastSentAtMs || Date.now() - challenge.lastSentAtMs > twoFactorValidityMs) return json({ error: "This code has expired. Select Send another code below." }, { status: 401 });
+    const expiresAtMs = challenge.expiresAtMs ?? challenge.expiresAt.getTime();
+    if (!Number.isFinite(expiresAtMs) || Date.now() > expiresAtMs) { console.warn("2FA verification failed", { reason: "challenge_expired", challengeId: challenge.id }); return json({ error: "This code has expired. Select Send another code below." }, { status: 401 }); }
     const expected = twoFactorCodeHash(parsed.data.challengeToken, parsed.data.code);
     if (!secureHashEqual(challenge.codeHash, expected)) {
       await db.update(twoFactorChallenges).set({ attemptCount: challenge.attemptCount + 1 }).where(eq(twoFactorChallenges.id, challenge.id));
@@ -146,7 +149,8 @@ export async function handleAuth(request: Request, action: string) {
     if (!parsed.success) return json({ error: "This login request is invalid." }, { status: 400 });
     const hash = tokenHash(parsed.data.challengeToken);
     const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, hash)).limit(1);
-    if (!challenge || challenge.usedAt || !challenge.lastSentAtMs || Date.now() - challenge.lastSentAtMs > twoFactorResendWindowMs || challenge.resendCount >= 3) return json({ error: "This secure login request has ended. Return to login to start again." }, { status: 429 });
+    const expiresAtMs = challenge ? (challenge.expiresAtMs ?? challenge.expiresAt.getTime()) : 0;
+    if (!challenge || challenge.usedAt || !Number.isFinite(expiresAtMs) || Date.now() > expiresAtMs || challenge.resendCount >= 3) return json({ error: "This secure login request has ended. Return to login to start again." }, { status: 429 });
     if (challenge.lastSentAtMs && Date.now() - challenge.lastSentAtMs < 60_000) return json({ error: "Please wait one minute before requesting another code." }, { status: 429 });
     const [user] = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
     if (!user || !user.isActive || !team.includes(user.role as typeof team[number])) return json({ error: "This login request is no longer valid." }, { status: 401 });
@@ -296,7 +300,7 @@ export async function handleOrders(request: Request, id?: number) {
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
   const parsed = z.object({
     fullName: z.string().trim().min(3).max(200), phone: z.string().trim().min(9).max(30), email: z.string().trim().email().optional().or(z.literal("")),
-    fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), deliveryAddress: z.string().trim().max(1000).optional(), deliveryArea: z.string().trim().max(160).optional(),
+    fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA", "CASH"]).default("MPESA"), deliveryAddress: z.string().trim().max(1000).optional(), deliveryArea: z.string().trim().max(160).optional(),
     deliveryLatitude: z.number().min(-90).max(90).optional(), deliveryLongitude: z.number().min(-180).max(180).optional(),
     checkoutToken: z.string().uuid(), items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).min(1),
   }).safeParse(await body(request));
@@ -323,7 +327,7 @@ export async function handleOrders(request: Request, id?: number) {
   const orderEmail = customerSession ? customerSession.email.trim().toLowerCase() : (parsed.data.email || "").trim().toLowerCase();
   const orderNumber = `HF-${Date.now().toString().slice(-8)}`;
   const result = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: requiresPrescription ? "UNDER_REVIEW" : "NEW", prescriptionStatus: requiresPrescription ? customerPrescription!.status : "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
+    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, paymentMethod: parsed.data.paymentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: requiresPrescription ? "UNDER_REVIEW" : "NEW", prescriptionStatus: requiresPrescription ? customerPrescription!.status : "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
     await tx.insert(orderItems).values(lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })));
     if (customerPrescription) await tx.update(prescriptions).set({ orderId: created.insertId }).where(eq(prescriptions.id, customerPrescription.id));
     return created;
@@ -364,7 +368,7 @@ export async function handleWalkInSales(request: Request) {
           throw new Error(`Insufficient stock for ${product.name}.`);
         }
       }
-      const [created] = await tx.insert(orders).values({ orderNumber, customerName: parsed.data.customerName || "Walk-in customer", phone: parsed.data.phone || "Walk-in", email: parsed.data.email || null, fulfilmentMethod: "PICKUP", status: "COMPLETED", paymentStatus: "PAID", subtotal: subtotal.toString(), deliveryFee: "0", discount: "0", total: subtotal.toString(), suggestedBranchId: branch.id });
+      const [created] = await tx.insert(orders).values({ orderNumber, customerName: parsed.data.customerName || "Walk-in customer", phone: parsed.data.phone || "Walk-in", email: parsed.data.email || null, fulfilmentMethod: "PICKUP", status: "COMPLETED", paymentStatus: "PAID", paymentMethod: "CASH", amountPaid: subtotal.toString(), subtotal: subtotal.toString(), deliveryFee: "0", discount: "0", total: subtotal.toString(), suggestedBranchId: branch.id });
       await tx.insert(orderItems).values(itemList.map((item) => { const product = catalog.find((entry) => entry.id === item.productId)!; const unitPrice = Number(product.discountPrice ?? product.price); return { orderId: created.insertId, productId: product.id, productName: product.name, quantity: item.quantity, unitPrice: unitPrice.toString(), lineTotal: (unitPrice * item.quantity).toString() }; }));
       for (const item of itemList) { const record = stock.find((row) => row.productId === item.productId)!; await tx.update(branchInventory).set({ quantityAvailable: record.quantityAvailable - item.quantity, updatedBy: auth.session.userId }).where(eq(branchInventory.id, record.id)); }
       await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "WALK_IN_SALE", entityType: "order", entityId: String(created.insertId), metadata: { branchId: branch.id, total: subtotal, itemCount: itemList.length } });
@@ -583,8 +587,10 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   await mkdir(directory, { recursive: true });
   const storedName = `${randomUUID()}${extension}`;
   await writeFile(path.join(directory, storedName), bytes, { flag: "wx" });
-  const displayName = `Prescription - ${new Date().toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}${extension}`;
-  const [created] = await getDb().insert(prescriptions).values({ customerId: auth.session.userId, storageKey: storedName, originalFilename: displayName, mimeType: file.type, sizeBytes: file.size, status: "RECEIVED" });
+  const [sender] = await getDb().select({ firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.id, auth.session.userId)).limit(1);
+  const senderName = `${sender?.firstName || auth.session.firstName} ${sender?.lastName || ""}`.trim().slice(0, 200);
+  const displayName = `Prescription - ${senderName} - ${new Date().toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}${extension}`;
+  const [created] = await getDb().insert(prescriptions).values({ customerId: auth.session.userId, senderName, storageKey: storedName, originalFilename: displayName, mimeType: file.type, sizeBytes: file.size, status: "RECEIVED" });
   void sendEmail({to:auth.session.email,subject:"Prescription received",message:`Hello ${auth.session.firstName},\n\nWe received your prescription and it is awaiting pharmacist review. Track its progress from your Healthfield account.`,action:{label:"Track prescription",url:`${storefrontOrigin()}/account#prescriptions`},channel:"orders"});
   if(process.env.NOTIFICATION_EMAIL)void sendEmail({to:process.env.NOTIFICATION_EMAIL,subject:"New prescription awaiting review",message:`A new prescription upload is awaiting pharmacist review. Reference: ${created.insertId}.`,channel:"orders"});
   return json({ ok: true, id: created.insertId }, { status: 201 });

@@ -127,6 +127,20 @@
       "when": 1785915000000,
       "tag": "0017_force_nullable_session_revocation",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1785916000000,
+      "tag": "0018_prescription_sender_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1786002400000,
+      "tag": "0019_order_payment_details",
+      "breakpoints": true
     }
   ]
 }
