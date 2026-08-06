@@ -118,7 +118,7 @@ export async function handleAuth(request: Request, action: string) {
     }
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
     if (user.role === "CUSTOMER") await db.update(orders).set({ customerId: user.id }).where(and(isNull(orders.customerId), eq(orders.email, user.email)));
-    return json({ token: await createSessionToken(session), session, role: user.role, redirectTo: user.forcePasswordChange ? "/change-password" : user.role === "CUSTOMER" ? "/account" : user.role === "STAFF" ? "/staff" : "/admin" });
+    return json({ token: await createSessionToken(session), session, role: user.role, redirectTo: user.forcePasswordChange ? "/change-password" : user.role === "CUSTOMER" ? "/" : user.role === "STAFF" ? "/staff" : "/admin" });
   }
   if (action === "two-factor" && request.method === "POST") {
     const parsed = z.object({ challengeToken: z.string().min(60).max(100), code: z.string().trim().regex(/^\d{6}$/) }).safeParse(await body(request));
@@ -137,12 +137,13 @@ export async function handleAuth(request: Request, action: string) {
     }
     const [user] = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
     if (!user || !user.isActive || !team.includes(user.role as typeof team[number])) return json({ error: "This login request is no longer valid." }, { status: 401 });
+    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
+    const token = await createSessionToken(session);
     const [claimed] = await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.id, challenge.id), isNull(twoFactorChallenges.usedAt)));
     if (claimed.affectedRows !== 1) return json({ error: "This security code has already been used." }, { status: 401 });
     await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.userId, challenge.userId), isNull(twoFactorChallenges.usedAt)));
     await db.update(users).set({ twoFactorEnabled: true, lastLoginAt: new Date() }).where(eq(users.id, user.id));
-    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
-    return json({ token: await createSessionToken(session), session, role: user.role, redirectTo: teamRedirect(user) });
+    return json({ token, session, role: user.role, redirectTo: teamRedirect(user) });
   }
   if (action === "two-factor-resend" && request.method === "POST") {
     const parsed = z.object({ challengeToken: z.string().min(60).max(100) }).safeParse(await body(request));
@@ -237,7 +238,7 @@ export async function handleAuth(request: Request, action: string) {
     if (!user || !(await bcrypt.compare(parsed.data.currentPassword, user.passwordHash))) return json({ error: "Current password is incorrect." }, { status: 400 });
     await db.update(users).set({ passwordHash: await bcrypt.hash(parsed.data.newPassword, 12), forcePasswordChange: false }).where(eq(users.id, user.id));
     const session = { ...auth.session, forcePasswordChange: false };
-    return json({ token: await createSessionToken(session), session, redirectTo: session.role === "CUSTOMER" ? "/account" : session.role === "STAFF" ? "/staff" : "/admin" });
+    return json({ token: await createSessionToken(session), session, redirectTo: session.role === "CUSTOMER" ? "/" : session.role === "STAFF" ? "/staff" : "/admin" });
   }
   return json({ error: "Authentication route not found." }, { status: 404 });
 }

@@ -263,6 +263,11 @@ export function Storefront({
               <Package /> My orders
             </a>
           )}
+          {viewer && (
+            <form className="desktop-logout" action="/api/auth/logout" method="post">
+              <button type="submit">Log out</button>
+            </form>
+          )}
           <a href="/wishlist">
             <Heart /> Wishlist ({wishlist.length})
           </a>

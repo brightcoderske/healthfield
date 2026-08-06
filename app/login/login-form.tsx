@@ -41,6 +41,7 @@ export function LoginForm() {
     event.preventDefault();
     if (loginInFlight.current) return;
     loginInFlight.current = true;
+    sessionStorage.removeItem(twoFactorStorageKey);
     setLoading(true);
     setError("");
     const form = new FormData(event.currentTarget);
@@ -85,7 +86,16 @@ export function LoginForm() {
     try {
       const response = await fetch("/api/auth/two-factor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ challengeToken, code: securityCode }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) { setError(data.error ?? "The security code could not be verified."); setLoading(false); return; }
+      if (!response.ok) {
+        const message = String(data.error ?? "The security code could not be verified.");
+        if (message.includes("already been completed")) {
+          clearChallenge();
+          setError("This verification request has already ended. Please sign in again to receive a new code.");
+          setLoading(false);
+          return;
+        }
+        setError(message); setLoading(false); return;
+      }
       sessionStorage.removeItem(twoFactorStorageKey);
       window.location.assign(data.redirectTo);
     } catch { setError("Healthfield could not verify the security code. Please try again."); setLoading(false); }
