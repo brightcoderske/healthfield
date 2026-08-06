@@ -277,6 +277,23 @@ export async function handleChats(request: Request) {
 }
 
 export async function handleOrders(request: Request, id?: number) {
+  if (request.method === "DELETE" && id) {
+    const auth = await requireSession(request, [...admins]);
+    if ("response" in auth) return auth.response;
+    const db = getDb();
+    const [order] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, status: orders.status }).from(orders).where(eq(orders.id, id)).limit(1);
+    if (!order) return json({ error: "Order not found." }, { status: 404 });
+    if (!["NEW", "CONFIRMED", "UNDER_REVIEW", "CANCELLED"].includes(order.status)) return json({ error: "Only unfulfilled or cancelled orders can be deleted. Completed and dispatched orders are retained for audit records." }, { status: 409 });
+    await db.transaction(async tx => {
+      const items = await tx.select({ id: orderItems.id }).from(orderItems).where(eq(orderItems.orderId, id));
+      if (items.length) await tx.delete(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map(item => item.id)));
+      await tx.update(prescriptions).set({ orderId: null }).where(eq(prescriptions.orderId, id));
+      await tx.delete(orderItems).where(eq(orderItems.orderId, id));
+      await tx.delete(orders).where(eq(orders.id, id));
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_DELETED", entityType: "order", entityId: String(id), metadata: { orderNumber: order.orderNumber } });
+    });
+    return json({ ok: true, message: `Order ${order.orderNumber} was deleted.` });
+  }
   if (request.method === "PATCH" && id) {
     const auth = await requireSession(request, [...team]);
     if ("response" in auth) return auth.response;
