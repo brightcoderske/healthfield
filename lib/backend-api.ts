@@ -63,16 +63,6 @@ export async function proxyAuth(request: Request, action: "login" | "register" |
   const response = await backendRequest(`/v1/auth/${action}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Healthfield-Client-IP": clientIp }, body: JSON.stringify(payload) });
   const data = await response.json().catch(() => ({})) as { token?: string; redirectTo?: string; error?: string; role?: string; [key: string]: unknown };
   const { token, ...clientData } = data;
-  if (response.ok && token) {
-    const validation = await fetch(`${apiBase()}/v1/auth/session`, {
-      headers: { Authorization: `Bearer ${token}`, "X-Healthfield-Key": apiKey() },
-      cache: "no-store",
-    }).catch(() => null);
-    if (!validation?.ok) {
-      console.error("[auth.login] newly issued session rejected", { action, status: validation?.status ?? 0 });
-      return NextResponse.json({ error: "The login service issued an invalid session. Please try again shortly." }, { status: 502 });
-    }
-  }
   const result = NextResponse.json(clientData, { status: response.status });
   if (response.ok && token) {
     result.cookies.set(SESSION_COOKIE, token, { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 60 * 60 * (data.role === "CUSTOMER" ? 8 : 12), path: "/", priority: "high" });
