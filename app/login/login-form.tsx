@@ -20,6 +20,7 @@ export function LoginForm() {
   const [developmentCode, setDevelopmentCode] = useState("");
   const loginInFlight = useRef(false);
   const verificationInFlight = useRef(false);
+  const freshLoginStarted = useRef(false);
   const urlError = searchParams.get("error");
 
   function clearChallenge() {
@@ -28,6 +29,7 @@ export function LoginForm() {
   }
 
   useEffect(() => {
+    if (freshLoginStarted.current) return;
     try {
       const stored = JSON.parse(sessionStorage.getItem(twoFactorStorageKey) || "null") as StoredChallenge | null;
       if (stored && /^.{60,100}$/.test(stored.challengeToken) && stored.maskedEmail) {
@@ -41,6 +43,7 @@ export function LoginForm() {
     event.preventDefault();
     if (loginInFlight.current) return;
     loginInFlight.current = true;
+    freshLoginStarted.current = true;
     sessionStorage.removeItem(twoFactorStorageKey);
     setLoading(true);
     setError("");
