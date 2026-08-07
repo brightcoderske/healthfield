@@ -1,6 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
-import "./dashboard.module.css";
+import styles from "./dashboard.module.css";
 import {
   BarChart3,
   ClipboardList,
@@ -111,7 +111,7 @@ export function Dashboard({
     };
   }, [analytics, range]);
   return (
-    <main className="dashboard-page">
+    <main className={`dashboard-page ${styles.root}`}>
       <header className="dashboard-top">
         <div>
           <span>Healthfield administration</span>
