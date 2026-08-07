@@ -72,3 +72,4 @@ tsconfig.tsbuildinfo
 api-service/node_modules/
 api-service/tmp/
 api-service/*.tar.gz
+api-service/.pnpm-lock.sha256
