@@ -1,15 +1,103 @@
 "use client";
-import { ArrowLeft,CheckCircle2,CreditCard,LocateFixed,MapPin,ShoppingCart } from "lucide-react";
+
+import { ArrowLeft, Check, CheckCircle2, Clipboard, CreditCard, LoaderCircle, LocateFixed, MapPin, ReceiptText, ShoppingBag, ShoppingCart, Smartphone } from "lucide-react";
 import Image from "next/image";
-import { FormEvent,useMemo,useRef,useState } from "react";
-type Product={id:number;name:string;price:string;discountPrice:string|null;packSize:string|null};
-type Customer={firstName:string;lastName:string;email:string;phone:string|null}|null;
-export function CheckoutForm({initialCart,initialCatalog,customer}:{initialCart:Record<number,number>;initialCatalog:Product[];customer:Customer}){
- const [method,setMethod]=useState<"DELIVERY"|"PICKUP">("DELIVERY"),[error,setError]=useState(""),[complete,setComplete]=useState<{orderNumber:string;total:number}|null>(null),[coordinates,setCoordinates]=useState<{latitude:number;longitude:number}|null>(null),[locating,setLocating]=useState(false),[submitting,setSubmitting]=useState(false);
- const checkoutToken=useRef(globalThis.crypto?.randomUUID?.()??crypto.randomUUID());
- const lines=useMemo(()=>Object.entries(initialCart).map(([id,quantity])=>({product:initialCatalog.find(item=>item.id===Number(id)),quantity})).filter(line=>line.product),[initialCart,initialCatalog]),subtotal=lines.reduce((sum,line)=>sum+Number(line.product!.discountPrice??line.product!.price)*line.quantity,0);
- function locate(){if(!navigator.geolocation)return setError("Location services are not available on this device.");setLocating(true);setError("");navigator.geolocation.getCurrentPosition(({coords})=>{setCoordinates({latitude:coords.latitude,longitude:coords.longitude});setLocating(false)},()=>{setError("Allow location access, then try again.");setLocating(false)},{enableHighAccuracy:true,timeout:12000})}
- async function submit(event:FormEvent<HTMLFormElement>){event.preventDefault();if(submitting||complete)return;setSubmitting(true);setError("");try{const form=new FormData(event.currentTarget),response=await fetch("/api/orders",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({checkoutToken:checkoutToken.current,fullName:form.get("fullName"),phone:form.get("phone"),email:form.get("email"),fulfilmentMethod:method,paymentMethod:form.get("payment"),deliveryAddress:form.get("deliveryAddress"),deliveryArea:form.get("deliveryArea"),deliveryLatitude:coordinates?.latitude,deliveryLongitude:coordinates?.longitude,items:lines.map(line=>({productId:line.product!.id,quantity:line.quantity}))})}),data=await response.json().catch(()=>({}));if(!response.ok)return setError(data.error??"Unable to place order.");setComplete(data)}catch{setError("Unable to reach checkout. Please try again.")}finally{setSubmitting(false)}}
- if(complete)return <main className="checkout-success"><CheckCircle2/><h1>Order placed</h1><p>Your order <strong>{complete.orderNumber}</strong> has been sent to Healthfield Pharmacy. Your cart is now clear.</p><a href="/#products">Continue shopping</a></main>;
- return <main className="checkout-page"><header><a href="/#products"><ArrowLeft/> Shop</a><Image src="/healthfield-logo-clean.png" alt="Healthfield Pharmacy" width={210} height={75}/><a href={customer?"/account":"/login?next=/checkout"}>{customer?`Hi, ${customer.firstName}`:"Sign in"}</a></header><div className="checkout-layout"><form onSubmit={submit}><span className="auth-kicker">Secure checkout</span><h1>Delivery details</h1><div className="checkout-methods"><button type="button" className={method==="DELIVERY"?"active":""} onClick={()=>setMethod("DELIVERY")}><MapPin/> Home delivery</button><button type="button" className={method==="PICKUP"?"active":""} onClick={()=>setMethod("PICKUP")}><ShoppingCart/> Pickup</button></div><div className="checkout-fields"><label>Full name<input name="fullName" defaultValue={customer?`${customer.firstName} ${customer.lastName}`:""} required/></label><label>Phone number<input name="phone" defaultValue={customer?.phone??""} required/></label><label>Email address<input name="email" type="email" defaultValue={customer?.email??""}/></label><label>Town or area<input name="deliveryArea" required={method==="DELIVERY"}/></label>{method==="DELIVERY"?<><label className="full">Delivery address<textarea name="deliveryAddress" rows={3} required/></label><div className="checkout-location full"><button type="button" onClick={locate} disabled={locating}><LocateFixed/>{locating?"Getting location…":coordinates?"Location captured":"Use my current location"}</button>{coordinates?<a target="_blank" rel="noreferrer" href={`https://www.google.com/maps?q=${coordinates.latitude},${coordinates.longitude}`}>Preview on Google Maps</a>:null}</div></>:null}</div><h2>Payment method</h2><label className="payment-choice"><input type="radio" defaultChecked name="payment" value="MPESA"/><CreditCard/><span><strong>M-Pesa</strong><small>Payment prompt after confirmation</small></span></label>{error?<div className="auth-error">{error}</div>:null}<button className="place-order" disabled={!lines.length||submitting}>{submitting?"Sending order…":"Place order"}</button></form><aside><h2>Order summary</h2>{lines.map(line=><article key={line.product!.id}><div><strong>{line.product!.name}</strong><small>{line.product!.packSize} · Qty {line.quantity}</small></div><span>KES {(Number(line.product!.discountPrice??line.product!.price)*line.quantity).toLocaleString()}</span></article>)}<div className="checkout-total"><span>Subtotal<b>KES {subtotal.toLocaleString()}</b></span><span>Delivery<b>KES {method==="DELIVERY"?"250":"0"}</b></span><span>Total<strong>KES {(subtotal+(method==="DELIVERY"?250:0)).toLocaleString()}</strong></span></div></aside></div></main>
+import Link from "next/link";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+
+type Product = { id: number; name: string; price: string; discountPrice: string | null; packSize: string | null };
+type Customer = { firstName: string; lastName: string; email: string; phone: string | null } | null;
+type PaymentOptions = { onlineMpesaEnabled: boolean; onlineManualEnabled: boolean; tillNumber: string | null; accountName: string | null };
+type PaymentMethod = "MPESA_EXPRESS" | "MANUAL_MPESA";
+type CheckoutResult = { id: number; orderNumber: string; total: number; state: "WAITING" | "REVIEW" | "PAID" | "FAILED"; message: string };
+
+async function clearCheckoutCart() { await fetch("/api/cart", { method: "DELETE" }).catch(() => undefined); }
+
+export function CheckoutForm({ initialCart, initialCatalog, customer, payment }: { initialCart: Record<number, number>; initialCatalog: Product[]; customer: Customer; payment: PaymentOptions }) {
+  const initialPayment: PaymentMethod = payment.onlineMpesaEnabled ? "MPESA_EXPRESS" : "MANUAL_MPESA";
+  const [method, setMethod] = useState<"DELIVERY" | "PICKUP">("DELIVERY");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(initialPayment);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<CheckoutResult | null>(null);
+  const [coordinates, setCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [manualMessage, setManualMessage] = useState("");
+  const [copied, setCopied] = useState(false);
+  const checkoutToken = useRef(globalThis.crypto?.randomUUID?.() ?? crypto.randomUUID());
+  const pollCount = useRef(0);
+  const lines = useMemo(() => Object.entries(initialCart).map(([id, quantity]) => ({ product: initialCatalog.find((item) => item.id === Number(id)), quantity })).filter((line) => line.product), [initialCart, initialCatalog]);
+  const subtotal = lines.reduce((sum, line) => sum + Number(line.product!.discountPrice ?? line.product!.price) * line.quantity, 0);
+  const total = subtotal + (method === "DELIVERY" ? 250 : 0);
+
+  useEffect(() => {
+    if (result?.state !== "WAITING") return;
+    let cancelled = false;
+    async function check() {
+      pollCount.current += 1;
+      const response = await fetch("/api/payments/reconcile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken: checkoutToken.current }) }).catch(() => null);
+      if (!response || cancelled) return;
+      const data = await response.json().catch(() => ({}));
+      if (data.paid || data.order?.paymentStatus === "PAID") {
+        await clearCheckoutCart();
+        if (!cancelled) setResult((current) => current ? { ...current, state: "PAID", message: `M-Pesa payment confirmed. Receipt ${data.order?.paymentReference || "received"}.` } : current);
+      } else if (data.failed || data.order?.paymentStatus === "FAILED") {
+        if (!cancelled) setResult((current) => current ? { ...current, state: "FAILED", message: data.message || data.payment?.resultDescription || "The M-Pesa payment was not completed." } : current);
+      } else if (pollCount.current >= 24 && !cancelled) {
+        setResult((current) => current ? { ...current, state: "FAILED", message: "We could not confirm the M-Pesa prompt. You can submit the till payment message below." } : current);
+      }
+    }
+    void check();
+    const timer = window.setInterval(() => void check(), 5_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [result?.state]);
+
+  function locate() {
+    if (!navigator.geolocation) return setError("Location services are not available on this device.");
+    setLocating(true); setError("");
+    navigator.geolocation.getCurrentPosition(({ coords }) => { setCoordinates({ latitude: coords.latitude, longitude: coords.longitude }); setLocating(false); }, () => { setError("Allow location access, then try again."); setLocating(false); }, { enableHighAccuracy: true, timeout: 12_000 });
+  }
+
+  async function copyTill() {
+    if (!payment.tillNumber) return;
+    try { await navigator.clipboard.writeText(payment.tillNumber); setCopied(true); window.setTimeout(() => setCopied(false), 2_000); }
+    catch { setError(`Copy the till number manually: ${payment.tillNumber}`); }
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (submitting || result) return;
+    const form = new FormData(event.currentTarget);
+    if (!customer && !String(form.get("email") || "").trim()) return setError("Enter your email so this guest order can appear in your account if you register later.");
+    setSubmitting(true); setError("");
+    try {
+      const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken: checkoutToken.current, fullName: form.get("fullName"), phone: form.get("phone"), email: form.get("email"), fulfilmentMethod: method, paymentMethod, billingPhone: form.get("billingPhone"), manualPaymentMessage: paymentMethod === "MANUAL_MPESA" ? manualMessage : undefined, deliveryAddress: form.get("deliveryAddress"), deliveryArea: form.get("deliveryArea"), deliveryLatitude: coordinates?.latitude, deliveryLongitude: coordinates?.longitude, items: lines.map((line) => ({ productId: line.product!.id, quantity: line.quantity })) }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return setError(data.error ?? "Unable to start checkout.");
+      const nextState = paymentMethod === "MANUAL_MPESA" ? "REVIEW" : data.paymentStatus === "FAILED" ? "FAILED" : "WAITING";
+      setResult({ id: data.id, orderNumber: data.orderNumber, total: Number(data.total), state: nextState, message: data.paymentMessage || "Payment request started." });
+      if (nextState === "REVIEW") await clearCheckoutCart();
+    } catch { setError("Unable to reach checkout. Please try again."); }
+    finally { setSubmitting(false); }
+  }
+
+  async function submitFallback(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true); setError("");
+    const response = await fetch("/api/payments/manual", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken: checkoutToken.current, message: manualMessage }) }).catch(() => null);
+    const data = await response?.json().catch(() => ({}));
+    if (!response?.ok) setError(data?.error || "Payment proof could not be submitted.");
+    else {
+      await clearCheckoutCart();
+      setResult((current) => current ? { ...current, state: data.paid ? "PAID" : "REVIEW", message: data.message } : current);
+    }
+    setSubmitting(false);
+  }
+
+  const tillPanel = payment.onlineManualEnabled ? <div className="manual-payment-panel"><div><span>Pay to M-Pesa Till</span><strong>{payment.tillNumber}</strong><small>{payment.accountName || "Healthfield Pharmacy"}</small></div><button type="button" onClick={copyTill}>{copied ? <Check /> : <Clipboard />}{copied ? "Copied" : "Copy till"}</button><p>Amount to pay: <strong>KES {total.toLocaleString()}</strong></p><label>Paste the complete M-Pesa confirmation message<textarea value={manualMessage} onChange={(event) => setManualMessage(event.target.value)} rows={4} placeholder="Paste the message showing the transaction code, amount and till payment" required /></label></div> : null;
+
+  if (result) return <main className={`checkout-success payment-result payment-${result.state.toLowerCase()}`}>{result.state === "WAITING" ? <LoaderCircle className="spin" /> : result.state === "FAILED" ? <ReceiptText /> : <CheckCircle2 />}<span>{result.orderNumber}</span><h1>{result.state === "PAID" ? "Payment confirmed — order placed" : result.state === "REVIEW" ? "Payment proof received" : result.state === "WAITING" ? "Approve payment on your phone" : "Payment not completed"}</h1><p>{result.message}</p><strong>KES {result.total.toLocaleString()}</strong>{result.state === "REVIEW" ? <small>An administrator will verify the M-Pesa code and approve the order before processing begins.</small> : null}{result.state === "FAILED" && payment.onlineManualEnabled ? <form className="payment-fallback" onSubmit={submitFallback}><h2>Use manual M-Pesa payment</h2>{tillPanel}{error ? <div className="auth-error" role="alert">{error}</div> : null}<button disabled={submitting || manualMessage.trim().length < 10}>{submitting ? "Submitting…" : "Submit payment proof"}</button></form> : null}<div><Link href="/#products"><ShoppingBag /> Continue shopping</Link>{result.state !== "WAITING" ? <Link href={customer ? "/account#orders" : "/login"}>View order</Link> : null}</div></main>;
+
+  const noPayments = !payment.onlineMpesaEnabled && !payment.onlineManualEnabled;
+  return <main className="checkout-page"><header><Link href="/#products"><ArrowLeft /> Shop</Link><Image src="/healthfield-logo-clean.png" alt="Healthfield Pharmacy" width={210} height={75}/><Link href={customer ? "/account" : "/login?next=/checkout"}>{customer ? `Hi, ${customer.firstName}` : "Sign in"}</Link></header><div className="checkout-layout"><form onSubmit={submit}><span className="auth-kicker">Secure checkout</span><h1>Delivery details</h1><div className="checkout-methods"><button type="button" className={method === "DELIVERY" ? "active" : ""} onClick={() => setMethod("DELIVERY")}><MapPin /> Home delivery</button><button type="button" className={method === "PICKUP" ? "active" : ""} onClick={() => setMethod("PICKUP")}><ShoppingCart /> Pickup</button></div><div className="checkout-fields"><label>Full name<input name="fullName" autoComplete="name" defaultValue={customer ? `${customer.firstName} ${customer.lastName}` : ""} required/></label><label>Phone number<input name="phone" type="tel" autoComplete="tel" defaultValue={customer?.phone ?? ""} required/></label><label>Email address<input name="email" type="email" autoComplete="email" defaultValue={customer?.email ?? ""}/></label><label>Town or area<input name="deliveryArea" required={method === "DELIVERY"}/></label>{method === "DELIVERY" ? <><label className="full">Delivery address<textarea name="deliveryAddress" rows={3} required/></label><div className="checkout-location full"><button type="button" onClick={locate} disabled={locating}><LocateFixed />{locating ? "Getting location…" : coordinates ? "Location captured" : "Use my current location"}</button>{coordinates ? <a target="_blank" rel="noreferrer" href={`https://www.google.com/maps?q=${coordinates.latitude},${coordinates.longitude}`}>Preview on Google Maps</a> : null}</div></> : null}</div><h2>Payment method</h2><div className="payment-options">{payment.onlineMpesaEnabled ? <label className={`payment-choice ${paymentMethod === "MPESA_EXPRESS" ? "active" : ""}`}><input type="radio" name="payment" value="MPESA_EXPRESS" checked={paymentMethod === "MPESA_EXPRESS"} onChange={() => setPaymentMethod("MPESA_EXPRESS")}/><Smartphone/><span><strong>M-Pesa Express</strong><small>Receive a secure STK prompt on your phone</small></span></label> : null}{payment.onlineManualEnabled ? <label className={`payment-choice ${paymentMethod === "MANUAL_MPESA" ? "active" : ""}`}><input type="radio" name="payment" value="MANUAL_MPESA" checked={paymentMethod === "MANUAL_MPESA"} onChange={() => setPaymentMethod("MANUAL_MPESA")}/><CreditCard/><span><strong>Manual M-Pesa</strong><small>Pay to the till and submit the confirmation message</small></span></label> : null}</div>{paymentMethod === "MPESA_EXPRESS" && payment.onlineMpesaEnabled ? <label className="billing-phone">Phone number to receive the M-Pesa prompt<input name="billingPhone" type="tel" inputMode="tel" autoComplete="tel" defaultValue={customer?.phone ?? ""} placeholder="0712 345 678" required/></label> : null}{paymentMethod === "MANUAL_MPESA" ? tillPanel : null}{noPayments ? <div className="auth-error" role="alert">Online payment is temporarily unavailable. Please contact the pharmacy.</div> : null}{error ? <div className="auth-error" role="alert">{error}</div> : null}<button className="place-order" disabled={!lines.length || submitting || noPayments || (paymentMethod === "MANUAL_MPESA" && manualMessage.trim().length < 10)}>{submitting ? "Starting secure payment…" : paymentMethod === "MPESA_EXPRESS" ? "Pay with M-Pesa" : "Submit proof and place order"}</button></form><aside><h2>Order summary</h2>{lines.map((line) => <article key={line.product!.id}><div><strong>{line.product!.name}</strong><small>{line.product!.packSize} · Qty {line.quantity}</small></div><span>KES {(Number(line.product!.discountPrice ?? line.product!.price) * line.quantity).toLocaleString()}</span></article>)}<div className="checkout-total"><span>Subtotal<b>KES {subtotal.toLocaleString()}</b></span><span>Delivery<b>KES {method === "DELIVERY" ? "250" : "0"}</b></span><span>Total<strong>KES {total.toLocaleString()}</strong></span></div></aside></div></main>;
 }

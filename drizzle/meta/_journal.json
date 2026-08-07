@@ -141,6 +141,20 @@
       "when": 1786002400000,
       "tag": "0019_order_payment_details",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1786080000000,
+      "tag": "0020_authoritative_email_two_factor",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "5",
+      "when": 1786166400000,
+      "tag": "0021_mpesa_payment_workflow",
+      "breakpoints": true
     }
   ]
 }

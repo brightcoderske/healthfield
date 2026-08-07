@@ -1,24 +1,25 @@
-import { createHash, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import bcrypt, { hash } from "bcryptjs";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import sharp from "sharp";
 import { z } from "zod";
 import {
-  branches, branchInventory, campaigns, chatConversations, chatMessages, orderItemFulfilments, orderItems, orders,
+  branches, branchInventory, campaigns, chatConversations, chatMessages, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions,
   activityLogs, authSessions, blogPosts, categories, emailVerificationTokens, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, twoFactorChallenges, users,
 } from "../../db/schema";
 import { createPasswordResetToken, createSessionToken, createUploadToken, requireSession, requestSession, revokeSession, revokeUserSessions, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
 import { orderEmailHtml, sendBulkEmail, sendEmail } from "./email";
+import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, emailVerificationTiming } from "./email-verification";
 import { json, publicImageUrl, safeFilename } from "./http";
+import { extractMpesaReceipt, initiateStkPush, mpesaConfiguration } from "./mpesa";
+import { replayStoredStkCallback } from "./payment-handlers";
+import { secureHashEqual, twoFactorChallengeLifetimeMs, twoFactorCodeHash, twoFactorMaximumAttempts, twoFactorMaximumResends, twoFactorResendCooldownMs, twoFactorTiming } from "./two-factor";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
-const twoFactorResendWindowMs = 45 * 60_000;
-const twoFactorValidityMs = 10 * 60_000;
-const twoFactorMaximumAttempts = 10;
 const orderStatuses = ["NEW", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"] as const;
 
 function storefrontOrigin() {
@@ -26,62 +27,59 @@ function storefrontOrigin() {
 }
 
 const tokenHash = (value: string) => createHash("sha256").update(value).digest("hex");
-const twoFactorCodeHash = (challenge: string, code: string) => createHash("sha256").update(`${challenge}:${code}`).digest("hex");
-const secureHashEqual = (left: string, right: string) => {
-  const a = Buffer.from(left, "hex"), b = Buffer.from(right, "hex");
-  return a.length === b.length && timingSafeEqual(a, b);
-};
 const teamRedirect = (user: { role: string; forcePasswordChange: boolean }) => user.forcePasswordChange ? "/change-password" : user.role === "STAFF" ? "/staff" : "/admin";
-const exposeDevelopmentTwoFactorCode = () => process.env.NODE_ENV !== "production" && process.env.AUTH_DEV_EXPOSE_2FA_CODE === "true" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(process.env.APP_URL || "");
-
 async function createEmailTwoFactorChallenge(user: { id: number; email: string; firstName: string }) {
   const rawChallenge = randomUUID() + randomUUID();
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   const now = Date.now();
+  const timing = twoFactorTiming(now);
   const db = getDb();
-  await db.delete(twoFactorChallenges).where(and(eq(twoFactorChallenges.userId, user.id), or(isNotNull(twoFactorChallenges.usedAt), lt(twoFactorChallenges.expiresAtMs, now))));
-  await db.insert(twoFactorChallenges).values({
-    userId: user.id,
-    tokenHash: tokenHash(rawChallenge),
-    codeHash: twoFactorCodeHash(rawChallenge, code),
-    expiresAt: new Date(now + twoFactorValidityMs),
-    expiresAtMs: now + twoFactorValidityMs,
-    lastSentAtMs: now,
-  });
   try {
-    const delivery = await sendEmail({
-      to: user.email,
-      subject: "Your Healthfield secure login code",
-      message: `Hello ${user.firstName},\n\nYour Healthfield administration login code is ${code}.\n\nIt expires in 10 minutes and can only be used once. If you did not try to sign in, change your password and contact the pharmacy owner immediately.`,
-      channel: "security",
+    await db.transaction(async (tx) => {
+      // Serialize challenges for this account so two login tabs cannot both
+      // announce themselves as the newest valid email code.
+      await tx.select({ id: users.id }).from(users).where(eq(users.id, user.id)).for("update");
+      await tx.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, user.id));
+      await tx.insert(twoFactorChallenges).values({
+        userId: user.id,
+        tokenHash: tokenHash(rawChallenge),
+        codeHash: twoFactorCodeHash(rawChallenge, code),
+        expiresAt: new Date(timing.expiresAtMs),
+        expiresAtMs: timing.expiresAtMs,
+        challengeEndsAtMs: now + twoFactorChallengeLifetimeMs,
+        lastSentAtMs: now,
+      });
+      const delivery = await sendEmail({
+        to: user.email,
+        subject: "Your Healthfield secure login code",
+        message: `Hello ${user.firstName},\n\nYour Healthfield administration login code is ${code}.\n\nIt expires in 10 minutes and can only be used once. If you did not try to sign in, change your password and contact the pharmacy owner immediately.`,
+        channel: "security",
+      });
+      if (!delivery.sent) throw new Error(`Security email delivery failed: ${delivery.reason}`);
     });
-    if (!delivery.sent) throw new Error(`Security email delivery failed: ${delivery.reason}`);
   } catch (error) {
-    await db.delete(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, tokenHash(rawChallenge)));
+    await db.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, user.id));
     throw error;
   }
-  // Only the most recently delivered challenge may complete a sign-in. This
-  // prevents an older browser tab or delayed email from creating a competing
-  // authenticated session after the user starts a newer login.
-  await db.update(twoFactorChallenges)
-    .set({ usedAt: new Date() })
-    .where(and(
-      eq(twoFactorChallenges.userId, user.id),
-      isNull(twoFactorChallenges.usedAt),
-      ne(twoFactorChallenges.tokenHash, tokenHash(rawChallenge)),
-    ));
   const [name, domain] = user.email.split("@");
   const maskedEmail = `${name.slice(0, 2)}${"*".repeat(Math.max(2, name.length - 2))}@${domain}`;
-  return { challengeToken: rawChallenge, maskedEmail, ...(exposeDevelopmentTwoFactorCode() ? { developmentCode: code } : {}) };
+  return { challengeToken: rawChallenge, maskedEmail, ...timing, challengeEndsAtMs: now + twoFactorChallengeLifetimeMs };
 }
 async function sendVerificationEmail(user: { id: number; email: string; firstName: string }) {
   const raw = randomUUID() + randomUUID();
   const db = getDb();
+  const timing = emailVerificationTiming(Date.now());
   await db.delete(emailVerificationTokens).where(eq(emailVerificationTokens.userId, user.id));
-  const expiresAtMs = Date.now() + 24 * 60 * 60 * 1000;
-  await db.insert(emailVerificationTokens).values({ userId: user.id, tokenHash: tokenHash(raw), expiresAt: new Date(expiresAtMs), expiresAtMs });
-  const delivery = await sendEmail({ to: user.email, subject: "Verify your Healthfield Pharmacy email", message: `Hello ${user.firstName},\n\nVerify your email to activate your customer account. This link expires in 24 hours.`, action: { label: "Verify email", url: `${storefrontOrigin()}/verify-email?token=${encodeURIComponent(raw)}` }, channel: "security" });
-  if (!delivery.sent) throw new Error(`Verification email delivery failed: ${delivery.reason}`);
+  const rawHash = tokenHash(raw);
+  await db.insert(emailVerificationTokens).values({ userId: user.id, tokenHash: rawHash, expiresAt: new Date(timing.expiresAtMs), expiresAtMs: timing.expiresAtMs });
+  try {
+    const delivery = await sendEmail({ to: user.email, subject: "Activate your Healthfield Pharmacy account", message: `Hello ${user.firstName},\n\nThank you for signing up. Select the button below to verify your email address and activate your customer account. This secure link expires in 24 hours.\n\nIf you did not create this account, you can ignore this email.`, action: { label: "Activate my account", url: `${storefrontOrigin()}/verify-email?token=${encodeURIComponent(raw)}&email=${encodeURIComponent(user.email)}` }, channel: "security" });
+    if (!delivery.sent) throw new Error(`Verification email delivery failed: ${delivery.reason}`);
+    return timing;
+  } catch (error) {
+    await db.delete(emailVerificationTokens).where(eq(emailVerificationTokens.tokenHash, rawHash));
+    throw error;
+  }
 }
 
 async function body(request: Request) {
@@ -127,7 +125,7 @@ export async function handleAuth(request: Request, action: string) {
       }
     }
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
-    if (user.role === "CUSTOMER") await db.update(orders).set({ customerId: user.id }).where(and(isNull(orders.customerId), eq(orders.email, user.email)));
+    if (user.role === "CUSTOMER") await db.update(orders).set({ customerId: user.id }).where(and(isNull(orders.customerId), sql`lower(trim(${orders.email})) = ${user.email.trim().toLowerCase()}`));
     return json({ token: await createSessionToken(session), session, role: user.role, redirectTo: user.forcePasswordChange ? "/change-password" : user.role === "CUSTOMER" ? "/" : user.role === "STAFF" ? "/staff" : "/admin" });
   }
   if (action === "two-factor" && request.method === "POST") {
@@ -135,24 +133,32 @@ export async function handleAuth(request: Request, action: string) {
     if (!parsed.success) return json({ error: "Enter the 6-digit code sent to your email." }, { status: 400 });
     const challengeHash = tokenHash(parsed.data.challengeToken);
     const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, challengeHash)).limit(1);
-    if (!challenge) { console.warn("2FA verification failed", { reason: "challenge_not_found", challengeHash: challengeHash.slice(0, 12) }); return json({ error: "This login request was not found. Return to login and start again." }, { status: 401 }); }
-    if (challenge.usedAt) { console.warn("2FA verification failed", { reason: "challenge_already_completed", challengeId: challenge.id }); return json({ error: "This login request has already been completed. Return to login and start again." }, { status: 401 }); }
-    if (challenge.attemptCount >= twoFactorMaximumAttempts) return json({ error: "Too many incorrect attempts. Select Send another code below." }, { status: 401 });
-    const expiresAtMs = challenge.expiresAtMs ?? challenge.expiresAt.getTime();
-    if (!Number.isFinite(expiresAtMs) || Date.now() > expiresAtMs) { console.warn("2FA verification failed", { reason: "challenge_expired", challengeId: challenge.id }); return json({ error: "This code has expired. Select Send another code below." }, { status: 401 }); }
+    if (!challenge) { console.warn("2FA verification failed", { reason: "challenge_not_found", challengeHash: challengeHash.slice(0, 12) }); return json({ error: "This login request was not found. Return to login and start again.", code: "TWO_FACTOR_ENDED" }, { status: 401 }); }
+    if (challenge.usedAt) { console.warn("2FA verification failed", { reason: "challenge_already_completed", challengeId: challenge.id }); return json({ error: "This login request has already been completed. Return to login and start again.", code: "TWO_FACTOR_ENDED" }, { status: 401 }); }
+    if (challenge.attemptCount >= twoFactorMaximumAttempts) return json({ error: "Too many incorrect attempts. Send a new code to continue.", code: "TWO_FACTOR_LOCKED" }, { status: 401 });
+    const now = Date.now();
+    if (!challenge.expiresAtMs || now >= challenge.expiresAtMs) { console.warn("2FA verification failed", { reason: "challenge_expired", challengeId: challenge.id }); return json({ error: "This code has expired. Send a new code to continue.", code: "TWO_FACTOR_EXPIRED" }, { status: 401 }); }
     const expected = twoFactorCodeHash(parsed.data.challengeToken, parsed.data.code);
     if (!secureHashEqual(challenge.codeHash, expected)) {
-      await db.update(twoFactorChallenges).set({ attemptCount: challenge.attemptCount + 1 }).where(eq(twoFactorChallenges.id, challenge.id));
-      return json({ error: challenge.attemptCount >= twoFactorMaximumAttempts - 1 ? "Too many incorrect attempts. Select Send another code below." : `That security code is incorrect. ${twoFactorMaximumAttempts - challenge.attemptCount - 1} attempts remain.` }, { status: 401 });
+      const attemptsRemaining = twoFactorMaximumAttempts - challenge.attemptCount - 1;
+      await db.update(twoFactorChallenges).set({ attemptCount: challenge.attemptCount + 1 }).where(and(eq(twoFactorChallenges.id, challenge.id), isNull(twoFactorChallenges.usedAt), eq(twoFactorChallenges.attemptCount, challenge.attemptCount)));
+      return json({ error: attemptsRemaining <= 0 ? "Too many incorrect attempts. Send a new code to continue." : `That code is incorrect. ${attemptsRemaining} ${attemptsRemaining === 1 ? "attempt" : "attempts"} remaining.`, code: attemptsRemaining <= 0 ? "TWO_FACTOR_LOCKED" : "TWO_FACTOR_INCORRECT", attemptsRemaining }, { status: 401 });
     }
     const [user] = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
     if (!user || !user.isActive || !team.includes(user.role as typeof team[number])) return json({ error: "This login request is no longer valid." }, { status: 401 });
-    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
-    const token = await createSessionToken(session);
-    const [claimed] = await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.id, challenge.id), isNull(twoFactorChallenges.usedAt)));
+    // Consume the verifier before creating a session. Concurrent submissions
+    // can both read the row, but exactly one can claim this code.
+    const [claimed] = await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.id, challenge.id), eq(twoFactorChallenges.codeHash, expected), isNull(twoFactorChallenges.usedAt), eq(twoFactorChallenges.attemptCount, challenge.attemptCount), gte(twoFactorChallenges.expiresAtMs, now)));
     if (claimed.affectedRows !== 1) return json({ error: "This security code has already been used." }, { status: 401 });
-    await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.userId, challenge.userId), isNull(twoFactorChallenges.usedAt)));
-    await db.update(users).set({ twoFactorEnabled: true, lastLoginAt: new Date() }).where(eq(users.id, user.id));
+    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
+    let token: string;
+    try {
+      token = await createSessionToken(session);
+    } catch (error) {
+      console.error("2FA verification failed", { reason: "session_creation_failed", challengeId: challenge.id, error });
+      return json({ error: "Your code was accepted, but the secure session could not be created. Return to login for a new code." }, { status: 503 });
+    }
+    await db.update(users).set({ twoFactorEnabled: true, lastLoginAt: new Date() }).where(eq(users.id, user.id)).catch((error) => console.error("2FA login audit update failed", { userId: user.id, error }));
     return json({ token, session, role: user.role, redirectTo: teamRedirect(user) });
   }
   if (action === "two-factor-resend" && request.method === "POST") {
@@ -160,22 +166,28 @@ export async function handleAuth(request: Request, action: string) {
     if (!parsed.success) return json({ error: "This login request is invalid." }, { status: 400 });
     const hash = tokenHash(parsed.data.challengeToken);
     const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, hash)).limit(1);
-    const expiresAtMs = challenge ? (challenge.expiresAtMs ?? challenge.expiresAt.getTime()) : 0;
-    if (!challenge || challenge.usedAt || !Number.isFinite(expiresAtMs) || Date.now() > expiresAtMs || challenge.resendCount >= 3) return json({ error: "This secure login request has ended. Return to login to start again." }, { status: 429 });
-    if (challenge.lastSentAtMs && Date.now() - challenge.lastSentAtMs < 60_000) return json({ error: "Please wait one minute before requesting another code." }, { status: 429 });
+    const now = Date.now();
+    if (!challenge || challenge.usedAt || now >= challenge.challengeEndsAtMs || challenge.resendCount >= twoFactorMaximumResends) return json({ error: "This secure login request has ended. Return to login to start again.", code: "TWO_FACTOR_ENDED" }, { status: 429 });
+    if (!challenge.lastSentAtMs || now - challenge.lastSentAtMs < twoFactorResendCooldownMs) {
+      const retryAfterSeconds = Math.max(1, Math.ceil(((challenge.lastSentAtMs || now) + twoFactorResendCooldownMs - now) / 1000));
+      return json({ error: `You can send another code in ${retryAfterSeconds} seconds.`, code: "TWO_FACTOR_COOLDOWN", retryAfterSeconds }, { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } });
+    }
     const [user] = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
     if (!user || !user.isActive || !team.includes(user.role as typeof team[number])) return json({ error: "This login request is no longer valid." }, { status: 401 });
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    const timing = twoFactorTiming(now);
+    const { expiresAtMs } = timing;
+    const [rotated] = await db.update(twoFactorChallenges).set({ codeHash: twoFactorCodeHash(parsed.data.challengeToken, code), attemptCount: 0, resendCount: challenge.resendCount + 1, expiresAt: new Date(expiresAtMs), expiresAtMs, lastSentAtMs: now }).where(and(eq(twoFactorChallenges.id, challenge.id), isNull(twoFactorChallenges.usedAt), eq(twoFactorChallenges.resendCount, challenge.resendCount)));
+    if (rotated.affectedRows !== 1) return json({ error: "This secure login request has changed. Return to login to start again.", code: "TWO_FACTOR_ENDED" }, { status: 409 });
     try {
       const delivery = await sendEmail({ to: user.email, subject: "Your new Healthfield secure login code", message: `Hello ${user.firstName},\n\nYour new Healthfield administration login code is ${code}.\n\nIt expires in 10 minutes and can only be used once.`, channel: "security" });
       if (!delivery.sent) throw new Error(`Security email delivery failed: ${delivery.reason}`);
     } catch (error) {
       console.error("Two-factor resend failed", error);
-      return json({ error: "The new code could not be sent. Please try again shortly." }, { status: 503 });
+      await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(eq(twoFactorChallenges.id, challenge.id));
+      return json({ error: "The new code could not be sent. Return to login and try again.", code: "TWO_FACTOR_DELIVERY_FAILED" }, { status: 503 });
     }
-    const now = Date.now();
-    await db.update(twoFactorChallenges).set({ codeHash: twoFactorCodeHash(parsed.data.challengeToken, code), attemptCount: 0, resendCount: challenge.resendCount + 1, expiresAt: new Date(now + twoFactorValidityMs), expiresAtMs: now + twoFactorValidityMs, lastSentAtMs: now, createdAt: new Date() }).where(eq(twoFactorChallenges.id, challenge.id));
-    return json({ ok: true, message: "A new security code has been sent.", ...(exposeDevelopmentTwoFactorCode() ? { developmentCode: code } : {}) });
+    return json({ ok: true, message: "A new security code has been sent.", ...timing, challengeEndsAtMs: challenge.challengeEndsAtMs });
   }
   if (action === "forgot-password" && request.method === "POST") {
     const parsed = z.object({ email: z.string().trim().toLowerCase().email() }).safeParse(await body(request));
@@ -219,25 +231,51 @@ export async function handleAuth(request: Request, action: string) {
       console.error("Customer registration insert failed", error);
       return json({ error: "That email address or phone number is already registered." }, { status: 409 });
     }
-    await db.update(orders).set({ customerId: created.insertId }).where(and(isNull(orders.customerId), eq(orders.email, customer.email)));
-    await sendVerificationEmail({ id: created.insertId, email: customer.email, firstName: customer.firstName }).catch(console.error);
-    if (process.env.NOTIFICATION_EMAIL) await sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New Healthfield customer account", message: `${customer.firstName} ${customer.lastName} created a customer account.\nEmail: ${customer.email}\nPhone: ${customer.phone}`, channel:"security" }).catch(console.error);
-    return json({ ok: true, redirectTo: `/verify-email?sent=1&email=${encodeURIComponent(customer.email)}` }, { status: 201 });
+    let verificationSent = true;
+    try {
+      await sendVerificationEmail({ id: created.insertId, email: customer.email, firstName: customer.firstName });
+    } catch (error) {
+      verificationSent = false;
+      console.error("Registration activation email failed", { userId: created.insertId, error });
+    }
+    const query = new URLSearchParams({ sent: "1", email: customer.email, delivery: verificationSent ? "sent" : "failed" });
+    return json({ ok: true, email: customer.email, verificationSent, redirectTo: `/verify-email?${query}` }, { status: 201 });
   }
   if (action === "verify-email" && request.method === "POST") {
     const parsed = z.object({ token: z.string().min(40) }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "This verification link is invalid." }, { status: 400 });
     const [record] = await db.select().from(emailVerificationTokens).where(eq(emailVerificationTokens.tokenHash, tokenHash(parsed.data.token))).limit(1);
-    if (!record || record.usedAt || !record.expiresAtMs || record.expiresAtMs < Date.now()) return json({ error: "This verification link is invalid or has expired." }, { status: 400 });
-    await db.transaction(async tx => { await tx.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, record.userId)); await tx.update(emailVerificationTokens).set({ usedAt: new Date() }).where(eq(emailVerificationTokens.id, record.id)); });
-    return json({ ok: true, message: "Email verified. You can now sign in." });
+    if (!record || !record.expiresAtMs || record.expiresAtMs <= Date.now()) return json({ error: "This activation link is invalid or has expired.", code: "ACTIVATION_LINK_INVALID" }, { status: 400 });
+    const [user] = await db.select().from(users).where(and(eq(users.id, record.userId), eq(users.role, "CUSTOMER"))).limit(1);
+    if (!user) return json({ error: "This activation link is no longer valid.", code: "ACTIVATION_LINK_INVALID" }, { status: 400 });
+    if (record.usedAt || user.emailVerifiedAt) {
+      if (!user.emailVerifiedAt) return json({ error: "This activation link is no longer valid.", code: "ACTIVATION_LINK_INVALID" }, { status: 400 });
+      return json({ ok: true, alreadyActivated: true, message: "Your email is already verified. You can continue to login." });
+    }
+    const activated = await db.transaction(async (tx) => {
+      const [result] = await tx.update(users).set({ emailVerifiedAt: new Date() }).where(and(eq(users.id, user.id), isNull(users.emailVerifiedAt)));
+      await tx.update(emailVerificationTokens).set({ usedAt: new Date() }).where(and(eq(emailVerificationTokens.userId, user.id), isNull(emailVerificationTokens.usedAt)));
+      if (result.affectedRows === 1) await tx.update(orders).set({ customerId: user.id }).where(and(isNull(orders.customerId), sql`lower(trim(${orders.email})) = ${user.email.trim().toLowerCase()}`));
+      return result.affectedRows === 1;
+    });
+    if (activated && process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New verified Healthfield customer", message: `${user.firstName} ${user.lastName} activated a customer account.\nEmail: ${user.email}\nPhone: ${user.phone || "Not provided"}`, channel: "security" }).catch(console.error);
+    return json({ ok: true, alreadyActivated: !activated, message: activated ? "Your email has been verified and your account is ready." : "Your email is already verified. You can continue to login." });
   }
   if (action === "resend-verification" && request.method === "POST") {
     const parsed = z.object({ email: z.string().trim().toLowerCase().email() }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Enter a valid email." }, { status: 400 });
     const [user] = await db.select().from(users).where(and(eq(users.email, parsed.data.email), eq(users.role, "CUSTOMER"))).limit(1);
-    if (user && !user.emailVerifiedAt) await sendVerificationEmail(user).catch(console.error);
-    return json({ ok: true, message: "If the account needs verification, a new link has been sent." });
+    if (!user || user.emailVerifiedAt) return json({ ok: true, message: "If this account still needs activation, a fresh link has been sent." });
+    const [current] = await db.select({ expiresAtMs: emailVerificationTokens.expiresAtMs }).from(emailVerificationTokens).where(and(eq(emailVerificationTokens.userId, user.id), isNull(emailVerificationTokens.usedAt))).orderBy(desc(emailVerificationTokens.createdAt)).limit(1);
+    const retryAfterSeconds = emailVerificationRetryAfterSeconds(current?.expiresAtMs ?? null, Date.now());
+    if (retryAfterSeconds > 0) return json({ error: `Please wait ${retryAfterSeconds} seconds before requesting another activation email.`, code: "ACTIVATION_COOLDOWN", retryAfterSeconds }, { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } });
+    try {
+      await sendVerificationEmail(user);
+      return json({ ok: true, message: `A fresh activation link has been sent to ${user.email}.`, retryAfterSeconds: emailVerificationResendCooldownMs / 1000 });
+    } catch (error) {
+      console.error("Activation email resend failed", { userId: user.id, error });
+      return json({ error: "We could not send the activation email right now. Please try again shortly.", code: "ACTIVATION_DELIVERY_FAILED" }, { status: 503 });
+    }
   }
   if (action === "change-password" && request.method === "POST") {
     const auth = await requireSession(request, [...team]);
@@ -296,8 +334,23 @@ export async function handleOrders(request: Request, id?: number) {
     if (!order) return json({ error: "Order not found." }, { status: 404 });
     if (!["NEW", "CONFIRMED", "UNDER_REVIEW", "CANCELLED"].includes(order.status)) return json({ error: "Only unfulfilled or cancelled orders can be deleted. Completed and dispatched orders are retained for audit records." }, { status: 409 });
     await db.transaction(async tx => {
-      const items = await tx.select({ id: orderItems.id }).from(orderItems).where(eq(orderItems.orderId, id));
-      if (items.length) await tx.delete(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map(item => item.id)));
+      const items = await tx.select({ id: orderItems.id, productId: orderItems.productId }).from(orderItems).where(eq(orderItems.orderId, id));
+      if (items.length) {
+        const fulfilments = await tx.select().from(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map(item => item.id)));
+        for (const fulfilment of fulfilments) {
+          const item = items.find((row) => row.id === fulfilment.orderItemId);
+          if (!item?.productId || fulfilment.quantityReserved <= 0) continue;
+          const [stock] = await tx.select().from(branchInventory).where(and(eq(branchInventory.branchId, fulfilment.branchId), eq(branchInventory.productId, item.productId))).limit(1).for("update");
+          if (stock) await tx.update(branchInventory).set({ quantityReserved: Math.max(0, stock.quantityReserved - fulfilment.quantityReserved), updatedBy: auth.session.userId }).where(eq(branchInventory.id, stock.id));
+        }
+        await tx.delete(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map(item => item.id)));
+      }
+      const payments = await tx.select({ id: paymentTransactions.id }).from(paymentTransactions).where(eq(paymentTransactions.orderId, id));
+      if (payments.length) {
+        await tx.update(mpesaIncomingPayments).set({ matchedTransactionId: null }).where(inArray(mpesaIncomingPayments.matchedTransactionId, payments.map((payment) => payment.id)));
+        await tx.update(mpesaStkCallbacks).set({ processedTransactionId: null }).where(inArray(mpesaStkCallbacks.processedTransactionId, payments.map((payment) => payment.id)));
+        await tx.delete(paymentTransactions).where(eq(paymentTransactions.orderId, id));
+      }
       await tx.update(prescriptions).set({ orderId: null }).where(eq(prescriptions.orderId, id));
       await tx.delete(orderItems).where(eq(orderItems.orderId, id));
       await tx.delete(orders).where(eq(orders.id, id));
@@ -316,8 +369,54 @@ export async function handleOrders(request: Request, id?: number) {
     const editable=!['READY_FOR_DISPATCH','OUT_FOR_DELIVERY','READY_FOR_PICKUP','COMPLETED','CANCELLED'].includes(order.status);
     const {status,fulfilments,...details}=parsed.data;
     if (["BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED"].includes(status) && order.prescriptionStatus !== "NOT_REQUIRED" && order.prescriptionStatus !== "APPROVED") return json({ error: "Approve the linked prescription before fulfilling or dispatching this order." }, { status: 409 });
+    if (["CONFIRMED","BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED"].includes(status) && order.paymentStatus !== "PAID") return json({ error: "Confirm payment before approving, processing or dispatching this order." }, { status: 409 });
+    if (!editable && status !== order.status) return json({ error: "A dispatched, completed or cancelled order cannot move to another status." }, { status: 409 });
     if (!editable && fulfilments) return json({ error: "Serving-store assignments lock after packaging." }, { status: 400 });
-    try { await db.transaction(async tx=>{await tx.update(orders).set({status,...(editable?details:{})}).where(eq(orders.id,id));if(!fulfilments)return;const items=await tx.select({id:orderItems.id,productId:orderItems.productId,productName:orderItems.productName,quantity:orderItems.quantity}).from(orderItems).where(eq(orderItems.orderId,id));const byId=new Map(items.map(item=>[item.id,item]));const branchRows=await tx.select({id:branches.id}).from(branches).where(inArray(branches.id,fulfilments.map(row=>row.branchId)));if(branchRows.length!==new Set(fulfilments.map(row=>row.branchId)).size)throw new Error("Choose valid serving stores.");for(const row of fulfilments){const item=byId.get(row.orderItemId);if(!item||item.productId===null||row.quantityReserved!==item.quantity||row.quantityPacked>row.quantityReserved)throw new Error("Check the serving-store quantities.");}const old=items.length?await tx.select().from(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId,items.map(item=>item.id))):[];const productIds=items.flatMap(item=>item.productId===null?[]:[item.productId]);const inventory=productIds.length?await tx.select().from(branchInventory).where(inArray(branchInventory.productId,productIds)):[];const index=new Map(inventory.map(row=>[`${row.branchId}:${row.productId}`,{...row}]));for(const row of old){const item=byId.get(row.orderItemId);if(!item?.productId)continue;const record=index.get(`${row.branchId}:${item.productId}`);if(record&&record.quantityReserved>=row.quantityReserved){record.quantityAvailable+=row.quantityReserved;record.quantityReserved-=row.quantityReserved;}}const finalStatus=["READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED"].includes(status);for(const row of fulfilments){const item=byId.get(row.orderItemId)!;const record=index.get(`${row.branchId}:${item.productId}`);if(!record||record.quantityAvailable<row.quantityReserved)throw new Error(`Insufficient stock for ${item.productName} at the selected store.`);record.quantityAvailable-=row.quantityReserved;if(!finalStatus)record.quantityReserved+=row.quantityReserved;}for(const record of index.values())await tx.update(branchInventory).set({quantityAvailable:record.quantityAvailable,quantityReserved:record.quantityReserved,updatedBy:auth.session.userId}).where(eq(branchInventory.id,record.id));await tx.delete(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId,items.map(item=>item.id)));if(fulfilments.length)await tx.insert(orderItemFulfilments).values(fulfilments.map(row=>({...row,handledBy:auth.session.userId})));}); } catch(error) { return json({ error:error instanceof Error?error.message:"Order could not be updated." },{status:400}); }
+    try {
+      await db.transaction(async (tx) => {
+        const items = await tx.select({ id: orderItems.id, productId: orderItems.productId, productName: orderItems.productName, quantity: orderItems.quantity }).from(orderItems).where(eq(orderItems.orderId, id));
+        const byId = new Map(items.map((item) => [item.id, item]));
+        const previous = items.length ? await tx.select().from(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map((item) => item.id))) : [];
+        const target = fulfilments ?? previous.map((row) => ({ orderItemId: row.orderItemId, branchId: row.branchId, quantityReserved: row.quantityReserved, quantityPacked: row.quantityPacked, status: row.status }));
+        if (target.length) {
+          const branchRows = await tx.select({ id: branches.id }).from(branches).where(inArray(branches.id, target.map((row) => row.branchId)));
+          if (branchRows.length !== new Set(target.map((row) => row.branchId)).size) throw new Error("Choose valid serving stores.");
+          for (const row of target) {
+            const item = byId.get(row.orderItemId);
+            if (!item || item.productId === null || row.quantityReserved !== item.quantity || row.quantityPacked > row.quantityReserved) throw new Error("Check the serving-store quantities.");
+          }
+        }
+        const productIds = items.flatMap((item) => item.productId === null ? [] : [item.productId]);
+        const inventory = productIds.length ? await tx.select().from(branchInventory).where(inArray(branchInventory.productId, productIds)).for("update") : [];
+        const index = new Map(inventory.map((row) => [`${row.branchId}:${row.productId}`, { ...row }]));
+        const changingAllocation = fulfilments !== undefined || status === "CANCELLED" || ["READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED"].includes(status);
+        if (changingAllocation) {
+          for (const row of previous) {
+            const item = byId.get(row.orderItemId);
+            const record = item?.productId ? index.get(`${row.branchId}:${item.productId}`) : undefined;
+            if (record) record.quantityReserved = Math.max(0, record.quantityReserved - row.quantityReserved);
+          }
+        }
+        const finalStatus = ["READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED"].includes(status);
+        if (status !== "CANCELLED" && changingAllocation) {
+          if (finalStatus && !target.length) throw new Error("Assign a serving store before dispatching this order.");
+          for (const row of target) {
+            const item = byId.get(row.orderItemId)!;
+            const record = index.get(`${row.branchId}:${item.productId}`);
+            const sellable = record ? record.quantityAvailable - record.quantityReserved : 0;
+            if (!record || sellable < row.quantityReserved) throw new Error(`Insufficient stock for ${item.productName} at the selected store.`);
+            if (finalStatus) record.quantityAvailable -= row.quantityReserved;
+            else record.quantityReserved += row.quantityReserved;
+          }
+        }
+        for (const record of index.values()) await tx.update(branchInventory).set({ quantityAvailable: record.quantityAvailable, quantityReserved: record.quantityReserved, updatedBy: auth.session.userId }).where(eq(branchInventory.id, record.id));
+        if (changingAllocation && items.length) {
+          await tx.delete(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map((item) => item.id)));
+          if (status !== "CANCELLED" && target.length) await tx.insert(orderItemFulfilments).values(target.map((row) => ({ ...row, quantityPacked: finalStatus ? row.quantityReserved : row.quantityPacked, status: finalStatus ? "READY" as const : row.status, handledBy: auth.session.userId })));
+        }
+        await tx.update(orders).set({ status, ...(editable ? details : {}) }).where(eq(orders.id, id));
+      });
+    } catch(error) { return json({ error:error instanceof Error?error.message:"Order could not be updated." },{status:400}); }
     if(order.status===status)return json({ok:true,status});
     const label = status==="READY_FOR_DISPATCH"?"packaged and ready for dispatch":status.replaceAll("_", " ").toLowerCase();
     const notificationEmail=details.email===undefined?order.email:details.email,notificationName=details.customerName||order.customerName;
@@ -328,22 +427,29 @@ export async function handleOrders(request: Request, id?: number) {
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
   const parsed = z.object({
     fullName: z.string().trim().min(3).max(200), phone: z.string().trim().min(9).max(30), email: z.string().trim().email().optional().or(z.literal("")),
-    fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA", "CASH"]).default("MPESA"), deliveryAddress: z.string().trim().max(1000).optional(), deliveryArea: z.string().trim().max(160).optional(),
+    fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA_EXPRESS", "MANUAL_MPESA"]), billingPhone: z.string().trim().max(30).optional(), manualPaymentMessage: z.string().trim().max(2500).optional(), deliveryAddress: z.string().trim().max(1000).optional(), deliveryArea: z.string().trim().max(160).optional(),
     deliveryLatitude: z.number().min(-90).max(90).optional(), deliveryLongitude: z.number().min(-180).max(180).optional(),
     checkoutToken: z.string().uuid(), items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).min(1),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid order." }, { status: 400 });
   if (parsed.data.fulfilmentMethod === "DELIVERY" && !parsed.data.deliveryAddress) return json({ error: "Delivery address is required." }, { status: 400 });
   const db = getDb();
-  const [duplicate] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, total: orders.total }).from(orders).where(eq(orders.checkoutToken, parsed.data.checkoutToken)).limit(1);
-  if (duplicate) return json({ ok: true, id: duplicate.id, orderNumber: duplicate.orderNumber, total: Number(duplicate.total), duplicate: true });
+  const [duplicate] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, total: orders.total, paymentStatus: orders.paymentStatus, paymentMethod: orders.paymentMethod }).from(orders).where(eq(orders.checkoutToken, parsed.data.checkoutToken)).limit(1);
+  if (duplicate) return json({ ok: true, id: duplicate.id, orderNumber: duplicate.orderNumber, total: Number(duplicate.total), paymentStatus: duplicate.paymentStatus, paymentMethod: duplicate.paymentMethod, duplicate: true });
+  const [paymentSettings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber }).from(siteSettings).limit(1);
+  if (parsed.data.paymentMethod === "MPESA_EXPRESS" && (!paymentSettings?.onlineMpesaEnabled || !mpesaConfiguration())) return json({ error: "M-Pesa Express is currently unavailable. Choose manual M-Pesa payment.", code: "MPESA_UNAVAILABLE" }, { status: 409 });
+  if (parsed.data.paymentMethod === "MANUAL_MPESA" && (!paymentSettings?.onlineManualEnabled || !paymentSettings.mpesaTillNumber)) return json({ error: "Manual M-Pesa payment is currently unavailable.", code: "MANUAL_PAYMENT_UNAVAILABLE" }, { status: 409 });
+  const manualReceipt = parsed.data.paymentMethod === "MANUAL_MPESA" ? extractMpesaReceipt(parsed.data.manualPaymentMessage || "") : null;
+  if (parsed.data.paymentMethod === "MANUAL_MPESA" && !manualReceipt) return json({ error: "Paste the complete M-Pesa payment message, including its transaction code." }, { status: 400 });
   const catalog = await db.select().from(products).where(inArray(products.id, parsed.data.items.map((item) => item.productId)));
   if (catalog.length !== new Set(parsed.data.items.map((item) => item.productId)).size) return json({ error: "One or more products are unavailable." }, { status: 409 });
   const lines = parsed.data.items.map((item) => { const product = catalog.find((entry) => entry.id === item.productId)!; const price = Number(product.discountPrice ?? product.price); return { ...item, product, price, total: price * item.quantity }; });
   const subtotal = lines.reduce((sum, line) => sum + line.total, 0);
   const deliveryFee = parsed.data.fulfilmentMethod === "DELIVERY" ? 250 : 0;
+  if (parsed.data.paymentMethod === "MPESA_EXPRESS" && !Number.isInteger(subtotal + deliveryFee)) return json({ error: "M-Pesa Express requires a whole-shilling total. Choose manual M-Pesa for this order." }, { status: 409 });
   const session = await requestSession(request);
   const customerSession = session?.role === "CUSTOMER" ? session : null;
+  if (!customerSession && !parsed.data.email) return json({ error: "Enter your email so this guest order can be linked if you create an account later." }, { status: 400 });
   const requiresPrescription = catalog.some(product => product.prescriptionRequired);
   let customerPrescription: typeof prescriptions.$inferSelect | undefined;
   if (requiresPrescription) {
@@ -355,14 +461,30 @@ export async function handleOrders(request: Request, id?: number) {
   const orderEmail = customerSession ? customerSession.email.trim().toLowerCase() : (parsed.data.email || "").trim().toLowerCase();
   const orderNumber = `HF-${Date.now().toString().slice(-8)}`;
   const result = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, paymentMethod: parsed.data.paymentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: requiresPrescription ? "UNDER_REVIEW" : "NEW", prescriptionStatus: requiresPrescription ? customerPrescription!.status : "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
+    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, paymentMethod: parsed.data.paymentMethod, paymentReference: manualReceipt, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: requiresPrescription ? "UNDER_REVIEW" : "NEW", prescriptionStatus: requiresPrescription ? customerPrescription!.status : "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
     await tx.insert(orderItems).values(lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })));
     if (customerPrescription) await tx.update(prescriptions).set({ orderId: created.insertId }).where(eq(prescriptions.id, customerPrescription.id));
-    return created;
+    const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: (subtotal + deliveryFee).toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
+    return { orderId: created.insertId, paymentId: payment.insertId };
   });
-  if (orderEmail) void sendEmail({ to: orderEmail, subject: `Order ${orderNumber} received`, message: `Hello ${parsed.data.fullName},\n\nWe received order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}.\n\nWe will update you as your order progresses.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"NEW"}), channel:"orders" });
+  let paymentStatus: "PENDING" | "FAILED" = "PENDING";
+  let paymentMessage = parsed.data.paymentMethod === "MANUAL_MPESA" ? "Payment proof submitted for administrator approval." : "Check your phone and enter your M-Pesa PIN.";
+  if (parsed.data.paymentMethod === "MPESA_EXPRESS") {
+    try {
+      const stk = await initiateStkPush({ orderNumber, phone: parsed.data.billingPhone || parsed.data.phone, amount: subtotal + deliveryFee });
+      await db.update(paymentTransactions).set({ status: "PENDING", checkoutRequestId: stk.checkoutRequestId, merchantRequestId: stk.merchantRequestId, phone: stk.phone, resultDescription: stk.customerMessage, providerPayload: stk.providerPayload }).where(eq(paymentTransactions.id, result.paymentId));
+      await replayStoredStkCallback(stk.checkoutRequestId);
+      paymentMessage = stk.customerMessage;
+    } catch (error) {
+      paymentStatus = "FAILED";
+      paymentMessage = error instanceof Error ? error.message : "M-Pesa Express could not start.";
+      await db.update(paymentTransactions).set({ status: "FAILED", resultDescription: paymentMessage }).where(eq(paymentTransactions.id, result.paymentId));
+      await db.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, result.orderId));
+    }
+  }
+  if (orderEmail && parsed.data.paymentMethod === "MANUAL_MPESA") void sendEmail({ to: orderEmail, subject: `Payment proof received for ${orderNumber}`, message: `Hello ${parsed.data.fullName},\n\nWe received your payment proof for order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}. We will confirm it before processing the order.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"PAYMENT REVIEW"}), channel:"orders" });
   if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.`, channel:"orders" });
-  return json({ ok: true, id: result.insertId, orderNumber, total: subtotal + deliveryFee }, { status: 201 });
+  return json({ ok: true, id: result.orderId, orderNumber, total: subtotal + deliveryFee, paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
 }
 
 export async function handleWalkInSales(request: Request) {
@@ -373,10 +495,13 @@ export async function handleWalkInSales(request: Request) {
     branchId: z.number().int().positive(),
     customerName: z.string().trim().max(200).optional(), phone: z.string().trim().max(30).optional(),
     email: z.string().trim().email().optional().or(z.literal("")),
+    checkoutToken: z.string().uuid(), paymentMethod: z.enum(["CASH", "MPESA_EXPRESS", "MANUAL_MPESA"]), billingPhone: z.string().trim().max(30).optional(), manualPaymentMessage: z.string().trim().max(2500).optional(),
     items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).min(1),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: "Choose a branch and at least one valid product." }, { status: 400 });
   const db = getDb();
+  const [duplicate] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, total: orders.total, paymentStatus: orders.paymentStatus }).from(orders).where(eq(orders.checkoutToken, parsed.data.checkoutToken)).limit(1);
+  if (duplicate) return json({ ok: true, id: duplicate.id, orderNumber: duplicate.orderNumber, total: Number(duplicate.total), paymentStatus: duplicate.paymentStatus, duplicate: true });
   const [branch] = await db.select({ id: branches.id }).from(branches).where(and(eq(branches.id, parsed.data.branchId), eq(branches.isActive, true))).limit(1);
   if (!branch) return json({ error: "Choose an active branch." }, { status: 400 });
   const grouped = new Map<number, number>();
@@ -385,24 +510,57 @@ export async function handleWalkInSales(request: Request) {
   const catalog = await db.select().from(products).where(and(inArray(products.id, itemList.map((item) => item.productId)), eq(products.isActive, true)));
   if (catalog.length !== itemList.length) return json({ error: "One or more products are unavailable." }, { status: 409 });
   const subtotal = itemList.reduce((sum, item) => { const product = catalog.find((entry) => entry.id === item.productId)!; return sum + Number(product.discountPrice ?? product.price) * item.quantity; }, 0);
+  if (parsed.data.paymentMethod === "MPESA_EXPRESS" && !Number.isInteger(subtotal)) return json({ error: "M-Pesa Express requires a whole-shilling total. Choose cash or manual M-Pesa." }, { status: 409 });
+  const [paymentSettings] = await db.select({ posCashEnabled: siteSettings.posCashEnabled, posMpesaEnabled: siteSettings.posMpesaEnabled, posManualEnabled: siteSettings.posManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber }).from(siteSettings).limit(1);
+  if (parsed.data.paymentMethod === "CASH" && paymentSettings?.posCashEnabled === false) return json({ error: "Cash payment is disabled in settings." }, { status: 409 });
+  if (parsed.data.paymentMethod === "MPESA_EXPRESS" && (!paymentSettings?.posMpesaEnabled || !mpesaConfiguration())) return json({ error: "M-Pesa Express is unavailable. Choose cash or manual M-Pesa." }, { status: 409 });
+  if (parsed.data.paymentMethod === "MANUAL_MPESA" && (!paymentSettings?.posManualEnabled || !paymentSettings.mpesaTillNumber)) return json({ error: "Manual M-Pesa is unavailable." }, { status: 409 });
+  const manualReceipt = null;
   const orderNumber = `POS-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 5).toUpperCase()}`;
   try {
     const result = await db.transaction(async (tx) => {
-      const stock = await tx.select().from(branchInventory).where(and(eq(branchInventory.branchId, branch.id), inArray(branchInventory.productId, itemList.map((item) => item.productId))));
+      const stock = await tx.select().from(branchInventory).where(and(eq(branchInventory.branchId, branch.id), inArray(branchInventory.productId, itemList.map((item) => item.productId)))).for("update");
       for (const item of itemList) {
         const record = stock.find((row) => row.productId === item.productId);
-        if (!record || record.quantityAvailable < item.quantity) {
+        if (!record || record.quantityAvailable - record.quantityReserved < item.quantity) {
           const product = catalog.find((entry) => entry.id === item.productId)!;
           throw new Error(`Insufficient stock for ${product.name}.`);
         }
       }
-      const [created] = await tx.insert(orders).values({ orderNumber, customerName: parsed.data.customerName || "Walk-in customer", phone: parsed.data.phone || "Walk-in", email: parsed.data.email || null, fulfilmentMethod: "PICKUP", status: "COMPLETED", paymentStatus: "PAID", paymentMethod: "CASH", amountPaid: subtotal.toString(), subtotal: subtotal.toString(), deliveryFee: "0", discount: "0", total: subtotal.toString(), suggestedBranchId: branch.id });
-      await tx.insert(orderItems).values(itemList.map((item) => { const product = catalog.find((entry) => entry.id === item.productId)!; const unitPrice = Number(product.discountPrice ?? product.price); return { orderId: created.insertId, productId: product.id, productName: product.name, quantity: item.quantity, unitPrice: unitPrice.toString(), lineTotal: (unitPrice * item.quantity).toString() }; }));
-      for (const item of itemList) { const record = stock.find((row) => row.productId === item.productId)!; await tx.update(branchInventory).set({ quantityAvailable: record.quantityAvailable - item.quantity, updatedBy: auth.session.userId }).where(eq(branchInventory.id, record.id)); }
-      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "WALK_IN_SALE", entityType: "order", entityId: String(created.insertId), metadata: { branchId: branch.id, total: subtotal, itemCount: itemList.length } });
-      return created.insertId;
+      const paidCash = parsed.data.paymentMethod === "CASH";
+      const cashReference = paidCash ? `CASH-${orderNumber}` : null;
+      const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerName: parsed.data.customerName || "Walk-in customer", phone: parsed.data.phone || parsed.data.billingPhone || "Walk-in", email: parsed.data.email || null, fulfilmentMethod: "PICKUP", status: paidCash ? "COMPLETED" : "NEW", paymentStatus: paidCash ? "PAID" : "PENDING", paymentMethod: parsed.data.paymentMethod, paymentReference: manualReceipt || cashReference, amountPaid: paidCash ? subtotal.toFixed(2) : "0", subtotal: subtotal.toFixed(2), deliveryFee: "0", discount: "0", total: subtotal.toFixed(2), suggestedBranchId: branch.id });
+      const insertedItems: Array<{ id: number; productId: number; quantity: number }> = [];
+      for (const item of itemList) {
+        const product = catalog.find((entry) => entry.id === item.productId)!;
+        const unitPrice = Number(product.discountPrice ?? product.price);
+        const [createdItem] = await tx.insert(orderItems).values({ orderId: created.insertId, productId: product.id, productName: product.name, quantity: item.quantity, unitPrice: unitPrice.toFixed(2), lineTotal: (unitPrice * item.quantity).toFixed(2) });
+        insertedItems.push({ id: createdItem.insertId, productId: item.productId, quantity: item.quantity });
+      }
+      for (const item of insertedItems) {
+        const record = stock.find((row) => row.productId === item.productId)!;
+        await tx.update(branchInventory).set({ quantityAvailable: paidCash ? record.quantityAvailable - item.quantity : record.quantityAvailable, quantityReserved: paidCash ? record.quantityReserved : record.quantityReserved + item.quantity, updatedBy: auth.session.userId }).where(eq(branchInventory.id, record.id));
+        await tx.insert(orderItemFulfilments).values({ orderItemId: item.id, branchId: branch.id, handledBy: auth.session.userId, quantityReserved: paidCash ? 0 : item.quantity, quantityPacked: paidCash ? item.quantity : 0, status: paidCash ? "READY" : "RESERVED" });
+      }
+      const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "POS", status: paidCash ? "PAID" : parsed.data.paymentMethod === "MANUAL_MPESA" ? "PENDING" : "INITIATED", amount: subtotal.toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone || null, receiptNumber: cashReference, manualMessage: null, verifiedAt: paidCash ? new Date() : null, reviewedBy: paidCash ? auth.session.userId : null, reviewedAt: paidCash ? new Date() : null });
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: paidCash ? "WALK_IN_SALE" : "WALK_IN_PAYMENT_STARTED", entityType: "order", entityId: String(created.insertId), metadata: { branchId: branch.id, total: subtotal, itemCount: itemList.length, paymentMethod: parsed.data.paymentMethod } });
+      return { orderId: created.insertId, paymentId: payment.insertId };
     });
-    return json({ ok: true, id: result, orderNumber, total: subtotal }, { status: 201 });
+    if (parsed.data.paymentMethod === "CASH") return json({ ok: true, paid: true, paymentStatus: "PAID", id: result.orderId, orderNumber, total: subtotal }, { status: 201 });
+    let message = parsed.data.paymentMethod === "MANUAL_MPESA" ? "Checking the till payment." : "Check the customer's phone for the M-Pesa prompt.";
+    if (parsed.data.paymentMethod === "MPESA_EXPRESS") {
+      try {
+        const stk = await initiateStkPush({ orderNumber, phone: parsed.data.billingPhone || parsed.data.phone || "", amount: subtotal });
+        await db.update(paymentTransactions).set({ status: "PENDING", checkoutRequestId: stk.checkoutRequestId, merchantRequestId: stk.merchantRequestId, phone: stk.phone, resultDescription: stk.customerMessage, providerPayload: stk.providerPayload }).where(eq(paymentTransactions.id, result.paymentId));
+        await replayStoredStkCallback(stk.checkoutRequestId);
+        message = stk.customerMessage;
+      } catch (error) {
+        message = error instanceof Error ? error.message : "M-Pesa Express could not start.";
+        await db.update(paymentTransactions).set({ status: "FAILED", resultDescription: message }).where(eq(paymentTransactions.id, result.paymentId));
+        await db.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, result.orderId));
+      }
+    }
+    return json({ ok: true, paid: false, paymentStatus: "PENDING", id: result.orderId, checkoutToken: parsed.data.checkoutToken, orderNumber, total: subtotal, message }, { status: 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Walk-in sale could not be completed.";
     console.error("Walk-in sale failed", error);
@@ -636,7 +794,7 @@ export async function handleInventory(request: Request, id: number) {
 export async function handleSettings(request: Request) {
   const db = getDb();
   if (request.method === "GET") {
-    const [settings] = await db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone, whatsapp: siteSettings.whatsapp, supportEmail: siteSettings.supportEmail, address: siteSettings.address, openingHours: siteSettings.openingHours, deliveryMessage: siteSettings.deliveryMessage, freeDeliveryThreshold: siteSettings.freeDeliveryThreshold,licenceTitle:siteSettings.licenceTitle,licenceNumber:siteSettings.licenceNumber,licenceImageUrl:siteSettings.licenceImageUrl }).from(siteSettings).limit(1);
+    const [settings] = await db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone, whatsapp: siteSettings.whatsapp, supportEmail: siteSettings.supportEmail, address: siteSettings.address, openingHours: siteSettings.openingHours, deliveryMessage: siteSettings.deliveryMessage, freeDeliveryThreshold: siteSettings.freeDeliveryThreshold,licenceTitle:siteSettings.licenceTitle,licenceNumber:siteSettings.licenceNumber,licenceImageUrl:siteSettings.licenceImageUrl,onlineMpesaEnabled:siteSettings.onlineMpesaEnabled,onlineManualEnabled:siteSettings.onlineManualEnabled,posCashEnabled:siteSettings.posCashEnabled,posMpesaEnabled:siteSettings.posMpesaEnabled,posManualEnabled:siteSettings.posManualEnabled,mpesaTillNumber:siteSettings.mpesaTillNumber,mpesaAccountName:siteSettings.mpesaAccountName }).from(siteSettings).limit(1);
     return json({ settings: settings ?? null });
   }
   const auth = await requireSession(request, [...admins]);
@@ -646,10 +804,11 @@ export async function handleSettings(request: Request) {
     address: z.string().trim().max(1000), openingHours: z.string().trim().max(255), deliveryMessage: z.string().trim().min(2).max(255), freeDeliveryThreshold: z.coerce.number().nonnegative().optional(),
     bulkSmsApiUrl: z.string().trim().url().or(z.literal("")), bulkSmsApiKey: z.string().trim().max(500), bulkSmsSenderId: z.string().trim().max(50),
     facebookUrl: z.string().trim().url().or(z.literal("")), instagramUrl: z.string().trim().url().or(z.literal("")), xUrl: z.string().trim().url().or(z.literal("")), tiktokUrl: z.string().trim().url().or(z.literal("")), licenceTitle:z.string().trim().max(190),licenceNumber:z.string().trim().max(120),licenceImageUrl:z.string().trim().max(500), requireTeamTwoFactor: z.boolean(),
+    onlineMpesaEnabled:z.boolean(),onlineManualEnabled:z.boolean(),posCashEnabled:z.boolean(),posMpesaEnabled:z.boolean(),posManualEnabled:z.boolean(),mpesaTillNumber:z.string().trim().max(30),mpesaAccountName:z.string().trim().max(150),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid settings." }, { status: 400 });
   const data = parsed.data;
-  const values = { ...data, phone: data.phone || null, whatsapp: data.whatsapp || null, supportEmail: data.supportEmail || null, address: data.address || null, openingHours: data.openingHours || null, freeDeliveryThreshold: data.freeDeliveryThreshold?.toString() ?? null, bulkSmsApiUrl: data.bulkSmsApiUrl || null, bulkSmsApiKey: data.bulkSmsApiKey || null, bulkSmsSenderId: data.bulkSmsSenderId || null, facebookUrl: data.facebookUrl || null, instagramUrl: data.instagramUrl || null, xUrl: data.xUrl || null, tiktokUrl: data.tiktokUrl || null, updatedBy: auth.session.userId };
+  const values = { ...data, phone: data.phone || null, whatsapp: data.whatsapp || null, supportEmail: data.supportEmail || null, address: data.address || null, openingHours: data.openingHours || null, freeDeliveryThreshold: data.freeDeliveryThreshold?.toString() ?? null, bulkSmsApiUrl: data.bulkSmsApiUrl || null, bulkSmsApiKey: data.bulkSmsApiKey || null, bulkSmsSenderId: data.bulkSmsSenderId || null, facebookUrl: data.facebookUrl || null, instagramUrl: data.instagramUrl || null, xUrl: data.xUrl || null, tiktokUrl: data.tiktokUrl || null, mpesaTillNumber:data.mpesaTillNumber||null,mpesaAccountName:data.mpesaAccountName||null, updatedBy: auth.session.userId };
   const [current] = await db.select({ id: siteSettings.id }).from(siteSettings).limit(1);
   if (current) await db.update(siteSettings).set(values).where(eq(siteSettings.id, current.id)); else await db.insert(siteSettings).values(values);
   return json({ ok: true });

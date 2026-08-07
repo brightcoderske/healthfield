@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ImageOff, Package, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, ImageOff, Package, Plus, Search, Trash2, X } from "lucide-react";
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 import { RichTextEditor } from "./rich-text-editor";
 
@@ -11,11 +11,13 @@ type Product = {
   prescriptionRequired: boolean;
 };
 type Option = { id: number; name: string };
+const PAGE_SIZE = 25;
 
 export function ProductManager({ initialProducts, categories, conditions }: { initialProducts: Product[]; categories: Option[]; conditions: Option[] }) {
   const [items, setItems] = useState(initialProducts);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
+  const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Product | "new" | null>(null);
   const [message, setMessage] = useState("");
   const [savingId, setSavingId] = useState<number | "new" | null>(null);
@@ -27,6 +29,9 @@ export function ProductManager({ initialProducts, categories, conditions }: { in
     `${item.name} ${item.brand || ""}`.toLowerCase().includes(query.toLowerCase()) &&
     (category === "all" || item.categoryId === Number(category)),
   ), [items, query, category]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const visibleProducts = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -109,11 +114,13 @@ export function ProductManager({ initialProducts, categories, conditions }: { in
     setMessage("");
   }
   return <main className="compact-admin-page">
-    <header><div><a href="/admin"><ArrowLeft/> Dashboard</a><h1>Products</h1><p>Catalogue products and storefront information.</p></div><button onClick={() => openEditor("new")}><Plus/> Add product</button></header>
-    <div className="compact-table-tools"><label><Search/><input value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="Search product or brand"/></label><select value={category} onChange={(event)=>setCategory(event.target.value)}><option value="all">All categories</option>{categories.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select><span>{filtered.length} rows</span></div>
+    <header><div><a href="/admin"><ArrowLeft/> Dashboard</a><h1>Products</h1></div><button onClick={() => openEditor("new")}><Plus/> Add product</button></header>
+    <div className="compact-table-tools"><label><Search/><input value={query} onChange={(event)=>{setQuery(event.target.value);setPage(1)}} placeholder="Search all products by name or brand"/></label><select value={category} onChange={(event)=>{setCategory(event.target.value);setPage(1)}}><option value="all">All categories</option>{categories.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select><span>{filtered.length} products</span></div>
     <div className="compact-table"><div className="compact-table-head product-row"><span>Image</span><span>Product</span><span>Category</span><span>Price</span><span>Status</span><span>Action</span></div>
-      {filtered.map((product)=>{const saving=product.discountPrice!==null&&product.discountPrice<product.price?Math.round((1-product.discountPrice/product.price)*100):0;return <div className={`compact-table-row product-row ${savingId===product.id?"row-saving":""}`} key={product.id}><span className="table-thumb">{product.imageUrl?<img src={product.imageUrl} alt={product.name}/>:<Package/>}</span><span><button className="row-link" onClick={()=>openEditor(product)}>{product.name}</button><small>{product.brand || "No brand"}{product.packSize ? ` · ${product.packSize}` : ""}</small></span><span>{categories.find((item)=>item.id===product.categoryId)?.name || "Uncategorised"}</span><strong>KES {(product.discountPrice??product.price).toLocaleString()}{saving>0&&<small>Save {saving}% · was KES {product.price.toLocaleString()}</small>}</strong><span className={product.isActive?"status-active":"status-inactive"}>{savingId===product.id?"Saving…":product.isActive?"Active":"Inactive"}</span><button className="row-delete" disabled={savingId===product.id} onClick={()=>deactivate(product)}><Trash2/></button></div>})}
+      {visibleProducts.map((product)=>{const saving=product.discountPrice!==null&&product.discountPrice<product.price?Math.round((1-product.discountPrice/product.price)*100):0;return <div className={`compact-table-row product-row ${savingId===product.id?"row-saving":""}`} key={product.id}><span className="table-thumb">{product.imageUrl?<img src={product.imageUrl} alt={product.name}/>:<Package/>}</span><span><button className="row-link" title={product.name} onClick={()=>openEditor(product)}>{product.name}</button><small>{product.brand || "No brand"}{product.packSize ? ` · ${product.packSize}` : ""}</small></span><span title={categories.find((item)=>item.id===product.categoryId)?.name || "Uncategorised"}>{categories.find((item)=>item.id===product.categoryId)?.name || "Uncategorised"}</span><strong>KES {(product.discountPrice??product.price).toLocaleString()}{saving>0&&<small>Save {saving}% · was KES {product.price.toLocaleString()}</small>}</strong><span className={product.isActive?"status-active":"status-inactive"}>{savingId===product.id?"Saving…":product.isActive?"Active":"Inactive"}</span><button className="row-delete" aria-label={`Delete ${product.name}`} disabled={savingId===product.id} onClick={()=>deactivate(product)}><Trash2/></button></div>})}
+      {!visibleProducts.length&&<div className="compact-table-empty"><Package/><strong>No matching products</strong><span>Try another search or category.</span></div>}
     </div>
+    <nav className="compact-pagination" aria-label="Product table pages"><button type="button" onClick={()=>setPage((value)=>Math.max(1,value-1))} disabled={currentPage===1}><ChevronLeft/> Previous</button><span>Page <strong>{currentPage}</strong> of {pageCount} · showing {visibleProducts.length} of {filtered.length}</span><button type="button" onClick={()=>setPage((value)=>Math.min(pageCount,value+1))} disabled={currentPage===pageCount}>Next <ChevronRight/></button></nav>
     {editing && <div className="product-modal" onClick={()=>setEditing(null)}><form onSubmit={save} onClick={(event)=>event.stopPropagation()}><header><div><span><h2>{editing==="new"?"Add product":"Edit product"}</h2><p>Changes update only this product row.</p></span></div><button type="button" onClick={()=>setEditing(null)}><X/></button></header>
       <div className="product-form-grid">
         <label>Product name<input name="name" defaultValue={activeEdit?.name||""} required/></label><label>Brand<input name="brand" defaultValue={activeEdit?.brand||""}/></label>

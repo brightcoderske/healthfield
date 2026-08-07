@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { backendJson } from "@/lib/backend-api";
+import { backendPublicJson } from "@/lib/backend-api";
 
 type Store={id:number;name:string;code:string;phone:string;email:string|null;address:string;latitude:string|null;longitude:string|null;openingHours:Record<string,string>|null;deliveryAreas:string[]|null;updatedAt:string};
 type Area={name:string;near:string[];description:string;keywords:string[]};
@@ -17,7 +17,7 @@ const areas:Record<string,Area>={
 const origin=(process.env.APP_URL||"https://healthfieldpharmacy.co.ke").replace(/\/$/,"");
 const slugify=(value:string)=>value.toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
 const storeSlug=(store:Pick<Store,"name"|"code">)=>`${slugify(store.name)}-${slugify(store.code)}`;
-async function stores(){return backendJson<{stores:Store[]}>("/v1/views/locations").then(value=>value.stores).catch(()=>[]);}
+async function stores(){return backendPublicJson<{stores:Store[]}>("/v1/views/locations",300).then(value=>value.stores).catch(()=>[]);}
 function matchingStores(area:Area,rows:Store[]){const terms=[area.name,...area.near].map(value=>value.toLowerCase());return rows.filter(store=>{const haystack=[store.name,store.address,...(store.deliveryAreas||[])].join(" ").toLowerCase();return terms.some(term=>haystack.includes(term));});}
 
 export async function generateStaticParams(){const rows=await stores();return [...Object.keys(areas).map(location=>({location})),...rows.map(store=>({location:storeSlug(store)}))];}

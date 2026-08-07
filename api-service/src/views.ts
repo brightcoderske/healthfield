@@ -1,12 +1,13 @@
 import { and, asc, count, desc, eq, gte, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
 import {
   blogPosts, branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
-  orderItemFulfilments, orderItems, orders, prescriptions, productHealthConditions, productReviews, products,
+  orderItemFulfilments, orderItems, orders, paymentTransactions, prescriptions, productHealthConditions, productReviews, products,
   siteSettings, users,
 } from "../../db/schema";
 import { requireSession } from "./auth";
 import { getDb } from "./db";
 import { json, publicImageUrl } from "./http";
+import { paymentConfigurationSummary } from "./payment-handlers";
 
 const adminRoles = ["ADMIN", "SUPER_ADMIN"] as const;
 const teamRoles = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -193,7 +194,8 @@ export async function handleView(request: Request, path: string) {
     const [customer] = session?.role === "CUSTOMER"
       ? await db.select({ firstName: users.firstName, lastName: users.lastName, email: users.email, phone: users.phone }).from(users).where(eq(users.id, session.userId)).limit(1)
       : [null];
-    return json({ catalog: images(catalog), customer: customer ?? null });
+    const [settings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber, mpesaAccountName: siteSettings.mpesaAccountName }).from(siteSettings).limit(1);
+    return json({ catalog: images(catalog), customer: customer ?? null, payment: { onlineMpesaEnabled: Boolean(settings?.onlineMpesaEnabled && paymentConfigurationSummary().mpesaConfigured), onlineManualEnabled: Boolean(settings?.onlineManualEnabled && settings.mpesaTillNumber), tillNumber: settings?.mpesaTillNumber || null, accountName: settings?.mpesaAccountName || null } });
   }
   if (path === "sitemap") {
     const productRows = await getDb().select({ id: products.id, updatedAt: products.updatedAt }).from(products).where(eq(products.isActive, true));
@@ -209,6 +211,13 @@ export async function handleView(request: Request, path: string) {
     if ("response" in auth) return auth.response;
     const db = getDb();
     const view = path.slice(6);
+    if (view === "navigation") {
+      const [[{ newOrders }], [{ newChats }]] = await Promise.all([
+        db.select({ newOrders: count() }).from(orders).where(eq(orders.status, "NEW")),
+        db.select({ newChats: sql<number>`count(distinct ${chatMessages.conversationId})` }).from(chatMessages).innerJoin(users,eq(users.id,chatMessages.senderId)).where(and(eq(users.role,"CUSTOMER"),isNull(chatMessages.readAt))),
+      ]);
+      return json({ newOrders: Number(newOrders), newChats: Number(newChats) });
+    }
     if (view === "dashboard") {
       const since = new Date(Date.now() - 92 * 24 * 60 * 60 * 1000);
       const [[{ newOrders }], [{ pendingPrescriptions }], [{ activeProducts }], [{ lowStock }], [{ customers }], [{ newChats }], recentOrders, analytics] = await Promise.all([
@@ -230,14 +239,26 @@ export async function handleView(request: Request, path: string) {
       const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
       if (!order) return json({ error: "Order not found." }, { status: 404 });
       const items = await db.select().from(orderItems).where(eq(orderItems.orderId, id));
-      const [fulfilments, stores, stock] = await Promise.all([
+      const [fulfilments, stores, stock, payments] = await Promise.all([
         items.length ? db.select().from(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map((item) => item.id))) : [],
         db.select({ id: branches.id, name: branches.name }).from(branches).where(eq(branches.isActive, true)),
-        items.some((item) => item.productId !== null) ? db.select({ productId: branchInventory.productId, branchId: branchInventory.branchId, available: branchInventory.quantityAvailable }).from(branchInventory).where(inArray(branchInventory.productId, items.flatMap((item) => item.productId === null ? [] : [item.productId]))) : [],
+        items.some((item) => item.productId !== null) ? db.select({ productId: branchInventory.productId, branchId: branchInventory.branchId, available: sql<number>`${branchInventory.quantityAvailable} - ${branchInventory.quantityReserved}` }).from(branchInventory).where(inArray(branchInventory.productId, items.flatMap((item) => item.productId === null ? [] : [item.productId]))) : [],
+        db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, id)).orderBy(desc(paymentTransactions.createdAt)),
       ]);
-      return json({ order, items, fulfilments, stores, stock });
+      return json({ order, items, fulfilments, stores, stock, payments });
     }
     if (view === "customers") return json({ customers: await db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, phone: users.phone, isActive: users.isActive, createdAt: users.createdAt }).from(users).where(eq(users.role, "CUSTOMER")).orderBy(desc(users.createdAt)) });
+    const customerMatch = view.match(/^customers\/(\d+)$/);
+    if (customerMatch) {
+      const customerId = Number(customerMatch[1]);
+      const [customer] = await db.select({ id:users.id, firstName:users.firstName, lastName:users.lastName, email:users.email, phone:users.phone, isActive:users.isActive, emailVerifiedAt:users.emailVerifiedAt, createdAt:users.createdAt }).from(users).where(and(eq(users.id, customerId), eq(users.role, "CUSTOMER"))).limit(1);
+      if (!customer) return json({ error:"Customer not found." }, { status:404 });
+      const [customerOrders, customerPrescriptions] = await Promise.all([
+        db.select({ id:orders.id, orderNumber:orders.orderNumber, status:orders.status, paymentStatus:orders.paymentStatus, paymentMethod:orders.paymentMethod, total:orders.total, createdAt:orders.createdAt }).from(orders).where(eq(orders.customerId, customerId)).orderBy(desc(orders.createdAt)),
+        db.select({ id:prescriptions.id, orderId:prescriptions.orderId, originalFilename:prescriptions.originalFilename, status:prescriptions.status, pharmacistNotes:prescriptions.pharmacistNotes, createdAt:prescriptions.createdAt }).from(prescriptions).where(eq(prescriptions.customerId, customerId)).orderBy(desc(prescriptions.createdAt)),
+      ]);
+      return json({ customer, orders:customerOrders, prescriptions:customerPrescriptions });
+    }
     if (view === "chats") { const [chats,unread]=await Promise.all([db.select({ id: chatConversations.id, status: chatConversations.status, lastMessageAt: chatConversations.lastMessageAt, firstName: users.firstName, lastName: users.lastName, email: users.email }).from(chatConversations).innerJoin(users, eq(users.id, chatConversations.customerId)).orderBy(desc(chatConversations.lastMessageAt)),db.select({conversationId:chatMessages.conversationId,total:count()}).from(chatMessages).innerJoin(users,eq(users.id,chatMessages.senderId)).where(and(eq(users.role,"CUSTOMER"),isNull(chatMessages.readAt))).groupBy(chatMessages.conversationId)]);return json({chats:chats.map(chat=>({...chat,unread:Number(unread.find(row=>row.conversationId===chat.id)?.total||0)}))}); }
     if (view === "prescriptions") return json({ prescriptions: await db.select({ id: prescriptions.id, customerId: prescriptions.customerId, orderId: prescriptions.orderId, senderName: sql<string | null>`coalesce(${prescriptions.senderName}, trim(concat(${users.firstName}, ' ', ${users.lastName})))`, storageKey: prescriptions.storageKey, originalFilename: prescriptions.originalFilename, mimeType: prescriptions.mimeType, sizeBytes: prescriptions.sizeBytes, status: prescriptions.status, pharmacistNotes: prescriptions.pharmacistNotes, reviewedBy: prescriptions.reviewedBy, reviewedAt: prescriptions.reviewedAt, createdAt: prescriptions.createdAt, updatedAt: prescriptions.updatedAt }).from(prescriptions).leftJoin(users, eq(users.id, prescriptions.customerId)).orderBy(desc(prescriptions.createdAt)) });
     if (view === "campaigns") return json({ campaigns: await db.select().from(campaigns).orderBy(desc(campaigns.createdAt)).limit(30) });
@@ -249,7 +270,7 @@ export async function handleView(request: Request, path: string) {
       ]);
       return json({ staff, stores });
     }
-    if (view === "settings") return json({ settings: (await db.select().from(siteSettings).limit(1))[0] ?? null });
+    if (view === "settings") return json({ settings: (await db.select().from(siteSettings).limit(1))[0] ?? null, paymentRuntime: paymentConfigurationSummary() });
     if(view==="blogs")return json({posts:await db.select().from(blogPosts).orderBy(desc(blogPosts.createdAt))});
     if (view === "products") {
       const [catalog, categoryRows, conditions, mappings] = await Promise.all([
@@ -295,12 +316,13 @@ export async function handleView(request: Request, path: string) {
   if (path === "walk-in-sale") {
     const auth = await requireSession(request, [...teamRoles]);
     if ("response" in auth) return auth.response;
-    const [branchRows, productRows, stockRows] = await Promise.all([
+    const [branchRows, productRows, stockRows, paymentRows] = await Promise.all([
       getDb().select({ id: branches.id, name: branches.name }).from(branches).where(eq(branches.isActive, true)).orderBy(asc(branches.name)),
       getDb().select({ id: products.id, name: products.name, sku: products.sku, price: products.price, discountPrice: products.discountPrice }).from(products).where(eq(products.isActive, true)).orderBy(asc(products.name)),
-      getDb().select({ branchId: branchInventory.branchId, productId: branchInventory.productId, available: branchInventory.quantityAvailable }).from(branchInventory),
+      getDb().select({ branchId: branchInventory.branchId, productId: branchInventory.productId, available: sql<number>`${branchInventory.quantityAvailable} - ${branchInventory.quantityReserved}` }).from(branchInventory),
+      getDb().select({ posCashEnabled: siteSettings.posCashEnabled, posMpesaEnabled: siteSettings.posMpesaEnabled, posManualEnabled: siteSettings.posManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber, mpesaAccountName: siteSettings.mpesaAccountName }).from(siteSettings).limit(1),
     ]);
-    return json({ branches: branchRows, products: productRows.map((product) => ({ ...product, price: Number(product.price), discountPrice: product.discountPrice === null ? null : Number(product.discountPrice) })), stock: stockRows });
+    return json({ branches: branchRows, products: productRows.map((product) => ({ ...product, price: Number(product.price), discountPrice: product.discountPrice === null ? null : Number(product.discountPrice) })), stock: stockRows, payment: { cashEnabled: paymentRows[0]?.posCashEnabled ?? true, mpesaEnabled: Boolean(paymentRows[0]?.posMpesaEnabled && paymentConfigurationSummary().mpesaConfigured), manualEnabled: Boolean(paymentRows[0]?.posManualEnabled && paymentRows[0]?.mpesaTillNumber), tillNumber: paymentRows[0]?.mpesaTillNumber || null, accountName: paymentRows[0]?.mpesaAccountName || null } });
   }
   return json({ error: "View not found." }, { status: 404 });
 }

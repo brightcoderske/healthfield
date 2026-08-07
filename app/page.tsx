@@ -1,6 +1,6 @@
 import { Storefront } from "./storefront";
 import { getSession } from "@/lib/auth";
-import { backendJson } from "@/lib/backend-api";
+import { backendPublicJson } from "@/lib/backend-api";
 import { cookies } from "next/headers";
 import { CART_COOKIE, parseCart, parseWishlist, WISHLIST_COOKIE } from "@/lib/shopping-state";
 
@@ -13,8 +13,8 @@ type HomeData = {
   conditions: Array<{id:number;name:string;slug:string}>;
 };
 
-export default async function Home({ searchParams }: { searchParams: Promise<{ offers?: string }> }) {
-  const homeData = backendJson<HomeData>("/v1/views/home").catch(() => null);
+export default async function Home({ searchParams }: { searchParams: Promise<{ offers?: string; category?: string; condition?: string }> }) {
+  const homeData = backendPublicJson<HomeData>("/v1/views/home", 30).catch(() => null);
   const [data, session, jar, params] = await Promise.all([homeData, getSession(), cookies(), searchParams]);
   let catalog: Array<{
     id: number;
@@ -43,5 +43,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ o
   const initialCart = parseCart(jar.get(CART_COOKIE)?.value);
   const initialWishlist = parseWishlist(jar.get(WISHLIST_COOKIE)?.value);
   const offersOnly = params.offers === "1";
-  return <Storefront initialProducts={catalog} initialCategories={categoryRows} initialConditions={conditionRows} contact={contact} viewer={session ? { firstName: session.firstName, role: session.role } : null} offersOnly={offersOnly} initialCart={initialCart} initialWishlist={initialWishlist} />;
+  const initialCategoryId=categoryRows.find((item)=>item.slug===params.category)?.id??null;
+  const initialConditionId=conditionRows.find((item)=>item.slug===params.condition)?.id??null;
+  return <Storefront initialProducts={catalog} initialCategories={categoryRows} initialConditions={conditionRows} initialCategoryId={initialCategoryId} initialConditionId={initialConditionId} contact={contact} viewer={session ? { firstName: session.firstName, role: session.role } : null} offersOnly={offersOnly} initialCart={initialCart} initialWishlist={initialWishlist} />;
 }

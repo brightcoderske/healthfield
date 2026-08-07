@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Baby,
   CircleUserRound,
   HeartPulse,
   Menu,
@@ -14,7 +13,6 @@ import {
   ShieldCheck,
   Phone,
   Upload,
-  Users,
   Heart,
   ChevronDown,
   ChevronLeft,
@@ -23,6 +21,7 @@ import {
   ArrowUp,
 } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ProductCard } from "./product-card";
 
@@ -64,6 +63,8 @@ export function Storefront({
   initialProducts,
   initialCategories,
   initialConditions,
+  initialCategoryId,
+  initialConditionId,
   contact,
   viewer,
   offersOnly,
@@ -73,6 +74,8 @@ export function Storefront({
   initialProducts: CatalogProduct[];
   initialCategories: CatalogCategory[];
   initialConditions: HealthCondition[];
+  initialCategoryId: number | null;
+  initialConditionId: number | null;
   contact: {
     phone: string;
     whatsapp: string;
@@ -96,20 +99,19 @@ export function Storefront({
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<Record<number, number>>(initialCart);
   const [wishlist] = useState<number[]>(initialWishlist);
-  const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
-  const [selectedCondition, setSelectedCondition] = useState<number | null>(
-    null,
-  );
+  const [selectedCategory, setSelectedCategory] = useState<number | null>(initialCategoryId);
+  const [selectedCondition, setSelectedCondition] = useState<number | null>(initialConditionId);
   const [conditionQuery, setConditionQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(24);
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [searchResults, setSearchResults] = useState<{ products: CatalogProduct[]; similar: CatalogProduct[] } | null>(null);
   const [searching, setSearching] = useState(false);
   const productRail = useRef<HTMLDivElement>(null);
+  const activeSearchResults = query.trim().length >= 2 ? searchResults : null;
 
   const filtered = useMemo(
     () =>
-      (query.trim() ? searchResults?.products || [] : initialProducts).filter(
+      (query.trim() ? activeSearchResults?.products || [] : initialProducts).filter(
         (product) =>
           `${product.name} ${product.brand || ""} ${product.shortDescription || ""} ${product.description || ""} ${initialCategories.find((category) => category.id === product.categoryId)?.name || ""}`
             .replace(/<[^>]*>/g, " ")
@@ -122,7 +124,7 @@ export function Storefront({
       ),
     [
       initialProducts,
-      searchResults,
+      activeSearchResults,
       initialCategories,
       query,
       selectedCategory,
@@ -130,7 +132,7 @@ export function Storefront({
       offersOnly,
     ],
   );
-  const similarProducts = searchResults?.similar || [];
+  const similarProducts = activeSearchResults?.similar || [];
   const orderedCategories = [...initialCategories].sort((left, right) => {
     const isPrescription = (category: CatalogCategory) =>
       `${category.name} ${category.slug}`.toLowerCase().includes("prescription");
@@ -144,26 +146,8 @@ export function Storefront({
   }));
   const prescriptionCategory = displayedCategories.find((category) => `${category.name} ${category.slug}`.toLowerCase().includes("prescription"));
   useEffect(() => {
-    const category = new URLSearchParams(window.location.search).get(
-      "category",
-    );
-    const match = initialCategories.find((item) => item.slug === category);
-    if (match) setSelectedCategory(match.id);
-    const condition = new URLSearchParams(window.location.search).get(
-      "condition",
-    );
-    const conditionMatch = initialConditions.find(
-      (item) => item.slug === condition,
-    );
-    if (conditionMatch) setSelectedCondition(conditionMatch.id);
-  }, []);
-  useEffect(() => {
     const term = query.trim();
-    if (term.length < 2) {
-      setSearchResults(null);
-      setSearching(false);
-      return;
-    }
+    if (term.length < 2) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setSearching(true);
@@ -244,7 +228,8 @@ export function Storefront({
               <ShieldCheck /> Pharmacy licence: {contact.licenceNumber}
             </span>
           )}
-          <a
+          <Link
+            prefetch={false}
             href={
               viewer
                 ? viewer.role === "CUSTOMER"
@@ -257,7 +242,7 @@ export function Storefront({
           >
             <CircleUserRound />{" "}
             {viewer ? `Hi, ${viewer.firstName}` : "Login / Register"}
-          </a>
+          </Link>
           {viewer?.role === "CUSTOMER" && (
             <a href="/account#orders">
               <Package /> My orders
@@ -268,12 +253,12 @@ export function Storefront({
               <button type="submit">Log out</button>
             </form>
           )}
-          <a href="/wishlist">
+          <Link prefetch={false} href="/wishlist">
             <Heart /> Wishlist ({wishlist.length})
-          </a>
-          <a href="/cart">
+          </Link>
+          <Link prefetch={false} href="/cart">
             <ShoppingCart /> Cart ({cartCount})
-          </a>
+          </Link>
         </div>
         <div className="desktop-brand-row">
           <a href="/">
@@ -660,7 +645,8 @@ export function Storefront({
           <HeartPulse />
           <span>Home</span>
         </a>
-        <a
+        <Link
+          prefetch={false}
           href={
             viewer?.role === "CUSTOMER"
               ? "/account#orders"
@@ -669,16 +655,17 @@ export function Storefront({
         >
           <Package />
           <span>Orders</span>
-        </a>
-        <a href="/wishlist">
+        </Link>
+        <Link prefetch={false} href="/wishlist">
           <Heart />
           <span>Wishlist</span>
-        </a>
-        <a href="/cart">
+        </Link>
+        <Link prefetch={false} href="/cart">
           <ShoppingCart />
           <span>Cart {cartCount ? `(${cartCount})` : ""}</span>
-        </a>
-        <a
+        </Link>
+        <Link
+          prefetch={false}
           href={
             viewer
               ? viewer.role === "CUSTOMER"
@@ -691,7 +678,7 @@ export function Storefront({
         >
           <CircleUserRound />
           <span>{viewer ? viewer.firstName : "Account"}</span>
-        </a>
+        </Link>
       </nav>
 
       <button

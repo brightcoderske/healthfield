@@ -11,9 +11,11 @@ import {
   TriangleAlert,
   Users,
 } from "lucide-react";
+import Link from "next/link";
 type Row = {
   orderId: number;
   createdAt: string;
+  status: string;
   branch: string | null;
   productName: string;
   quantity: number;
@@ -50,23 +52,24 @@ export function Dashboard({
   analytics?: Row[];
   recentOrders?: Order[];
 }) {
-  const [range, setRange] = useState<7 | 30 | 120>(7);
+  const [range, setRange] = useState<7 | 30 | 90>(7);
   const data = useMemo(() => {
     const now = new Date(),
       keys =
-        range === 120
-          ? Array.from({ length: 4 }, (_, i) => {
-              const d = new Date(now.getFullYear(), now.getMonth() - 3 + i, 1);
+        range === 90
+          ? Array.from({ length: 13 }, (_, i) => {
+              const d = new Date(now);
+              d.setDate(now.getDate() - (12 - i) * 7);
+              const weekStart = new Date(d);
+              weekStart.setDate(d.getDate() - d.getDay());
               return {
-                key: `${d.getFullYear()}-${d.getMonth()}`,
-                label: d.toLocaleDateString("en-KE", { month: "short" }),
+                key: kenyaDateKey(weekStart),
+                label: d.toLocaleDateString("en-KE", { month: "short", day: "numeric" }),
               };
             })
-          : Array.from({ length: range === 7 ? 7 : now.getDate() }, (_, i) => {
+          : Array.from({ length: range }, (_, i) => {
               const d = new Date(now);
-              d.setDate(
-                now.getDate() - (range === 7 ? 6 - i : now.getDate() - 1 - i),
-              );
+              d.setDate(now.getDate() - (range - 1 - i));
               return {
                 key: kenyaDateKey(d),
                 label: d.toLocaleDateString("en-KE", {
@@ -77,18 +80,17 @@ export function Dashboard({
             }),
       bins = keys.map((x) => ({ ...x, sales: 0, orders: new Set<number>() })),
       cats = new Map<string, number>(),
-      products = new Map<string, { sales: number; units: number }>();
+      products = new Map<string, { sales: number; units: number }>(),
+      attention = new Set<number>();
     for (const r of analytics) {
       const d = new Date(r.createdAt),
-        key =
-          range === 120
-            ? `${d.getFullYear()}-${d.getMonth()}`
-            : kenyaDateKey(d),
+        key = range === 90 ? (()=>{const start=new Date(d);start.setDate(d.getDate()-d.getDay());return kenyaDateKey(start)})() : kenyaDateKey(d),
         bin = bins.find((x) => x.key === key);
       if (!bin) continue;
       const v = Number(r.lineTotal);
       bin.sales += v;
       bin.orders.add(r.orderId);
+      if (r.status === "NEW") attention.add(r.orderId);
       cats.set(
         r.category || "Uncategorised",
         (cats.get(r.category || "Uncategorised") || 0) + v,
@@ -104,6 +106,7 @@ export function Dashboard({
       bins,
       sales,
       orderCount: orders.size,
+      attentionCount: attention.size,
       cats: [...cats].sort((a, b) => b[1] - a[1]),
       products: [...products]
         .sort((a, b) => b[1].sales - a[1].sales)
@@ -116,14 +119,13 @@ export function Dashboard({
         <div>
           <span>Healthfield administration</span>
           <h1>Dashboard</h1>
-          <p>Sales, fulfilment and catalogue health at a glance.</p>
         </div>
         <div className="dashboard-ranges">
           {(
             [
               [7, "Weekly"],
               [30, "Monthly"],
-              [120, "Quarterly"],
+              [90, "Quarterly"],
             ] as const
           ).map(([v, l]) => (
             <button
@@ -147,7 +149,7 @@ export function Dashboard({
           icon={<ShoppingBag />}
           label="Orders"
           value={`${data.orderCount}`}
-          note={`${stats.newOrders} need attention`}
+          note={`${data.attentionCount} need attention in range`}
         />
         <Metric
           icon={<BarChart3 />}
@@ -176,8 +178,8 @@ export function Dashboard({
               range === 7
                 ? "Last 7 days"
                 : range === 30
-                  ? "Month to date"
-                  : "Last 4 months"
+                  ? "Last 30 days"
+                  : "Last 90 days"
             }
           />
           <Chart bins={data.bins} />
@@ -206,40 +208,40 @@ export function Dashboard({
           <Card title="Recent orders" text="Latest customer activity" />
           <div className="dashboard-orders">
             {recentOrders.map((o) => (
-              <a href={`/admin/orders/${o.id}`} key={o.id}>
+              <Link href={`/admin/orders/${o.id}`} key={o.id}>
                 <span>
                   <b>{o.orderNumber}</b>
                   <small>{o.customerName}</small>
                 </span>
                 <em>{o.status.replaceAll("_", " ")}</em>
                 <strong>{money(Number(o.total))}</strong>
-              </a>
+              </Link>
             ))}
           </div>
         </article>
         <article className="dashboard-card dashboard-alerts">
           <Card title="Action centre" text="Operational queue" />
-          <a href="/admin/orders">
+          <Link href="/admin/orders">
             <ClipboardList />
             <span>
               <b>{stats.newOrders} new orders</b>
               <small>Review and assign stock</small>
             </span>
-          </a>
-          <a href="/admin/prescriptions">
+          </Link>
+          <Link href="/admin/prescriptions">
             <ShieldCheck />
             <span>
               <b>{stats.pendingPrescriptions} prescriptions</b>
               <small>Awaiting pharmacist review</small>
             </span>
-          </a>
-          <a href="/admin/products">
+          </Link>
+          <Link href="/admin/products">
             <Pill />
             <span>
               <b>{stats.activeProducts} active products</b>
               <small>Manage catalogue and pricing</small>
             </span>
-          </a>
+          </Link>
         </article>
       </section>
     </main>
@@ -340,7 +342,6 @@ function Donut({ items }: { items: [string, number][] }) {
     [pointer, setPointer] = useState<{ x: number; y: number } | null>(null),
     total = items.reduce((n, x) => n + x[1], 0) || 1,
     colors = ["#722581", "#d0378d", "#2163d8", "#15a36e", "#f09b19"];
-  let offset = 0;
   return (
     <div className="donut-wrap">
       <div style={{ position: "relative", flex: "none" }}>
@@ -351,6 +352,7 @@ function Donut({ items }: { items: [string, number][] }) {
         >
           {items.map(([n, v], i) => {
             const d = (v / total) * 100,
+              offset = items.slice(0, i).reduce((sum, item) => sum + (item[1] / total) * 100, 0),
               node = (
                 <circle
                   key={n}
@@ -373,7 +375,6 @@ function Donut({ items }: { items: [string, number][] }) {
                   }}
                 />
               );
-            offset += d;
             return node;
           })}
           <text

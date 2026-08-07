@@ -28,6 +28,7 @@ type Data = {
   stores?: Array<{ id: number; name: string }>;
   fulfilments?: Array<{ orderItemId: number; branchId: number; quantityReserved: number; quantityPacked: number; status: "UNASSIGNED" | "RESERVED" | "PARTIALLY_RESERVED" | "PACKED" | "READY" | "UNAVAILABLE" | "REPLACED" }>;
   stock?: Array<{ productId: number; branchId: number; available: number }>;
+  payments?: Array<{id:number;method:"MPESA_EXPRESS"|"MANUAL_MPESA"|"CASH";channel:"ONLINE"|"POS";status:string;amount:string;phone:string|null;receiptNumber:string|null;manualMessage:string|null;resultDescription:string|null;createdAt:string}>;
 };
 
 export default async function AdminOrderPage({ params }: { params: Promise<{ id: string }> }) {
@@ -39,5 +40,5 @@ export default async function AdminOrderPage({ params }: { params: Promise<{ id:
     if (error instanceof BackendError && error.status === 404) notFound();
     throw error;
   }
-  return <><OrderReceiptActions orderId={id} /><OrderStatusManager order={{ ...data.order, id }} items={data.items ?? []} stores={data.stores ?? []} fulfilments={data.fulfilments ?? []} stock={data.stock ?? []} /></>;
+  return <><OrderReceiptActions orderId={id} /><OrderStatusManager order={{ ...data.order, id }} items={data.items ?? []} stores={data.stores ?? []} fulfilments={data.fulfilments ?? []} stock={data.stock ?? []} payments={data.payments??[]} /></>;
 }

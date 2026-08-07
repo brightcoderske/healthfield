@@ -52,7 +52,7 @@ export function CampaignManager({ initialCampaigns }: { initialCampaigns: Campai
 
   return (
     <main className="campaign-page">
-      <header><a href="/admin">← Dashboard</a><span><MessageSquareText /><div><h1>Customer campaigns</h1><p>Email and SMS registered Healthfield customers.</p></div></span></header>
+      <header><a href="/admin">← Dashboard</a><span><MessageSquareText /><div><h1>Customer campaigns</h1></div></span></header>
       <div className="campaign-layout">
         <form onSubmit={submit}>
           <h2>Create campaign</h2>

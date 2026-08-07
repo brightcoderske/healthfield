@@ -36,6 +36,22 @@ export async function backendJson<T>(path: string, init: RequestInit = {}): Prom
   return data;
 }
 
+export async function backendPublicJson<T>(path: string, revalidate = 60): Promise<T> {
+  const headers = new Headers();
+  headers.set("X-Healthfield-Key", apiKey());
+  const response = await fetch(`${apiBase()}${path.startsWith("/") ? path : `/${path}`}`, {
+    headers,
+    next: { revalidate },
+  });
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    throw new BackendError(response.status || 502, "The API returned a non-JSON response. Check API_BASE_URL and disable bot protection on the API hostname.");
+  }
+  const data = await response.json().catch(() => ({})) as { error?: string } & T;
+  if (!response.ok) throw new BackendError(response.status, data.error || "Backend request failed.");
+  return data;
+}
+
 export async function proxyToBackend(request: Request, path: string) {
   const encodedToken = request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1);
   const token = encodedToken ? decodeURIComponent(encodedToken) : undefined;

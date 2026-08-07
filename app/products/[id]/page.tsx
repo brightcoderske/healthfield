@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cookies, headers } from "next/headers";
 import { notFound } from "next/navigation";
-import { BackendError, backendJson } from "@/lib/backend-api";
+import { BackendError, backendPublicJson } from "@/lib/backend-api";
 import { ProductActions } from "./product-actions";
 import { RichText } from "../rich-text";
 import Image from "next/image";
@@ -32,7 +32,7 @@ async function currentOrigin() {
 
 async function dataFor(id: number) {
   try {
-    return await backendJson<ProductData>(`/v1/views/products/${id}`);
+    return await backendPublicJson<ProductData>(`/v1/views/products/${id}`, 60);
   } catch (error) {
     if (error instanceof BackendError && error.status === 404) return null;
     throw error;
@@ -67,7 +67,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   const id = Number((await params).id);
   const cart = parseCart((await cookies()).get(CART_COOKIE)?.value);
   const cartCount = Object.values(cart).reduce<number>((total, quantity) => total + Number(quantity), 0);
-  const [data, home, session] = await Promise.all([dataFor(id), backendJson<{contact:PublicContact}>("/v1/views/home").catch(()=>null), getSession()]);
+  const [data, home, session] = await Promise.all([dataFor(id), backendPublicJson<{contact:PublicContact}>("/v1/views/home", 30).catch(()=>null), getSession()]);
   if (!data) notFound();
   const { product, rating, reviewCount, reviews, related, similar, bought } = data;
   const price = Number(product.discountPrice ?? product.price);

@@ -8,6 +8,8 @@ import { migrate } from "drizzle-orm/mysql2/migrator";
 import { getDb, closeDb } from "./db";
 import { json } from "./http";
 import { handleView } from "./views";
+import { mpesaConfiguration } from "./mpesa";
+import { handleC2bCallback, handleC2bValidation, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentReview, handlePaymentStatus, handleStkCallback } from "./payment-handlers";
 import {
   handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOrders, handlePrescriptions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
@@ -68,6 +70,13 @@ async function route(request: Request, ip: string): Promise<Response> {
   // Browser navigations and <img> tags often omit Origin; only enforce CORS for credentialed cross-origin API calls.
   if (origin && !allowedOrigins.has(origin) && url.pathname.startsWith("/v1/")) return json({ error: "Origin not allowed." }, { status: 403 });
   if (url.pathname === "/health") return json({ service: "healthfield-api", status: "ok", timestamp: new Date().toISOString(), deployment: deploymentInfo() });
+  const paymentCallback = url.pathname.match(/^\/v1\/payments\/mpesa\/(stk|c2b)\/(callback|validation)\/([^/]+)$/);
+  if (paymentCallback) {
+    const configuredSecret = mpesaConfiguration()?.callbackSecret || "";
+    const suppliedSecret = decodeURIComponent(paymentCallback[3]);
+    if (!configuredSecret || !safeEqual(suppliedSecret, configuredSecret)) return json({ error: "Callback not found." }, { status: 404 });
+    return responseOf(paymentCallback[1] === "stk" ? handleStkCallback(request) : paymentCallback[2] === "validation" ? handleC2bValidation(request) : handleC2bCallback(request));
+  }
   const imageMatch = url.pathname.match(/^\/uploads\/products\/([^/]+)$/);
   if (imageMatch && request.method === "GET") return serveProductImage(imageMatch[1]);
   const expectedKey = process.env.API_SHARED_SECRET || "";
@@ -88,6 +97,12 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/orders") return responseOf(handleOrders(request));
   const orderMatch = url.pathname.match(/^\/v1\/orders\/(\d+)$/);
   if (orderMatch) return responseOf(handleOrders(request, Number(orderMatch[1])));
+  if (url.pathname === "/v1/payments/status") return responseOf(handlePaymentStatus(request));
+  if (url.pathname === "/v1/payments/manual") return responseOf(handleManualPayment(request));
+  if (url.pathname === "/v1/payments/reconcile") return responseOf(handlePaymentReconcile(request));
+  if (url.pathname === "/v1/payments/cancel") return responseOf(handlePaymentCancel(request));
+  const paymentReviewMatch = url.pathname.match(/^\/v1\/payments\/(\d+)\/review$/);
+  if (paymentReviewMatch) return responseOf(handlePaymentReview(request, Number(paymentReviewMatch[1])));
   if (url.pathname === "/v1/walk-in-sales") return responseOf(handleWalkInSales(request));
   if (url.pathname === "/v1/campaigns") return responseOf(handleCampaigns(request));
   if (url.pathname === "/v1/blogs") return responseOf(handleBlogs(request));

@@ -41,10 +41,11 @@ try {
     headers: { Origin: "https://healthfieldpharmacy.co.ke", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization,content-type" },
   });
   const forgotPassword = await fetch(`http://127.0.0.1:${port}/v1/auth/forgot-password`, { method:"POST",headers:{"X-Healthfield-Key":apiKey,"Content-Type":"application/json"},body:JSON.stringify({email:"invalid"}) });
-  if (health.status !== 200 || noKey.status !== 401 || badOrigin.status !== 403 || unsignedUpload.status !== 401 || preflight.status !== 204 || forgotPassword.status !== 400) {
-    throw new Error(`Unexpected statuses: ${health.status}/${noKey.status}/${badOrigin.status}/${unsignedUpload.status}/${preflight.status}/${forgotPassword.status}`);
+  const invalidPaymentCallback = await fetch(`http://127.0.0.1:${port}/v1/payments/mpesa/stk/callback/not-a-valid-secret`, { method:"POST",headers:{"Content-Type":"application/json"},body:"{}" });
+  if (health.status !== 200 || noKey.status !== 401 || badOrigin.status !== 403 || unsignedUpload.status !== 401 || preflight.status !== 204 || forgotPassword.status !== 400 || invalidPaymentCallback.status !== 404) {
+    throw new Error(`Unexpected statuses: ${health.status}/${noKey.status}/${badOrigin.status}/${unsignedUpload.status}/${preflight.status}/${forgotPassword.status}/${invalidPaymentCallback.status}`);
   }
-  console.log(`API smoke test passed: health=${health.status}, no-key=${noKey.status}, CORS=${badOrigin.status}, unsigned-upload=${unsignedUpload.status}, preflight=${preflight.status}, forgot-password=${forgotPassword.status}`);
+  console.log(`API smoke test passed: health=${health.status}, no-key=${noKey.status}, CORS=${badOrigin.status}, unsigned-upload=${unsignedUpload.status}, preflight=${preflight.status}, forgot-password=${forgotPassword.status}, invalid-payment-callback=${invalidPaymentCallback.status}`);
 } finally {
   child.kill("SIGTERM");
 }

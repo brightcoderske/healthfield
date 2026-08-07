@@ -1,6 +1,7 @@
 "use client";
 
-import { MapPin } from "lucide-react";
+import { CheckCircle2, MapPin, ShieldCheck, XCircle } from "lucide-react";
+import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
 import styles from "./order-status-manager.module.css";
 
@@ -13,6 +14,9 @@ type Item = { id: number; productId: number | null; productName: string; quantit
 type Store = { id: number; name: string };
 type Fulfilment = { orderItemId: number; branchId: number; quantityReserved: number; quantityPacked: number; status: string };
 type Stock = { productId: number; branchId: number; available: number };
+type Payment = { id:number;method:"MPESA_EXPRESS"|"MANUAL_MPESA"|"CASH";channel:"ONLINE"|"POS";status:string;amount:string;phone:string|null;receiptNumber:string|null;manualMessage:string|null;resultDescription:string|null;createdAt:string };
+
+const paymentLabel=(method:string)=>method==="MPESA_EXPRESS"?"M-Pesa Express":method==="MANUAL_MPESA"?"Manual M-Pesa":"Cash";
 
 function automaticAssignments(items: Item[], fulfilments: Fulfilment[], stock: Stock[]) {
   return Object.fromEntries(items.map((item) => {
@@ -22,12 +26,13 @@ function automaticAssignments(items: Item[], fulfilments: Fulfilment[], stock: S
   }));
 }
 
-export function OrderStatusManager({ order, items, stores = [], fulfilments = [], stock = [] }: { order: Order; items: Item[]; stores?: Store[]; fulfilments?: Fulfilment[]; stock?: Stock[] }) {
+export function OrderStatusManager({ order, items, stores = [], fulfilments = [], stock = [], payments = [] }: { order: Order; items: Item[]; stores?: Store[]; fulfilments?: Fulfilment[]; stock?: Stock[]; payments?: Payment[] }) {
   const [status, setStatus] = useState(order.status);
   const [saved, setSaved] = useState(order.status);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [assignments, setAssignments] = useState<Record<number, number>>(() => automaticAssignments(items, fulfilments, stock));
+  const [reviewing,setReviewing]=useState<number|null>(null);
   const editable = !["READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"].includes(saved);
   const position = steps.indexOf(status);
   const mapUrl = order.deliveryLatitude && order.deliveryLongitude
@@ -49,8 +54,15 @@ export function OrderStatusManager({ order, items, stores = [], fulfilments = []
     setSaving(false);
   }
 
+  async function reviewPayment(paymentId:number,decision:"APPROVE"|"REJECT"){
+    if(decision==="REJECT"&&!confirm("Reject this payment proof? The order will remain unpaid."))return;
+    setReviewing(paymentId);setMessage("");
+    const response=await fetch(`/api/payments/${paymentId}/review`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({decision})}),data=await response.json().catch(()=>({}));
+    if(response.ok)window.location.reload();else{setMessage(data.error||"Payment could not be reviewed.");setReviewing(null)}
+  }
+
   return <main className="order-detail admin-order-detail">
-    <header><a href="/admin/orders">← All orders</a><a href={`tel:${order.phone}`}>Call customer</a></header>
+    <header><Link href="/admin/orders">← All orders</Link><a href={`tel:${order.phone}`}>Call customer</a></header>
     <section>
       <span className="order-status">{status.replaceAll("_", " ")}</span><h1>{order.orderNumber}</h1>
       <div className="order-progress">{steps.map((step, index) => <span className={index <= position ? "done" : ""} key={step}><i>{index < position ? "✓" : index + 1}</i><small>{step === "READY_FOR_DISPATCH" ? "PACKAGED" : step.replaceAll("_", " ")}</small></span>)}</div>
@@ -60,7 +72,8 @@ export function OrderStatusManager({ order, items, stores = [], fulfilments = []
         <label>Email<input name="email" type="email" defaultValue={order.email || ""} disabled={!editable} /></label><label>Area<input name="deliveryArea" defaultValue={order.deliveryArea || ""} disabled={!editable} /></label>
         <label className="full">Address<input name="deliveryAddress" defaultValue={order.deliveryAddress || ""} disabled={!editable} /></label>
         {mapUrl && <a className={styles.mapLink} href={mapUrl} target="_blank" rel="noreferrer"><MapPin /> View exact delivery location</a>}
-        <aside className={styles.paymentSummary} aria-label="Payment details"><span><small>Payment method</small><strong>{order.paymentMethod === "MPESA" ? "M-Pesa" : "Cash"}</strong></span><span><small>Amount paid</small><strong>KES {Number(order.amountPaid).toLocaleString()}</strong></span><span><small>{order.paymentMethod === "MPESA" ? "M-Pesa code" : "Payment status"}</small><strong>{order.paymentMethod === "MPESA" ? order.paymentReference || "Awaiting M-Pesa confirmation" : order.paymentStatus}</strong></span></aside>
+        <aside className={styles.paymentSummary} aria-label="Payment details"><span><small>Payment method</small><strong className={`payment-type payment-type-${order.paymentMethod.toLowerCase()}`}>{paymentLabel(order.paymentMethod)}</strong></span><span><small>Amount paid</small><strong>KES {Number(order.amountPaid).toLocaleString()}</strong></span><span><small>{order.paymentMethod === "CASH" ? "Payment status" : "M-Pesa code"}</small><strong>{order.paymentMethod === "CASH" ? order.paymentStatus : order.paymentReference || "Awaiting confirmation"}</strong></span></aside>
+        <section className="payment-audit"><header><span><ShieldCheck/><strong>Payment verification</strong></span><em className={`payment-status payment-status-${order.paymentStatus.toLowerCase()}`}>{order.paymentStatus}</em></header>{payments.length?payments.map(payment=><article key={payment.id}><div><span className={`payment-type payment-type-${payment.method.toLowerCase()}`}>{paymentLabel(payment.method)}</span><strong>KES {Number(payment.amount).toLocaleString()}</strong><small>{new Date(payment.createdAt).toLocaleString()}</small></div><div><small>Receipt</small><strong>{payment.receiptNumber||"Not received"}</strong><small>{payment.phone||"No billing phone"}</small></div><div><small>Status</small><strong>{payment.status.replaceAll("_"," ")}</strong><small>{payment.resultDescription||"No provider message"}</small></div>{payment.manualMessage?<details><summary>View submitted payment message</summary><p>{payment.manualMessage}</p></details>:<span/>}{payment.status==="REQUIRES_REVIEW"?<div className="payment-review-actions"><button type="button" disabled={reviewing===payment.id} onClick={()=>reviewPayment(payment.id,"APPROVE")}><CheckCircle2/>Approve</button><button type="button" disabled={reviewing===payment.id} onClick={()=>reviewPayment(payment.id,"REJECT")}><XCircle/>Reject</button></div>:null}</article>):<p>No payment attempts recorded.</p>}</section>
         <h2 className={styles.itemsTitle}>Order items</h2><div className={styles.items}><div className={styles.head}><span>Product</span><span>Quantity</span><span>Amount</span><span>Serving store</span></div>{items.map((item) => <div className={styles.row} key={item.id}><strong>{item.productName}</strong><span>{item.quantity}</span><span>KES {Number(item.lineTotal).toLocaleString()}</span><label><select aria-label={`Serving store for ${item.productName}`} value={assignments[item.id] || ""} disabled={!editable} onChange={(event) => setAssignments((current) => ({ ...current, [item.id]: Number(event.target.value) || 0 }))}><option value="">No store with enough stock</option>{stores.map((store) => { const available = availableAt(item, store.id); return <option value={store.id} key={store.id} disabled={available !== null && available < item.quantity}>{store.name}{available === null ? "" : ` (${available} available)`}</option>; })}</select></label></div>)}</div>
         <div className={styles.actions}><button disabled={saving}>{saving ? "Saving…" : "Save order"}</button></div>
       </form>

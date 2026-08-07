@@ -2,6 +2,7 @@ import {
   boolean,
   bigint,
   decimal,
+  foreignKey,
   index,
   int,
   json,
@@ -144,6 +145,60 @@ export const orders = mysqlTable("orders", {
   index("orders_work_queue_idx").on(table.status, table.createdAt),
 ]);
 
+export const paymentTransactions = mysqlTable("payment_transactions", {
+  id: int("id").autoincrement().primaryKey(),
+  orderId: int("order_id").notNull().references(() => orders.id),
+  method: mysqlEnum("method", ["MPESA_EXPRESS", "MANUAL_MPESA", "CASH"]).notNull(),
+  channel: mysqlEnum("channel", ["ONLINE", "POS"]).notNull(),
+  status: mysqlEnum("status", ["INITIATED", "PENDING", "REQUIRES_REVIEW", "PAID", "FAILED", "CANCELLED", "REFUNDED"]).default("INITIATED").notNull(),
+  amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+  phone: varchar("phone", { length: 30 }),
+  merchantRequestId: varchar("merchant_request_id", { length: 120 }),
+  checkoutRequestId: varchar("checkout_request_id", { length: 120 }),
+  receiptNumber: varchar("receipt_number", { length: 100 }),
+  manualMessage: text("manual_message"),
+  resultCode: varchar("result_code", { length: 40 }),
+  resultDescription: varchar("result_description", { length: 500 }),
+  providerPayload: json("provider_payload").$type<Record<string, unknown>>(),
+  verifiedAt: timestamp("verified_at"),
+  reviewedBy: int("reviewed_by").references(() => users.id),
+  reviewedAt: timestamp("reviewed_at"),
+  ...timestamps,
+}, (table) => [
+  index("payment_order_idx").on(table.orderId, table.createdAt),
+  uniqueIndex("payment_checkout_request_unique").on(table.checkoutRequestId),
+  uniqueIndex("payment_receipt_unique").on(table.receiptNumber),
+  index("payment_review_queue_idx").on(table.status, table.createdAt),
+]);
+
+export const mpesaIncomingPayments = mysqlTable("mpesa_incoming_payments", {
+  id: int("id").autoincrement().primaryKey(),
+  receiptNumber: varchar("receipt_number", { length: 100 }).notNull(),
+  amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+  phone: varchar("phone", { length: 30 }),
+  accountReference: varchar("account_reference", { length: 120 }),
+  transactionTime: varchar("transaction_time", { length: 30 }),
+  providerPayload: json("provider_payload").$type<Record<string, unknown>>(),
+  matchedTransactionId: int("matched_transaction_id"),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("mpesa_incoming_receipt_unique").on(table.receiptNumber),
+  index("mpesa_incoming_match_idx").on(table.matchedTransactionId, table.createdAt),
+  foreignKey({ columns: [table.matchedTransactionId], foreignColumns: [paymentTransactions.id], name: "mpesa_incoming_transaction_fk" }),
+]);
+
+export const mpesaStkCallbacks = mysqlTable("mpesa_stk_callbacks", {
+  id: int("id").autoincrement().primaryKey(),
+  checkoutRequestId: varchar("checkout_request_id", { length: 120 }).notNull(),
+  providerPayload: json("provider_payload").$type<Record<string, unknown>>().notNull(),
+  processedTransactionId: int("processed_transaction_id"),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("mpesa_stk_callback_checkout_unique").on(table.checkoutRequestId),
+  index("mpesa_stk_callback_processed_idx").on(table.processedTransactionId, table.createdAt),
+  foreignKey({ columns: [table.processedTransactionId], foreignColumns: [paymentTransactions.id], name: "mpesa_stk_transaction_fk" }),
+]);
+
 export const orderItems = mysqlTable("order_items", {
   id: int("id").autoincrement().primaryKey(),
   orderId: int("order_id").notNull().references(() => orders.id),
@@ -218,6 +273,13 @@ export const siteSettings = mysqlTable("site_settings", {
   licenceNumber: varchar("licence_number", { length: 120 }),
   licenceImageUrl: varchar("licence_image_url", { length: 500 }),
   requireTeamTwoFactor: boolean("require_team_two_factor").default(false).notNull(),
+  onlineMpesaEnabled: boolean("online_mpesa_enabled").default(true).notNull(),
+  onlineManualEnabled: boolean("online_manual_enabled").default(true).notNull(),
+  posCashEnabled: boolean("pos_cash_enabled").default(true).notNull(),
+  posMpesaEnabled: boolean("pos_mpesa_enabled").default(true).notNull(),
+  posManualEnabled: boolean("pos_manual_enabled").default(true).notNull(),
+  mpesaTillNumber: varchar("mpesa_till_number", { length: 30 }),
+  mpesaAccountName: varchar("mpesa_account_name", { length: 150 }),
   updatedBy: int("updated_by").references(() => users.id),
   ...timestamps,
 });
@@ -231,6 +293,7 @@ export const twoFactorChallenges = mysqlTable("two_factor_challenges", {
   resendCount: int("resend_count").default(0).notNull(),
   expiresAt: timestamp("expires_at").notNull(),
   expiresAtMs: bigint("expires_at_ms", { mode: "number" }),
+  challengeEndsAtMs: bigint("challenge_ends_at_ms", { mode: "number" }).notNull(),
   lastSentAtMs: bigint("last_sent_at_ms", { mode: "number" }),
   usedAt: timestamp("used_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

@@ -46,7 +46,7 @@ export function StaffManager({ initialStaff, stores }: { initialStaff: Staff[]; 
   }
 
   return <main className="compact-admin-page">
-    <header><div><a href="/admin">← Dashboard</a><h1>Staff</h1><p>Staff access, assigned store and account security.</p></div><button onClick={() => { setEditing("new"); setConfirmDelete(false); }}><Plus /> Add staff</button></header>
+    <header><div><a href="/admin">← Dashboard</a><h1>Staff</h1></div><button onClick={() => { setEditing("new"); setConfirmDelete(false); }}><Plus /> Add staff</button></header>
     <div className="compact-table-tools"><label><Search /><input placeholder="Search staff name or email" value={query} onChange={(event) => setQuery(event.target.value)} /></label><span>{shown.length} accounts</span></div>
     <div className="compact-table"><div className="compact-table-head manager-row"><span>Staff member</span><span>Role</span><span>Store</span><span>Phone</span><span>Status</span></div>{shown.map((row) => <div className={`compact-table-row manager-row ${saving === row.id ? "row-saving" : ""}`} key={row.id}>
       <span><UserRound /><button className="row-link" onClick={() => { setEditing(row); setConfirmDelete(false); }}>{row.firstName} {row.lastName}</button><small>{row.email}</small></span>
