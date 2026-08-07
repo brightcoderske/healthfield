@@ -7,7 +7,7 @@ export function getPool() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required.");
   pool ??= mysql.createPool({
     uri: process.env.DATABASE_URL,
-    connectionLimit: Number(process.env.DB_POOL_SIZE || 5),
+    connectionLimit: Number(process.env.DB_POOL_SIZE || 10),
     enableKeepAlive: true,
   });
   return pool;

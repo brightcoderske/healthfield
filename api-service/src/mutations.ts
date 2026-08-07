@@ -149,11 +149,6 @@ export async function handleAuth(request: Request, action: string) {
     if (!user || !user.isActive || !team.includes(user.role as typeof team[number])) return json({ error: "This login request is no longer valid." }, { status: 401 });
     const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
     const token = await createSessionToken(session);
-    const issuedSession = await requestSession(new Request("http://healthfield.internal/auth/session", { headers: { Authorization: `Bearer ${token}` } }));
-    if (!issuedSession) {
-      console.error("2FA verification failed", { reason: "issued_session_rejected", challengeId: challenge.id });
-      return json({ error: "The login session could not be created. Please try the code again." }, { status: 503 });
-    }
     const [claimed] = await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.id, challenge.id), isNull(twoFactorChallenges.usedAt)));
     if (claimed.affectedRows !== 1) return json({ error: "This security code has already been used." }, { status: 401 });
     await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.userId, challenge.userId), isNull(twoFactorChallenges.usedAt)));

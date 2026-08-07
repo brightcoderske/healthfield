@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import express, { type Request as ExpressRequest, type Response as ExpressResponse } from "express";
 import { Readable } from "node:stream";
 import { resolve } from "node:path";
 import { loadEnvFile } from "node:process";
@@ -121,7 +121,7 @@ async function route(request: Request, ip: string): Promise<Response> {
   return json({ error: "Route not found." }, { status: 404 });
 }
 
-function webRequest(request: IncomingMessage) {
+function webRequest(request: ExpressRequest) {
   const protocol = request.headers["x-forwarded-proto"] || "https";
   const host = request.headers.host || "api.healthfieldpharmacy.co.ke";
   const init: RequestInit & { duplex?: "half" } = { method: request.method, headers: request.headers as HeadersInit };
@@ -129,13 +129,15 @@ function webRequest(request: IncomingMessage) {
   return new Request(`${protocol}://${host}${request.url || "/"}`, init);
 }
 
-async function send(nodeResponse: ServerResponse, response: Response) {
+async function send(nodeResponse: ExpressResponse, response: Response) {
   nodeResponse.writeHead(response.status, Object.fromEntries(response.headers.entries()));
   if (!response.body) return nodeResponse.end();
   Readable.fromWeb(response.body as never).pipe(nodeResponse);
 }
 
-const server = createServer(async (nodeRequest, nodeResponse) => {
+const app = express();
+app.disable("x-powered-by");
+app.all("/{*path}", async (nodeRequest, nodeResponse) => {
   const origin = typeof nodeRequest.headers.origin === "string" ? nodeRequest.headers.origin.replace(/\/$/, "") : null;
   try {
     const length = Number(nodeRequest.headers["content-length"] || 0);
@@ -151,7 +153,7 @@ const server = createServer(async (nodeRequest, nodeResponse) => {
 
 const port = Number(process.env.PORT || 3001);
 if (process.env.RUN_MIGRATIONS !== "false") await migrate(getDb(), { migrationsFolder: resolve(process.cwd(), "drizzle") });
-server.listen(port, "0.0.0.0", () => console.log(`Healthfield API listening on ${port}`));
+const server = app.listen(port, "0.0.0.0", () => console.log(`Healthfield API listening on ${port}`));
 
 let shuttingDown = false;
 async function shutdown(signal: string) {
