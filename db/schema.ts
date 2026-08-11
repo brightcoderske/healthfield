@@ -209,6 +209,10 @@ export const orderItems = mysqlTable("order_items", {
   quantity: int("quantity").notNull(),
   unitPrice: decimal("unit_price", { precision: 12, scale: 2 }).notNull(),
   lineTotal: decimal("line_total", { precision: 12, scale: 2 }).notNull(),
+  // Bundle members keep one row each so stock still moves per product, but share an
+  // offer id and title so the customer sees a single priced line.
+  offerId: int("offer_id"),
+  offerTitle: varchar("offer_title", { length: 180 }),
   ...timestamps,
 }, (table) => [index("order_items_order_idx").on(table.orderId)]);
 
@@ -389,6 +393,44 @@ export const blogPosts = mysqlTable("blog_posts", {
   authorId: int("author_id").references(() => users.id),
   ...timestamps,
 }, (table) => [uniqueIndex("blog_posts_slug_unique").on(table.slug), index("blog_posts_published_idx").on(table.isPublished, table.publishedAt)]);
+
+// A promotion. A single-product offer carries its price on the offer item and
+// temporarily replaces that product's selling price. A bundle carries `bundlePrice`
+// and is sold as one line without altering the individual products' prices.
+export const offers = mysqlTable("offers", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 180 }).notNull(),
+  slug: varchar("slug", { length: 200 }).notNull(),
+  description: varchar("description", { length: 500 }),
+  imageUrl: varchar("image_url", { length: 500 }),
+  bundlePrice: decimal("bundle_price", { precision: 12, scale: 2 }),
+  startsAt: timestamp("starts_at"),
+  endsAt: timestamp("ends_at"),
+  isActive: boolean("is_active").default(true).notNull(),
+  displayOrder: int("display_order").default(0).notNull(),
+  ...timestamps,
+}, (table) => [uniqueIndex("offers_slug_unique").on(table.slug), index("offers_active_idx").on(table.isActive, table.endsAt)]);
+
+export const offerItems = mysqlTable("offer_items", {
+  id: int("id").autoincrement().primaryKey(),
+  offerId: int("offer_id").notNull().references(() => offers.id),
+  productId: int("product_id").notNull().references(() => products.id),
+  // Per-unit price for single-product offers; null on bundle members, whose price
+  // is expressed once by offers.bundlePrice.
+  offerPrice: decimal("offer_price", { precision: 12, scale: 2 }),
+  quantity: int("quantity").default(1).notNull(),
+  displayOrder: int("display_order").default(0).notNull(),
+}, (table) => [uniqueIndex("offer_item_unique").on(table.offerId, table.productId), index("offer_items_offer_idx").on(table.offerId)]);
+
+// Products promoted inside an article body. Capped at three by the API so the
+// reading experience is not swamped.
+export const blogPostProducts = mysqlTable("blog_post_products", {
+  id: int("id").autoincrement().primaryKey(),
+  postId: int("post_id").notNull().references(() => blogPosts.id),
+  productId: int("product_id").notNull().references(() => products.id),
+  displayOrder: int("display_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [uniqueIndex("blog_post_product_unique").on(table.postId, table.productId), index("blog_post_products_post_idx").on(table.postId)]);
 
 export const campaigns = mysqlTable("campaigns", {
   id: int("id").autoincrement().primaryKey(),

@@ -1,12 +1,13 @@
 import { and, asc, count, desc, eq, gte, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
 import {
-  blogPosts, branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
-  orderItemFulfilments, orderItems, orders, paymentTransactions, prescriptions, productHealthConditions, productReviews, products,
+  blogPostProducts, blogPosts, branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
+  offerItems, offers, orderItemFulfilments, orderItems, orders, paymentTransactions, prescriptions, productHealthConditions, productReviews, products,
   siteSettings, users,
 } from "../../db/schema";
 import { requireSession } from "./auth";
 import { getDb } from "./db";
 import { json, publicImageUrl } from "./http";
+import { isBundle, loadLiveOffers, normalTotal, offerPriceMap, offerTotal, type ResolvedOffer } from "./offers";
 import { paymentConfigurationSummary } from "./payment-handlers";
 
 const adminRoles = ["ADMIN", "SUPER_ADMIN"] as const;
@@ -29,9 +30,26 @@ function images<T extends { imageUrl?: string | null }>(rows: T[]) {
   return rows.map((row) => ({ ...row, imageUrl: publicImageUrl(row.imageUrl) }));
 }
 
+/**
+ * Shapes an offer for the storefront: public image paths, computed totals, and — since
+ * offers carry no artwork of their own — the first product image that exists stands in
+ * as the offer's picture.
+ */
+function offerPayload(offer: ResolvedOffer) {
+  const items = offer.items.map((item) => ({ ...item, imageUrl: publicImageUrl(item.imageUrl) }));
+  return {
+    ...offer,
+    items,
+    imageUrl: publicImageUrl(offer.imageUrl) ?? items.find((item) => item.imageUrl)?.imageUrl ?? null,
+    isBundle: isBundle(offer),
+    total: offerTotal(offer),
+    normalTotal: normalTotal(offer),
+  };
+}
+
 async function home() {
   const db = getDb();
-  const [rows, mappings, settingsRows, categoryRows, conditionRows] = await Promise.all([
+  const [rows, mappings, settingsRows, categoryRows, conditionRows, guideRows] = await Promise.all([
     db.select({
       id: products.id, name: products.name, price: products.price, imageUrl: products.imageUrl,
       packSize: products.packSize, brand: products.brand, categoryId: products.categoryId,
@@ -47,16 +65,29 @@ async function home() {
       .where(eq(categories.isActive, true)).orderBy(categories.displayOrder),
     db.select({ id: healthConditions.id, name: healthConditions.name, slug: healthConditions.slug }).from(healthConditions)
       .where(eq(healthConditions.isActive, true)).orderBy(healthConditions.displayOrder),
+    // Recent guides, used to break up the catalogue scroll with reading material.
+    db.select({ id: blogPosts.id, slug: blogPosts.slug, title: blogPosts.title, excerpt: blogPosts.excerpt, imageUrl: blogPosts.imageUrl })
+      .from(blogPosts).where(eq(blogPosts.isPublished, true)).orderBy(desc(blogPosts.publishedAt)).limit(4),
   ]);
-  const catalog = rows.map((row) => ({
-    ...row,
-    imageUrl: publicImageUrl(row.imageUrl),
-    price: Number(row.price),
-    discountPrice: row.discountPrice === null ? null : Number(row.discountPrice),
-    rating: row.rating === null ? null : Number(row.rating),
-    reviewCount: Number(row.reviewCount),
-    conditionIds: mappings.filter((mapping) => mapping.productId === row.id).map((mapping) => mapping.conditionId),
-  }));
+  const live = await loadLiveOffers();
+  const overrides = offerPriceMap(live);
+  const catalog = rows.map((row) => {
+    // A live single-product offer presents as the selling price. The stored price is
+    // left alone, so the moment the offer ends the original pricing is back.
+    const offerPrice = overrides.get(row.id);
+    const price = Number(row.price);
+    const discountPrice = row.discountPrice === null ? null : Number(row.discountPrice);
+    return {
+      ...row,
+      imageUrl: publicImageUrl(row.imageUrl),
+      price,
+      discountPrice: offerPrice !== undefined ? offerPrice : discountPrice,
+      onOffer: offerPrice !== undefined,
+      rating: row.rating === null ? null : Number(row.rating),
+      reviewCount: Number(row.reviewCount),
+      conditionIds: mappings.filter((mapping) => mapping.productId === row.id).map((mapping) => mapping.conditionId),
+    };
+  });
   const settings = settingsRows[0];
   const contact = settings ? {
     phone: settings.phone ?? "", whatsapp: settings.whatsapp ?? "", supportEmail: settings.supportEmail ?? "",
@@ -64,7 +95,7 @@ async function home() {
     facebookUrl: settings.facebookUrl ?? "", instagramUrl: settings.instagramUrl ?? "",
     xUrl: settings.xUrl ?? "", tiktokUrl: settings.tiktokUrl ?? "", licenceTitle:settings.licenceTitle??"",licenceNumber:settings.licenceNumber??"",licenceImageUrl:publicImageUrl(settings.licenceImageUrl),
   } : { phone: "", whatsapp: "", supportEmail: "", address: "", openingHours: "", deliveryMessage: "Fast Delivery Across Kenya", facebookUrl: "", instagramUrl: "", xUrl: "", tiktokUrl: "",licenceTitle:"",licenceNumber:"",licenceImageUrl:null };
-  return { catalog, contact, categories: categoryRows, conditions: conditionRows };
+  return { offers: live.map(offerPayload), catalog, contact, categories: categoryRows, conditions: conditionRows, guides: guideRows.map((guide) => ({ ...guide, imageUrl: publicImageUrl(guide.imageUrl) })) };
 }
 
 async function productDetail(id: number) {
@@ -128,7 +159,19 @@ export async function handleView(request: Request, path: string) {
     return json({ conditions: rows }, { headers: { "Cache-Control": "public, max-age=300" } });
   }
   if(path==="blogs")return json({posts:await getDb().select().from(blogPosts).where(eq(blogPosts.isPublished,true)).orderBy(desc(blogPosts.publishedAt))},{headers:{"Cache-Control":"public, max-age=300"}});
-  const blogMatch=path.match(/^blogs\/([^/]+)$/);if(blogMatch){const [post]=await getDb().select().from(blogPosts).where(and(eq(blogPosts.slug,decodeURIComponent(blogMatch[1])),eq(blogPosts.isPublished,true))).limit(1);return post?json({post}):json({error:"Article not found."},{status:404})}
+  const blogMatch=path.match(/^blogs\/([^/]+)$/);
+  if(blogMatch){
+    const db=getDb();
+    const [post]=await db.select().from(blogPosts).where(and(eq(blogPosts.slug,decodeURIComponent(blogMatch[1])),eq(blogPosts.isPublished,true))).limit(1);
+    if(!post)return json({error:"Article not found."},{status:404});
+    // Promoted products are resolved live so a de-listed item stops appearing in
+    // older articles without anyone editing them.
+    const promoted=await db.select({id:products.id,name:products.name,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice,packSize:products.packSize})
+      .from(blogPostProducts).innerJoin(products,eq(products.id,blogPostProducts.productId))
+      .where(and(eq(blogPostProducts.postId,post.id),eq(products.isActive,true)))
+      .orderBy(asc(blogPostProducts.displayOrder));
+    return json({post,products:promoted.map((row)=>({...row,imageUrl:publicImageUrl(row.imageUrl)}))});
+  }
   if (path === "search") {
     const terms = searchTerms(url.searchParams.get("q") || "");
     if (!terms.length) return json({ products: [], similar: [] }, { headers: { "Cache-Control": "no-store" } });
@@ -157,7 +200,9 @@ export async function handleView(request: Request, path: string) {
     const rows = ids.length
       ? await getDb().select(productCard).from(products).where(and(eq(products.isActive, true), inArray(products.id, ids)))
       : await getDb().select(productCard).from(products).where(eq(products.isActive, true));
-    return json({ products: images(rows) });
+    // The cart needs live bundles alongside the products it asked for.
+    const liveBundles = (await loadLiveOffers()).filter(isBundle).map(offerPayload);
+    return json({ products: images(rows), offers: liveBundles });
   }
   const productMatch = path.match(/^products\/(\d+)$/);
   if (productMatch) {
@@ -195,7 +240,10 @@ export async function handleView(request: Request, path: string) {
       ? await db.select({ firstName: users.firstName, lastName: users.lastName, email: users.email, phone: users.phone }).from(users).where(eq(users.id, session.userId)).limit(1)
       : [null];
     const [settings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber, mpesaAccountName: siteSettings.mpesaAccountName }).from(siteSettings).limit(1);
-    return json({ catalog: images(catalog), customer: customer ?? null, payment: { onlineMpesaEnabled: Boolean(settings?.onlineMpesaEnabled && paymentConfigurationSummary().mpesaConfigured), onlineManualEnabled: Boolean(settings?.onlineManualEnabled && settings.mpesaTillNumber), tillNumber: settings?.mpesaTillNumber || null, accountName: settings?.mpesaAccountName || null } });
+    // Bundles are resolved server-side so checkout prices what is live right now
+    // rather than whatever the basket cookie remembers.
+    const liveOffers = (await loadLiveOffers()).filter(isBundle).map(offerPayload);
+    return json({ catalog: images(catalog), offers: liveOffers, customer: customer ?? null, payment: { onlineMpesaEnabled: Boolean(settings?.onlineMpesaEnabled && paymentConfigurationSummary().mpesaConfigured), onlineManualEnabled: Boolean(settings?.onlineManualEnabled && settings.mpesaTillNumber), tillNumber: settings?.mpesaTillNumber || null, accountName: settings?.mpesaAccountName || null } });
   }
   if (path === "sitemap") {
     const productRows = await getDb().select({ id: products.id, updatedAt: products.updatedAt }).from(products).where(eq(products.isActive, true));
@@ -271,7 +319,29 @@ export async function handleView(request: Request, path: string) {
       return json({ staff, stores });
     }
     if (view === "settings") return json({ settings: (await db.select().from(siteSettings).limit(1))[0] ?? null, paymentRuntime: paymentConfigurationSummary() });
-    if(view==="blogs")return json({posts:await db.select().from(blogPosts).orderBy(desc(blogPosts.createdAt))});
+    if(view==="offers"){
+      // Every offer regardless of state, so an administrator can revive an expired one.
+      const [offerRows,memberRows,catalogue]=await Promise.all([
+        db.select().from(offers).orderBy(asc(offers.displayOrder),desc(offers.id)),
+        db.select().from(offerItems).orderBy(asc(offerItems.displayOrder),asc(offerItems.id)),
+        db.select({id:products.id,name:products.name,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice}).from(products).where(eq(products.isActive,true)).orderBy(asc(products.name)),
+      ]);
+      return json({
+        offers:offerRows.map((offer)=>({...offer,items:memberRows.filter((member)=>member.offerId===offer.id).map((member)=>({productId:member.productId,offerPrice:member.offerPrice,quantity:member.quantity}))})),
+        products:catalogue.map((row)=>({...row,imageUrl:publicImageUrl(row.imageUrl)})),
+      });
+    }
+    if(view==="blogs"){
+      const [posts,links,catalogue]=await Promise.all([
+        db.select().from(blogPosts).orderBy(desc(blogPosts.createdAt)),
+        db.select({postId:blogPostProducts.postId,productId:blogPostProducts.productId}).from(blogPostProducts).orderBy(asc(blogPostProducts.displayOrder)),
+        db.select({id:products.id,name:products.name,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice}).from(products).where(eq(products.isActive,true)).orderBy(asc(products.name)),
+      ]);
+      return json({
+        posts:posts.map((post)=>({...post,productIds:links.filter((link)=>link.postId===post.id).map((link)=>link.productId)})),
+        products:catalogue.map((row)=>({...row,imageUrl:publicImageUrl(row.imageUrl)})),
+      });
+    }
     if (view === "products") {
       const [catalog, categoryRows, conditions, mappings] = await Promise.all([
         db.select().from(products).orderBy(desc(products.createdAt)),

@@ -11,7 +11,7 @@ import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
 import { handleC2bCallback, handleC2bValidation, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentReview, handlePaymentStatus, handleStkCallback } from "./payment-handlers";
 import {
-  handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOrders, handlePrescriptions, handleTaxonomy,
+  handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOffers, handleOrders, handlePrescriptions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
 } from "./mutations";
 
@@ -104,6 +104,8 @@ async function route(request: Request, ip: string): Promise<Response> {
   const paymentReviewMatch = url.pathname.match(/^\/v1\/payments\/(\d+)\/review$/);
   if (paymentReviewMatch) return responseOf(handlePaymentReview(request, Number(paymentReviewMatch[1])));
   if (url.pathname === "/v1/walk-in-sales") return responseOf(handleWalkInSales(request));
+  if (url.pathname === "/v1/offers") return responseOf(handleOffers(request));
+  const offerMatch=url.pathname.match(/^\/v1\/offers\/(\d+)$/);if(offerMatch)return responseOf(handleOffers(request,Number(offerMatch[1])));
   if (url.pathname === "/v1/campaigns") return responseOf(handleCampaigns(request));
   if (url.pathname === "/v1/blogs") return responseOf(handleBlogs(request));
   const blogMatch=url.pathname.match(/^\/v1\/blogs\/(\d+)$/);if(blogMatch)return responseOf(handleBlogs(request,Number(blogMatch[1])));

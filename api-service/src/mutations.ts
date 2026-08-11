@@ -7,10 +7,11 @@ import sharp from "sharp";
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions,
-  activityLogs, authSessions, blogPosts, categories, emailVerificationTokens, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, twoFactorChallenges, users,
+  activityLogs, authSessions, blogPostProducts, blogPosts, categories, offerItems, offers, emailVerificationTokens, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, twoFactorChallenges, users,
 } from "../../db/schema";
 import { createPasswordResetToken, createSessionToken, createUploadToken, hasStoredTimestamp, requireSession, requestSession, revokeSession, revokeUserSessions, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
+import { apportionBundle, isBundle, loadLiveOffers, offerPriceMap, offerTotal } from "./offers";
 import { orderEmailHtml, sendBulkEmail, sendEmail } from "./email";
 import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, emailVerificationTiming } from "./email-verification";
 import { json, publicImageUrl, safeFilename } from "./http";
@@ -435,7 +436,10 @@ export async function handleOrders(request: Request, id?: number) {
     fullName: z.string().trim().min(3).max(200), phone: z.string().trim().min(9).max(30), email: z.string().trim().email().optional().or(z.literal("")),
     fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA_EXPRESS", "MANUAL_MPESA"]), billingPhone: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(30).optional()), manualPaymentMessage: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(2500).optional()), deliveryAddress: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(1000).optional()), deliveryArea: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(160).optional()),
     deliveryLatitude: z.preprocess(value=>value===null?undefined:value,z.number().min(-90).max(90).optional()), deliveryLongitude: z.preprocess(value=>value===null?undefined:value,z.number().min(-180).max(180).optional()),
-    checkoutToken: z.string().uuid(), items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).min(1),
+    checkoutToken: z.string().uuid(),
+    items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).default([]),
+    // A bundle is an all-or-nothing package, so at most one of each may be ordered.
+    offerItems: z.array(z.object({ offerId: z.number().int().positive() })).max(10).optional().default([]),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid order." }, { status: 400 });
   if (parsed.data.fulfilmentMethod === "DELIVERY" && !parsed.data.deliveryAddress) return json({ error: "Delivery address is required." }, { status: 400 });
@@ -449,8 +453,32 @@ export async function handleOrders(request: Request, id?: number) {
   const manualReceipt = parsed.data.paymentMethod === "MANUAL_MPESA" ? extractMpesaReceipt(parsed.data.manualPaymentMessage || "") : null;
   const catalog = await db.select().from(products).where(inArray(products.id, parsed.data.items.map((item) => item.productId)));
   if (catalog.length !== new Set(parsed.data.items.map((item) => item.productId)).size) return json({ error: "One or more products are unavailable." }, { status: 409 });
-  const lines = parsed.data.items.map((item) => { const product = catalog.find((entry) => entry.id === item.productId)!; const price = Number(product.discountPrice ?? product.price); return { ...item, product, price, total: price * item.quantity }; });
-  const subtotal = lines.reduce((sum, line) => sum + line.total, 0);
+  // Offer pricing is re-resolved here rather than trusted from the client, so the
+  // charge always matches what the storefront is advertising at this moment.
+  const liveOffers = await loadLiveOffers();
+  const offerPrices = offerPriceMap(liveOffers);
+  const lines = parsed.data.items.map((item) => { const product = catalog.find((entry) => entry.id === item.productId)!; const price = offerPrices.get(product.id) ?? Number(product.discountPrice ?? product.price); return { ...item, product, price, total: price * item.quantity }; });
+
+  // Bundles: one order line per component so stock still moves per product, priced
+  // by splitting the bundle total. The customer sees a single line named after the
+  // offer, and pays exactly the bundle price.
+  const bundleLines: Array<{ productId: number; productName: string; quantity: number; unitPrice: number; total: number; offerId: number; offerTitle: string }> = [];
+  for (const requested of parsed.data.offerItems ?? []) {
+    const offer = liveOffers.find((entry) => entry.id === requested.offerId);
+    if (!offer || !isBundle(offer)) return json({ error: "That offer has ended or is no longer available.", code: "OFFER_UNAVAILABLE" }, { status: 409 });
+    const weights = offer.items.map((item) => Math.round(item.normalPrice * item.quantity * 100));
+    const shares = apportionBundle(Math.round(offerTotal(offer) * 100), weights);
+    offer.items.forEach((item, index) => {
+      const lineTotal = shares[index] / 100;
+      bundleLines.push({
+        productId: item.productId, productName: item.name, quantity: item.quantity,
+        unitPrice: Number((lineTotal / item.quantity).toFixed(2)), total: lineTotal,
+        offerId: offer.id, offerTitle: offer.title,
+      });
+    });
+  }
+  if (!lines.length && !bundleLines.length) return json({ error: "Your basket is empty." }, { status: 400 });
+  const subtotal = lines.reduce((sum, line) => sum + line.total, 0) + bundleLines.reduce((sum, line) => sum + line.total, 0);
   const deliveryFee = parsed.data.fulfilmentMethod === "DELIVERY" ? 250 : 0;
   if (parsed.data.paymentMethod === "MPESA_EXPRESS" && !Number.isInteger(subtotal + deliveryFee)) return json({ error: "M-Pesa Express requires a whole-shilling total. Choose manual M-Pesa for this order." }, { status: 409 });
   const session = await requestSession(request);
@@ -468,7 +496,10 @@ export async function handleOrders(request: Request, id?: number) {
   const orderNumber = `HF-${Date.now().toString().slice(-8)}`;
   const result = await db.transaction(async (tx) => {
     const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, paymentMethod: parsed.data.paymentMethod, paymentReference: manualReceipt, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: requiresPrescription ? "UNDER_REVIEW" : "NEW", prescriptionStatus: requiresPrescription ? customerPrescription!.status : "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
-    await tx.insert(orderItems).values(lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })));
+    await tx.insert(orderItems).values([
+      ...lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })),
+      ...bundleLines.map((line) => ({ orderId: created.insertId, productId: line.productId, productName: line.productName, quantity: line.quantity, unitPrice: line.unitPrice.toString(), lineTotal: line.total.toString(), offerId: line.offerId, offerTitle: line.offerTitle })),
+    ]);
     if (customerPrescription) await tx.update(prescriptions).set({ orderId: created.insertId }).where(eq(prescriptions.id, customerPrescription.id));
     const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: (subtotal + deliveryFee).toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
     return { orderId: created.insertId, paymentId: payment.insertId };
@@ -645,13 +676,78 @@ export async function handleReviews(request: Request, productId: number) {
   return json({ ok: true, message: "Thank you. Your verified-purchase review is now live." }, { status: existing ? 200 : 201 });
 }
 
+export async function handleOffers(request: Request, id?: number) {
+  const auth = await requireSession(request, [...admins]);
+  if ("response" in auth) return auth.response;
+  const db = getDb();
+  if (request.method === "DELETE" && id) {
+    await db.delete(offerItems).where(eq(offerItems.offerId, id));
+    await db.delete(offers).where(eq(offers.id, id));
+    return json({ ok: true });
+  }
+  if (request.method !== "POST" && request.method !== "PATCH") return json({ error: "Method not allowed." }, { status: 405 });
+  const parsed = z.object({
+    title: z.string().trim().min(3).max(180),
+    description: z.string().trim().max(500).optional().default(""),
+    endsAt: z.string().trim().max(40).optional().default(""),
+    isActive: z.boolean().default(true),
+    // A bundle price marks the offer as a group buy; leaving it out means each item
+    // carries its own replacement price instead.
+    bundlePrice: z.number().nonnegative().max(10_000_000).nullable().optional(),
+    items: z.array(z.object({
+      productId: z.number().int().positive(),
+      offerPrice: z.number().nonnegative().max(10_000_000).nullable().optional(),
+      quantity: z.number().int().min(1).max(99).optional().default(1),
+    })).min(1).max(20),
+  }).safeParse(await body(request));
+  if (!parsed.success) return json({ error: "Add a title and at least one product." }, { status: 400 });
+  const { items, bundlePrice, endsAt, ...fields } = parsed.data;
+  const expiry = endsAt ? new Date(endsAt) : null;
+  if (expiry && Number.isNaN(expiry.getTime())) return json({ error: "Enter a valid offer end date." }, { status: 400 });
+  if (expiry && request.method === "POST" && expiry.getTime() <= Date.now()) return json({ error: "The offer end date must be in the future." }, { status: 400 });
+  const isGroup = bundlePrice !== null && bundlePrice !== undefined && items.length > 1;
+  if (!isGroup && items.some((item) => item.offerPrice === null || item.offerPrice === undefined)) return json({ error: "Set an offer price for the product." }, { status: 400 });
+  const live = await db.select({ id: products.id }).from(products).where(and(inArray(products.id, items.map((item) => item.productId)), eq(products.isActive, true)));
+  if (live.length !== new Set(items.map((item) => item.productId)).size) return json({ error: "One or more selected products are unavailable." }, { status: 409 });
+
+  const values = { ...fields, description: fields.description || null, bundlePrice: isGroup ? String(bundlePrice) : null, endsAt: expiry };
+  let offerId = id ?? 0;
+  if (request.method === "POST") {
+    const slug = `${fields.title.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`;
+    const [created] = await db.insert(offers).values({ ...values, slug });
+    offerId = created.insertId;
+  } else {
+    if (!id) return json({ error: "Offer not found." }, { status: 404 });
+    await db.update(offers).set(values).where(eq(offers.id, id));
+  }
+  await db.delete(offerItems).where(eq(offerItems.offerId, offerId));
+  await db.insert(offerItems).values(items.map((item, index) => ({
+    offerId, productId: item.productId, quantity: item.quantity ?? 1, displayOrder: index,
+    offerPrice: isGroup ? null : String(item.offerPrice),
+  })));
+  return json({ ok: true, id: offerId }, { status: request.method === "POST" ? 201 : 200 });
+}
+
+export const blogProductLimit = 3;
+// Replaces an article's promoted products in one step. Unknown or inactive ids are
+// dropped rather than rejected so a retired product cannot block saving an article.
+async function setBlogProducts(postId: number, productIds: number[]) {
+  const db = getDb();
+  await db.delete(blogPostProducts).where(eq(blogPostProducts.postId, postId));
+  const wanted = [...new Set(productIds)].slice(0, blogProductLimit);
+  if (!wanted.length) return;
+  const live = await db.select({ id: products.id }).from(products).where(and(inArray(products.id, wanted), eq(products.isActive, true)));
+  const ordered = wanted.filter((productId) => live.some((row) => row.id === productId));
+  if (ordered.length) await db.insert(blogPostProducts).values(ordered.map((productId, index) => ({ postId, productId, displayOrder: index })));
+}
+
 export async function handleBlogs(request: Request, id?: number) {
   const db=getDb();
   if(request.method==="GET"&&!id)return json({posts:await db.select().from(blogPosts).where(eq(blogPosts.isPublished,true)).orderBy(desc(blogPosts.publishedAt))});
   const auth=await requireSession(request,[...admins]);if("response" in auth)return auth.response;
-  if(request.method==="POST"&&!id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(50000),imageUrl:z.string().trim().max(500).optional().default(""),metaTitle:z.string().trim().max(220).optional().default(""),metaDescription:z.string().trim().max(500).optional().default(""),isPublished:z.boolean().default(false)}).safeParse(await body(request));if(!parsed.success)return json({error:"Complete the blog title, excerpt and article."},{status:400});const slug=`${parsed.data.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")}-${Date.now().toString(36)}`,[created]=await db.insert(blogPosts).values({...parsed.data,slug,imageUrl:parsed.data.imageUrl||null,metaTitle:parsed.data.metaTitle||null,metaDescription:parsed.data.metaDescription||null,publishedAt:parsed.data.isPublished?new Date():null,authorId:auth.session.userId});return json({id:created.insertId,slug},{status:201})}
-  if(request.method==="PATCH"&&id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(50000),imageUrl:z.string().trim().max(500).nullable(),metaTitle:z.string().trim().max(220).nullable(),metaDescription:z.string().trim().max(500).nullable(),isPublished:z.boolean()}).safeParse(await body(request));if(!parsed.success)return json({error:"Complete the blog title, excerpt and article."},{status:400});await db.update(blogPosts).set({...parsed.data,publishedAt:parsed.data.isPublished?new Date():null}).where(eq(blogPosts.id,id));return json({ok:true})}
-  if(request.method==="DELETE"&&id){await db.delete(blogPosts).where(eq(blogPosts.id,id));return json({ok:true})}return json({error:"Method not allowed."},{status:405});
+  if(request.method==="POST"&&!id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(50000),imageUrl:z.string().trim().max(500).optional().default(""),metaTitle:z.string().trim().max(220).optional().default(""),metaDescription:z.string().trim().max(500).optional().default(""),isPublished:z.boolean().default(false),productIds:z.array(z.number().int().positive()).max(blogProductLimit).optional().default([])}).safeParse(await body(request));if(!parsed.success)return json({error:"Complete the blog title, excerpt and article."},{status:400});const {productIds,...fields}=parsed.data;const slug=`${fields.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")}-${Date.now().toString(36)}`,[created]=await db.insert(blogPosts).values({...fields,slug,imageUrl:fields.imageUrl||null,metaTitle:fields.metaTitle||null,metaDescription:fields.metaDescription||null,publishedAt:fields.isPublished?new Date():null,authorId:auth.session.userId});await setBlogProducts(created.insertId,productIds);return json({id:created.insertId,slug},{status:201})}
+  if(request.method==="PATCH"&&id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(50000),imageUrl:z.string().trim().max(500).nullable(),metaTitle:z.string().trim().max(220).nullable(),metaDescription:z.string().trim().max(500).nullable(),isPublished:z.boolean(),productIds:z.array(z.number().int().positive()).max(blogProductLimit).optional()}).safeParse(await body(request));if(!parsed.success)return json({error:"Complete the blog title, excerpt and article."},{status:400});const {productIds,...fields}=parsed.data;await db.update(blogPosts).set({...fields,publishedAt:fields.isPublished?new Date():null}).where(eq(blogPosts.id,id));if(productIds!==undefined)await setBlogProducts(id,productIds);return json({ok:true})}
+  if(request.method==="DELETE"&&id){await db.delete(blogPostProducts).where(eq(blogPostProducts.postId,id));await db.delete(blogPosts).where(eq(blogPosts.id,id));return json({ok:true})}return json({error:"Method not allowed."},{status:405});
 }
 
 export const featuredCategoryLimit = 6;

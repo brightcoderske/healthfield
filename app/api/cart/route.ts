@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { CART_COOKIE, parseCart } from "@/lib/shopping-state";
+import { CART_COOKIE, MAX_BUNDLES_PER_OFFER, parseCart, parseCartOffers, serializeCart } from "@/lib/shopping-state";
 import { requestUrl } from "@/lib/request-url";
 
 function safeReturn(value: FormDataEntryValue | null) {
@@ -11,10 +11,17 @@ function safeReturn(value: FormDataEntryValue | null) {
 export async function POST(request: Request) {
   const form = await request.formData();
   const productId = Number(form.get("productId"));
+  const offerId = Number(form.get("offerId"));
   const action = String(form.get("action") || "add");
   const jar = await cookies();
   const cart = parseCart(jar.get(CART_COOKIE)?.value);
-  if (Number.isInteger(productId) && productId > 0) {
+  const offers = parseCartOffers(jar.get(CART_COOKIE)?.value);
+
+  if (Number.isInteger(offerId) && offerId > 0) {
+    // A bundle is a fixed package: it is either in the basket once, or not at all.
+    if (action === "remove") delete offers[offerId];
+    else offers[offerId] = MAX_BUNDLES_PER_OFFER;
+  } else if (Number.isInteger(productId) && productId > 0) {
     if (action === "remove") delete cart[productId];
     else if (action === "set") {
       const quantity = Math.min(99, Math.max(0, Number(form.get("quantity"))));
@@ -25,9 +32,10 @@ export async function POST(request: Request) {
       cart[productId] = Math.min(99, (cart[productId] || 0) + quantity);
     }
   }
+
   const wantsJson = request.headers.get("accept")?.includes("application/json");
-  const response = wantsJson ? NextResponse.json({ ok: true, cart }) : NextResponse.redirect(requestUrl(request, safeReturn(form.get("return"))), 303);
-  response.cookies.set(CART_COOKIE, JSON.stringify(cart), { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 30, path: "/" });
+  const response = wantsJson ? NextResponse.json({ ok: true, cart, offers }) : NextResponse.redirect(requestUrl(request, safeReturn(form.get("return"))), 303);
+  response.cookies.set(CART_COOKIE, serializeCart(cart, offers), { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 30, path: "/" });
   return response;
 }
 

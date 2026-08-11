@@ -169,6 +169,20 @@
       "when": 1786339200000,
       "tag": "0023_featured_storefront_categories",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1786425600000,
+      "tag": "0024_blog_post_products",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1786512000000,
+      "tag": "0025_offers",
+      "breakpoints": true
     }
   ]
 }

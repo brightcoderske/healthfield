@@ -24,8 +24,10 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { ProductCard } from "./product-card";
+import { CatalogueInterruption, type Guide, type OfferTeaser } from "./catalogue-interruption";
+import { planBreaks } from "@/lib/catalogue-breaks";
 
 type CatalogProduct = {
   id: number;
@@ -98,6 +100,9 @@ export function Storefront({
   offersOnly,
   initialCart,
   initialWishlist,
+  guides = [],
+  offers = [],
+  layoutSeed = 1,
 }: {
   initialProducts: CatalogProduct[];
   initialCategories: CatalogCategory[];
@@ -123,6 +128,9 @@ export function Storefront({
   offersOnly: boolean;
   initialCart: Record<number, number>;
   initialWishlist: number[];
+  guides?: Guide[];
+  offers?: OfferTeaser[];
+  layoutSeed?: number;
 }) {
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<Record<number, number>>(initialCart);
@@ -181,6 +189,22 @@ export function Storefront({
     ...displayedCategories.filter((category) => !category.featuredOnStorefront),
   ].slice(0, CATEGORY_PREVIEW);
   const hiddenCategoryCount = Math.max(0, displayedCategories.length - visibleCategories.length);
+  // Which cards break up the catalogue scroll, and where. The rules (spacing,
+  // relevance, urgency, seeded variation) live in lib/catalogue-breaks.
+  const breakPlan = useMemo(() => planBreaks({
+    products: filtered.slice(0, visibleCount).map((product) => ({
+      id: product.id, name: product.name, imageUrl: product.imageUrl, price: product.price,
+      discountPrice: product.discountPrice, categoryId: product.categoryId, conditionIds: product.conditionIds,
+    })),
+    offers,
+    guides,
+    conditions: initialConditions,
+    seed: layoutSeed,
+    // A shopper mid-search or mid-filter is working towards something specific.
+    focused: Boolean(query.trim() || selectedCategory || selectedCondition || offersOnly),
+  }), [filtered, visibleCount, offers, guides, initialConditions, layoutSeed, query, selectedCategory, selectedCondition, offersOnly]);
+  const breakAt = useMemo(() => new Map(breakPlan.map((entry) => [entry.position, entry.item])), [breakPlan]);
+
   const visibleConditions = initialConditions.slice(0, CONDITION_PREVIEW);
   const hiddenConditionCount = Math.max(0, initialConditions.length - visibleConditions.length);
 
@@ -613,7 +637,9 @@ export function Storefront({
         </div>}
         {query.trim() && <aside className="desktop-search-categories">
           <h2><Menu /> Shop by Category</h2>
-          {displayedCategories.map(({ name, icon: Icon, id }) => (
+          {/* Capped to the same shortlist as the hero list so the panel keeps a fixed
+              height instead of growing with every new category. */}
+          {visibleCategories.map(({ name, icon: Icon, id }) => (
             <button type="button" className={selectedCategory===id?"active":""} onClick={()=>{setSelectedCategory(selectedCategory===id?null:id);setVisibleCount(PRODUCT_PAGE_SIZE)}} key={id}>
               <Icon />
               {name}
@@ -690,7 +716,13 @@ export function Storefront({
           <div
             className={`approved-products ${selectedCategory || selectedCondition || query || offersOnly ? "catalogue-expanded" : ""}`}
           >
-            {filtered.slice(0, visibleCount).map((product) => <ProductCard key={product.id} product={product} wishlistActive={wishlist.includes(product.id)} cartQuantity={cart[product.id]} returnTo="/#products" onAddToCart={addToCart} />)}
+            {filtered.slice(0, visibleCount).map((product, index) => {
+              const slot = breakAt.get(index);
+              return <Fragment key={product.id}>
+                {slot && <CatalogueInterruption item={slot} />}
+                <ProductCard product={product} wishlistActive={wishlist.includes(product.id)} cartQuantity={cart[product.id]} returnTo="/#products" onAddToCart={addToCart} />
+              </Fragment>;
+            })}
           </div>
           {visibleCount < filtered.length && (
             <button
