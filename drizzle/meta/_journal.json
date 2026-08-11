@@ -155,6 +155,20 @@
       "when": 1786166400000,
       "tag": "0021_mpesa_payment_workflow",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1786252800000,
+      "tag": "0022_nullable_used_at_timestamps",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "5",
+      "when": 1786339200000,
+      "tag": "0023_featured_storefront_categories",
+      "breakpoints": true
     }
   ]
 }

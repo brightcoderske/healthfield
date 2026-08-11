@@ -1,0 +1,70 @@
+/* Landing catalogue layout.
+
+   The catalogue used to be a sideways-scrolling rail with a fixed row count, so a
+   wider screen only made each card taller rather than showing more stock. It now
+   flows as a wrapping grid: the column count grows with the viewport while the card
+   width stays inside a fixed band, and extra products extend downwards as new rows.
+
+   Loaded last (see app/layout.tsx) so it settles the earlier rail rules, several of
+   which are themselves !important. */
+
+.approved-products {
+  grid-auto-flow: row !important;
+  grid-template-rows: none !important;
+  grid-auto-columns: auto !important;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)) !important;
+  align-items: start !important;
+  overflow: visible !important;
+  scroll-snap-type: none !important;
+  margin-right: 0 !important;
+  padding-right: 0 !important;
+  gap: 8px;
+}
+@media(min-width:480px){ .approved-products { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)) !important; } }
+@media(min-width:640px){ .approved-products { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important; } }
+@media(min-width:821px){ .approved-products { grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)) !important; gap: 10px; } }
+@media(min-width:1280px){ .approved-products { grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)) !important; } }
+
+/* Cards size to their content instead of a fixed row height, so a card never
+   stretches to fill leftover space. */
+.approved-products > .approved-product {
+  height: auto !important;
+  min-height: 0 !important;
+  align-self: start !important;
+  width: auto !important;
+  min-width: 0 !important;
+}
+
+/* A square image box scales with the column width. The previous fixed pixel heights
+   were what clipped the artwork once the card grew. */
+.approved-product .approved-product-main > .approved-product-image,
+.approved-product .approved-product-image {
+  height: auto !important;
+  min-height: 0 !important;
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  overflow: hidden;
+}
+.approved-product .approved-product-image img,
+.approved-product .approved-product-image .product-image-missing {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* Keep the type legible at the narrowest three-column layout. */
+@media(max-width:479px){
+  .approved-product .approved-product-info h3 { font-size: 9.5px; line-height: 1.25; }
+  .approved-product .product-card-prices strong { font-size: 10.5px; }
+  .approved-product .product-card-prices del { font-size: 8.5px; }
+  .approved-product .approved-rating { font-size: 8px; }
+}
+
+/* The section heading stays on one line on small screens; the "view all" control
+   collapses to its arrow so the row costs as little vertical space as possible. */
+@media(max-width:600px){
+  .approved-section > .approved-title h1 { font-size: 13px; }
+  .approved-section > .approved-title .title-action-label { display: none; }
+}
+.approved-title .title-action { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.approved-title .title-action svg { width: 13px; height: 13px; }

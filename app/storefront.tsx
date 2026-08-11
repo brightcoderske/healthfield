@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Activity,
   CircleUserRound,
   HeartPulse,
   Menu,
@@ -9,22 +10,21 @@ import {
   Search,
   ShoppingCart,
   Sparkles,
+  Stethoscope,
+  Thermometer,
   Truck,
   ShieldCheck,
   Phone,
   Upload,
   Heart,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
-  ChevronUp,
-  LayoutGrid,
   MessageCircle,
   ArrowUp,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ProductCard } from "./product-card";
 
 type CatalogProduct = {
@@ -42,12 +42,26 @@ type CatalogProduct = {
   reviewCount: number;
   discountPrice: number | null;
 };
-type CatalogCategory = { id: number; name: string; slug: string };
+type CatalogCategory = { id: number; name: string; slug: string; featuredOnStorefront?: boolean };
 type HealthCondition = { id: number; name: string; slug: string };
 
-// The landing grid is 6 columns wide; 10 categories plus the prescription tile and
-// the toggle tile fill exactly two rows, so new categories no longer stretch the page.
-const CATEGORY_PREVIEW = 10;
+// The storefront shows a fixed six-category shortlist chosen by an administrator
+// (topped up with the remaining categories so the list is never short). Everything
+// else lives behind the header "Shop by category" menu.
+const CATEGORY_PREVIEW = 6;
+const CONDITION_PREVIEW = 5;
+// How many products the landing grid renders at a time. The full catalogue stays
+// reachable through search, category pages and the sitemap; this only keeps the
+// first paint light.
+const PRODUCT_PAGE_SIZE = 50;
+
+type HeaderMenu = "category" | "condition";
+
+// The header menus normally open on hover. They are desktop-only, so a caller that
+// cannot reach them (narrow viewport) is told to fall back to a full page instead.
+function headerMenuReachable(label: HeaderMenu) {
+  return Boolean(document.querySelector<HTMLElement>(`[data-nav-menu="${label}"]`)?.offsetParent);
+}
 
 const categoryPresentation = [
   { icon: Pill, color: "green" },
@@ -56,6 +70,14 @@ const categoryPresentation = [
   { icon: Package, color: "blue" },
   { icon: HeartPulse, color: "pink" },
   { icon: Package, color: "green" },
+];
+
+const conditionPresentation = [
+  { icon: HeartPulse, color: "pink" },
+  { icon: Stethoscope, color: "blue" },
+  { icon: Activity, color: "purple" },
+  { icon: Thermometer, color: "green" },
+  { icon: ShieldCheck, color: "blue" },
 ];
 
 function SocialIcon({ brand }: { brand: "facebook" | "instagram" | "tiktok" | "whatsapp" }) {
@@ -108,12 +130,12 @@ export function Storefront({
   const [selectedCategory, setSelectedCategory] = useState<number | null>(initialCategoryId);
   const [selectedCondition, setSelectedCondition] = useState<number | null>(initialConditionId);
   const [conditionQuery, setConditionQuery] = useState("");
-  const [showAllCategories, setShowAllCategories] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(24);
+  const [categoryQuery, setCategoryQuery] = useState("");
+  const [openMenu, setOpenMenu] = useState<HeaderMenu | null>(null);
+  const [visibleCount, setVisibleCount] = useState(PRODUCT_PAGE_SIZE);
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [searchResults, setSearchResults] = useState<{ products: CatalogProduct[]; similar: CatalogProduct[] } | null>(null);
   const [searching, setSearching] = useState(false);
-  const productRail = useRef<HTMLDivElement>(null);
   const activeSearchResults = query.trim().length >= 2 ? searchResults : null;
 
   const filtered = useMemo(
@@ -152,8 +174,37 @@ export function Storefront({
       : categoryPresentation[index % categoryPresentation.length]),
   }));
   const prescriptionCategory = displayedCategories.find((category) => `${category.name} ${category.slug}`.toLowerCase().includes("prescription"));
-  const hiddenCategoryCount = Math.max(0, displayedCategories.length - CATEGORY_PREVIEW);
-  const visibleCategories = showAllCategories ? displayedCategories : displayedCategories.slice(0, CATEGORY_PREVIEW);
+  // Administrator picks come first; the rest top the list up so the storefront never
+  // renders a short row while nobody has chosen any.
+  const visibleCategories = [
+    ...displayedCategories.filter((category) => category.featuredOnStorefront),
+    ...displayedCategories.filter((category) => !category.featuredOnStorefront),
+  ].slice(0, CATEGORY_PREVIEW);
+  const hiddenCategoryCount = Math.max(0, displayedCategories.length - visibleCategories.length);
+  const visibleConditions = initialConditions.slice(0, CONDITION_PREVIEW);
+  const hiddenConditionCount = Math.max(0, initialConditions.length - visibleConditions.length);
+
+  // "View all" jumps to the header menu that already lists everything, rather than
+  // stretching the landing page. Narrow viewports have no header menu, so they get
+  // the standalone page instead.
+  function revealHeaderMenu(label: HeaderMenu, fallbackUrl: string) {
+    if (!headerMenuReachable(label)) return window.location.assign(fallbackUrl);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    setOpenMenu(label);
+  }
+  useEffect(() => {
+    if (!openMenu) return;
+    const dismiss = (event: Event) => {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (event.type === "pointerdown" && target?.closest(`[data-nav-menu="${openMenu}"]`)) return;
+      setOpenMenu(null);
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", dismiss);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", dismiss); };
+  }, [openMenu]);
+
   useEffect(() => {
     const term = query.trim();
     if (term.length < 2) return;
@@ -185,7 +236,7 @@ export function Storefront({
     );
     const showAll = () => {
       setSelectedCategory(null);
-      setVisibleCount(24);
+      setVisibleCount(PRODUCT_PAGE_SIZE);
       document
         .getElementById("categories")
         ?.scrollIntoView({ behavior: "smooth" });
@@ -282,7 +333,7 @@ export function Storefront({
           <label>
             <input
               value={query}
-              onChange={(event) => { setQuery(event.target.value); setSelectedCategory(null); setSelectedCondition(null); setVisibleCount(24); }}
+              onChange={(event) => { setQuery(event.target.value); setSelectedCategory(null); setSelectedCondition(null); setVisibleCount(PRODUCT_PAGE_SIZE); }}
               placeholder="Search for medicines, health & wellness products..."
             />
             <button>
@@ -311,13 +362,13 @@ export function Storefront({
         <nav className="desktop-store-nav">
           <a className={!selectedCategory ? "active" : ""} href="/">Home</a>
           <a href="/prescriptions/upload">Upload prescription</a>
-          <div className="desktop-nav-dropdown">
+          <div className={`desktop-nav-dropdown${openMenu === "category" ? " is-open" : ""}`} data-nav-menu="category">
             <button type="button">Shop by category <ChevronDown/></button>
             <div className="desktop-nav-grid category-nav-grid">
               {displayedCategories.map((category) => <a key={category.id} className={selectedCategory===category.id?"active":""} href={`/?category=${category.slug}#products`}>{category.name}</a>)}
             </div>
           </div>
-          <div className="desktop-nav-dropdown">
+          <div className={`desktop-nav-dropdown${openMenu === "condition" ? " is-open" : ""}`} data-nav-menu="condition">
             <button type="button">Shop by condition <ChevronDown/></button>
             <div className="desktop-nav-grid condition-nav-grid">
               {initialConditions.map((condition) => <a key={condition.id} className={selectedCondition===condition.id?"active":""} href={`/?condition=${condition.slug}#products`}>{condition.name}</a>)}
@@ -348,7 +399,7 @@ export function Storefront({
             <Search />
             <input
               value={query}
-              onChange={(event) => { setQuery(event.target.value); setSelectedCategory(null); setSelectedCondition(null); setVisibleCount(24); }}
+              onChange={(event) => { setQuery(event.target.value); setSelectedCategory(null); setSelectedCondition(null); setVisibleCount(PRODUCT_PAGE_SIZE); }}
               placeholder="Search products"
             />
           </label>
@@ -386,11 +437,37 @@ export function Storefront({
               <a href="/conditions">See all conditions →</a>
             </div>
           </details>
-          {displayedCategories.map((category) => (
-            <a key={category.id} href={`/?category=${category.slug}#products`}>
-              {category.name}
-            </a>
-          ))}
+          <details>
+            <summary>
+              <span>Shop by category</span>
+              <ChevronDown />
+            </summary>
+            <div>
+              <label>
+                <Search />
+                <input
+                  value={categoryQuery}
+                  onChange={(event) => setCategoryQuery(event.target.value)}
+                  placeholder="Search categories"
+                />
+              </label>
+              {displayedCategories
+                .filter((category) =>
+                  category.name
+                    .toLowerCase()
+                    .includes(categoryQuery.toLowerCase()),
+                )
+                .slice(0, 10)
+                .map((category) => (
+                  <a
+                    key={category.id}
+                    href={`/?category=${category.slug}#products`}
+                  >
+                    {category.name}
+                  </a>
+                ))}
+            </div>
+          </details>
           <a href="/?offers=1#products">Offers</a>
           <a href="/?offers=1#products">Campaign offers</a>
           {viewer ? (
@@ -482,7 +559,7 @@ export function Storefront({
                 onClick={(event) => {
                   event.preventDefault();
                   setSelectedCategory(id);
-                  setVisibleCount(24);
+                  setVisibleCount(PRODUCT_PAGE_SIZE);
                   document
                     .getElementById("products")
                     ?.scrollIntoView({ behavior: "smooth" });
@@ -493,16 +570,8 @@ export function Storefront({
                 <span>›</span>
               </a>
             ))}
-            {hiddenCategoryCount > 0 && !showAllCategories && (
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAllCategories(true);
-                  document
-                    .getElementById("categories")
-                    ?.scrollIntoView({ behavior: "smooth" });
-                }}
-              >
+            {hiddenCategoryCount > 0 && (
+              <button type="button" onClick={() => revealHeaderMenu("category", "/#products")}>
                 View All Categories →
               </button>
             )}
@@ -545,13 +614,13 @@ export function Storefront({
         {query.trim() && <aside className="desktop-search-categories">
           <h2><Menu /> Shop by Category</h2>
           {displayedCategories.map(({ name, icon: Icon, id }) => (
-            <button type="button" className={selectedCategory===id?"active":""} onClick={()=>{setSelectedCategory(selectedCategory===id?null:id);setVisibleCount(24)}} key={id}>
+            <button type="button" className={selectedCategory===id?"active":""} onClick={()=>{setSelectedCategory(selectedCategory===id?null:id);setVisibleCount(PRODUCT_PAGE_SIZE)}} key={id}>
               <Icon />
               {name}
               <span>›</span>
             </button>
           ))}
-          <button type="button" onClick={()=>{setSelectedCategory(null);setSelectedCondition(null);setQuery("");setVisibleCount(24)}}>View All Categories →</button>
+          <button type="button" onClick={()=>{setSelectedCategory(null);setSelectedCondition(null);setQuery("");setVisibleCount(PRODUCT_PAGE_SIZE)}}>View All Categories →</button>
         </aside>}
         <label className="approved-search">
           <Search />
@@ -561,27 +630,19 @@ export function Storefront({
               setQuery(event.target.value);
               setSelectedCategory(null);
               setSelectedCondition(null);
-              setVisibleCount(24);
+              setVisibleCount(PRODUCT_PAGE_SIZE);
             }}
             placeholder="Search products, categories..."
             aria-label="Search products and categories"
           />
         </label>
 
-        {!query.trim() && <section className="approved-section" id="categories">
+        {!query.trim() && <section className="approved-section" id="conditions">
           <div className="approved-title">
-            <h1>Categories</h1>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedCategory(null);
-                setVisibleCount(24);
-                document
-                  .getElementById("products")
-                  ?.scrollIntoView({ behavior: "smooth" });
-              }}
-            >
-              View All Products
+            <h1>Shop by Condition</h1>
+            <button className="title-action" type="button" aria-label="View all conditions" onClick={() => revealHeaderMenu("condition", "/conditions")}>
+              <span className="title-action-label">View all</span>
+              <ChevronRight />
             </button>
           </div>
           <div className="approved-categories">
@@ -594,37 +655,28 @@ export function Storefront({
               </span>
               <small>Upload Prescription</small>
             </a>
-            {visibleCategories.map(({ id, name, icon: Icon, color }) => (
-              <button
-                key={id}
-                id={`category-${id}`}
-                onClick={() => {
-                  setSelectedCategory(id);
-                  setVisibleCount(24);
-                  document
-                    .getElementById("products")
-                    ?.scrollIntoView({ behavior: "smooth" });
-                }}
-              >
-                <span className={color}>
-                  <Icon />
-                </span>
-                <small>{name}</small>
-              </button>
-            ))}
-            {hiddenCategoryCount > 0 && (
-              <button
-                type="button"
-                className="category-toggle-tile"
-                aria-expanded={showAllCategories}
-                onClick={() => setShowAllCategories((current) => !current)}
-              >
-                <span className="purple">
-                  {showAllCategories ? <ChevronUp /> : <LayoutGrid />}
-                </span>
-                <small>{showAllCategories ? "Show Less" : `View All (${hiddenCategoryCount} more)`}</small>
-              </button>
-            )}
+            {visibleConditions.map((condition, index) => {
+              const { icon: Icon, color } = conditionPresentation[index % conditionPresentation.length];
+              return (
+                <button
+                  key={condition.id}
+                  id={`condition-${condition.id}`}
+                  onClick={() => {
+                    setSelectedCondition(condition.id);
+                    setSelectedCategory(null);
+                    setVisibleCount(PRODUCT_PAGE_SIZE);
+                    document
+                      .getElementById("products")
+                      ?.scrollIntoView({ behavior: "smooth" });
+                  }}
+                >
+                  <span className={color}>
+                    <Icon />
+                  </span>
+                  <small>{condition.name}</small>
+                </button>
+              );
+            })}
           </div>
         </section>}
 
@@ -634,36 +686,9 @@ export function Storefront({
               <h2>Shop Health &amp; Wellness</h2>
               <small>{searching ? "Searching the catalogue…" : "Search by product, brand or health need"}</small>
             </div>
-            <div className="product-rail-controls">
-              <button
-                type="button"
-                onClick={() =>
-                  productRail.current?.scrollBy({
-                    left: -440,
-                    behavior: "smooth",
-                  })
-                }
-                aria-label="Previous products"
-              >
-                <ChevronLeft />
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  productRail.current?.scrollBy({
-                    left: 440,
-                    behavior: "smooth",
-                  })
-                }
-                aria-label="More products"
-              >
-                <ChevronRight />
-              </button>
-            </div>
           </div>
           <div
             className={`approved-products ${selectedCategory || selectedCondition || query || offersOnly ? "catalogue-expanded" : ""}`}
-            ref={productRail}
           >
             {filtered.slice(0, visibleCount).map((product) => <ProductCard key={product.id} product={product} wishlistActive={wishlist.includes(product.id)} cartQuantity={cart[product.id]} returnTo="/#products" onAddToCart={addToCart} />)}
           </div>
@@ -671,10 +696,9 @@ export function Storefront({
             <button
               className="catalogue-show-more"
               type="button"
-              onClick={() => setVisibleCount((count) => count + 24)}
+              onClick={() => setVisibleCount((count) => count + PRODUCT_PAGE_SIZE)}
             >
-              Show more products{" "}
-              <span>{Math.min(24, filtered.length - visibleCount)} more</span>
+              Show more products
             </button>
           )}
           {(selectedCategory || selectedCondition || query || offersOnly) &&

@@ -51,8 +51,8 @@
   .desktop-nav-dropdown>button { height:40px;padding:0;border:0;color:inherit;background:transparent;display:flex;align-items:center;gap:4px;font:inherit;font-weight:650;cursor:pointer; }
   .desktop-nav-dropdown>button svg { width:12px;transition:transform .16s ease; }
   .desktop-nav-grid { visibility:hidden;opacity:0;pointer-events:none;position:absolute;z-index:60;top:calc(100% - 1px);left:50%;width:min(660px,calc(100vw - 44px));padding:13px;border:1px solid #e5dce8;border-radius:0 0 12px 12px;background:#fff;box-shadow:0 16px 35px #33123a24;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;transform:translate(-50%,8px);transition:opacity .16s ease,transform .16s ease,visibility .16s; }
-  .desktop-nav-dropdown:hover .desktop-nav-grid,.desktop-nav-dropdown:focus-within .desktop-nav-grid { visibility:visible;opacity:1;pointer-events:auto;transform:translate(-50%,0); }
-  .desktop-nav-dropdown:hover>button svg,.desktop-nav-dropdown:focus-within>button svg { transform:rotate(180deg); }
+  .desktop-nav-dropdown:hover .desktop-nav-grid,.desktop-nav-dropdown:focus-within .desktop-nav-grid,.desktop-nav-dropdown.is-open .desktop-nav-grid { visibility:visible;opacity:1;pointer-events:auto;transform:translate(-50%,0); }
+  .desktop-nav-dropdown:hover>button svg,.desktop-nav-dropdown:focus-within>button svg,.desktop-nav-dropdown.is-open>button svg { transform:rotate(180deg); }
   .desktop-nav-grid a { min-height:34px !important;height:auto !important;padding:7px 9px;border:0 !important;border-radius:7px;color:#4b444e;background:#faf7fb;display:flex;align-items:center;font-size:9px; }
   .desktop-nav-grid a:hover,.desktop-nav-grid a.active { color:#792587;background:#f1e6f4; }
   .condition-nav-grid { max-height:330px;overflow-y:auto;grid-template-columns:repeat(3,minmax(0,1fr)); }

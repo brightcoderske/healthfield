@@ -67,6 +67,8 @@ export const categories = mysqlTable("categories", {
   imageUrl: varchar("image_url", { length: 500 }),
   displayOrder: int("display_order").default(0).notNull(),
   isActive: boolean("is_active").default(true).notNull(),
+  // At most six categories may be featured in the storefront "Shop by category" list.
+  featuredOnStorefront: boolean("featured_on_storefront").default(false).notNull(),
   ...timestamps,
 }, (table) => [uniqueIndex("categories_slug_unique").on(table.slug)]);
 

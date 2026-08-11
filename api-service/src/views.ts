@@ -43,7 +43,7 @@ async function home() {
       .orderBy(desc(products.isFeatured), desc(products.createdAt)).limit(48),
     db.select().from(productHealthConditions),
     db.select().from(siteSettings).limit(1),
-    db.select({ id: categories.id, name: categories.name, slug: categories.slug }).from(categories)
+    db.select({ id: categories.id, name: categories.name, slug: categories.slug, featuredOnStorefront: categories.featuredOnStorefront }).from(categories)
       .where(eq(categories.isActive, true)).orderBy(categories.displayOrder),
     db.select({ id: healthConditions.id, name: healthConditions.name, slug: healthConditions.slug }).from(healthConditions)
       .where(eq(healthConditions.isActive, true)).orderBy(healthConditions.displayOrder),

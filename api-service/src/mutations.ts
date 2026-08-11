@@ -9,7 +9,7 @@ import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions,
   activityLogs, authSessions, blogPosts, categories, emailVerificationTokens, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, twoFactorChallenges, users,
 } from "../../db/schema";
-import { createPasswordResetToken, createSessionToken, createUploadToken, requireSession, requestSession, revokeSession, revokeUserSessions, verifyPasswordResetToken } from "./auth";
+import { createPasswordResetToken, createSessionToken, createUploadToken, hasStoredTimestamp, requireSession, requestSession, revokeSession, revokeUserSessions, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
 import { orderEmailHtml, sendBulkEmail, sendEmail } from "./email";
 import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, emailVerificationTiming } from "./email-verification";
@@ -140,7 +140,7 @@ export async function handleAuth(request: Request, action: string) {
     const challengeHash = tokenHash(parsed.data.challengeToken);
     const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, challengeHash)).limit(1);
     if (!challenge) { console.warn("2FA verification failed", { reason: "challenge_not_found", challengeHash: challengeHash.slice(0, 12) }); return json({ error: "This login request was not found. Return to login and start again.", code: "TWO_FACTOR_ENDED" }, { status: 401 }); }
-    if (challenge.usedAt) { console.warn("2FA verification failed", { reason: "challenge_already_completed", challengeId: challenge.id }); return json({ error: "This login request has already been completed. Return to login and start again.", code: "TWO_FACTOR_ENDED" }, { status: 401 }); }
+    if (hasStoredTimestamp(challenge.usedAt)) { console.warn("2FA verification failed", { reason: "challenge_already_completed", challengeId: challenge.id }); return json({ error: "This login request has already been completed. Return to login and start again.", code: "TWO_FACTOR_ENDED" }, { status: 401 }); }
     if (challenge.attemptCount >= twoFactorMaximumAttempts) return json({ error: "Too many incorrect attempts. Send a new code to continue.", code: "TWO_FACTOR_LOCKED" }, { status: 401 });
     const now = Date.now();
     if (!challenge.expiresAtMs || now >= challenge.expiresAtMs) { console.warn("2FA verification failed", { reason: "challenge_expired", challengeId: challenge.id }); return json({ error: "This code has expired. Send a new code to continue.", code: "TWO_FACTOR_EXPIRED" }, { status: 401 }); }
@@ -173,7 +173,7 @@ export async function handleAuth(request: Request, action: string) {
     const hash = tokenHash(parsed.data.challengeToken);
     const [challenge] = await db.select().from(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, hash)).limit(1);
     const now = Date.now();
-    if (!challenge || challenge.usedAt || now >= challenge.challengeEndsAtMs || challenge.resendCount >= twoFactorMaximumResends) return json({ error: "This secure login request has ended. Return to login to start again.", code: "TWO_FACTOR_ENDED" }, { status: 429 });
+    if (!challenge || hasStoredTimestamp(challenge.usedAt) || now >= challenge.challengeEndsAtMs || challenge.resendCount >= twoFactorMaximumResends) return json({ error: "This secure login request has ended. Return to login to start again.", code: "TWO_FACTOR_ENDED" }, { status: 429 });
     if (!challenge.lastSentAtMs || now - challenge.lastSentAtMs < twoFactorResendCooldownMs) {
       const retryAfterSeconds = Math.max(1, Math.ceil(((challenge.lastSentAtMs || now) + twoFactorResendCooldownMs - now) / 1000));
       return json({ error: `You can send another code in ${retryAfterSeconds} seconds.`, code: "TWO_FACTOR_COOLDOWN", retryAfterSeconds }, { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } });
@@ -254,8 +254,8 @@ export async function handleAuth(request: Request, action: string) {
     if (!record || !record.expiresAtMs || record.expiresAtMs <= Date.now()) return json({ error: "This activation link is invalid or has expired.", code: "ACTIVATION_LINK_INVALID" }, { status: 400 });
     const [user] = await db.select().from(users).where(and(eq(users.id, record.userId), eq(users.role, "CUSTOMER"))).limit(1);
     if (!user) return json({ error: "This activation link is no longer valid.", code: "ACTIVATION_LINK_INVALID" }, { status: 400 });
-    if (record.usedAt || user.emailVerifiedAt) {
-      if (!user.emailVerifiedAt) return json({ error: "This activation link is no longer valid.", code: "ACTIVATION_LINK_INVALID" }, { status: 400 });
+    if (hasStoredTimestamp(record.usedAt) || hasStoredTimestamp(user.emailVerifiedAt)) {
+      if (!hasStoredTimestamp(user.emailVerifiedAt)) return json({ error: "This activation link is no longer valid.", code: "ACTIVATION_LINK_INVALID" }, { status: 400 });
       return json({ ok: true, alreadyActivated: true, message: "Your email is already verified. You can continue to login." });
     }
     const activated = await db.transaction(async (tx) => {
@@ -654,19 +654,36 @@ export async function handleBlogs(request: Request, id?: number) {
   if(request.method==="DELETE"&&id){await db.delete(blogPosts).where(eq(blogPosts.id,id));return json({ok:true})}return json({error:"Method not allowed."},{status:405});
 }
 
+export const featuredCategoryLimit = 6;
+// The storefront "Shop by category" list renders a fixed six-tile row, so the
+// limit is enforced here as well as in the admin UI.
+async function featuredCategoryCount(excludeId?: number) {
+  const rows = await getDb().select({ id: categories.id }).from(categories).where(and(eq(categories.featuredOnStorefront, true), eq(categories.isActive, true)));
+  return rows.filter((row) => row.id !== excludeId).length;
+}
+
 export async function handleTaxonomy(request: Request, kind: "categories" | "conditions", id?: number) {
   const auth = await requireSession(request, [...admins]);
   if ("response" in auth) return auth.response;
   if (request.method === "DELETE" && id) { if(kind==="categories")await getDb().update(categories).set({isActive:false}).where(eq(categories.id,id));else await getDb().update(healthConditions).set({isActive:false}).where(eq(healthConditions.id,id)); return json({ok:true}); }
-  if (request.method === "PATCH" && id) { const parsed=z.object({name:z.string().trim().min(2).max(150),description:z.string().trim().max(500).optional().default("")}).safeParse(await body(request));if(!parsed.success)return json({error:"Enter a valid name."},{status:400});if(kind==="categories")await getDb().update(categories).set({name:parsed.data.name}).where(eq(categories.id,id));else await getDb().update(healthConditions).set({name:parsed.data.name,description:parsed.data.description||null}).where(eq(healthConditions.id,id));return json({ok:true}); }
+  if (request.method === "PATCH" && id) {
+    const parsed=z.object({name:z.string().trim().min(2).max(150),description:z.string().trim().max(500).optional().default(""),featured:z.boolean().optional()}).safeParse(await body(request));
+    if(!parsed.success)return json({error:"Enter a valid name."},{status:400});
+    if(kind==="categories"){
+      if(parsed.data.featured===true&&await featuredCategoryCount(id)>=featuredCategoryLimit)return json({error:`You can only feature ${featuredCategoryLimit} categories on the storefront. Unfeature another category first.`,code:"FEATURED_LIMIT"},{status:409});
+      await getDb().update(categories).set({name:parsed.data.name,...(parsed.data.featured===undefined?{}:{featuredOnStorefront:parsed.data.featured})}).where(eq(categories.id,id));
+    } else await getDb().update(healthConditions).set({name:parsed.data.name,description:parsed.data.description||null}).where(eq(healthConditions.id,id));
+    return json({ok:true});
+  }
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
-  const parsed = z.object({ name: z.string().trim().min(2).max(150), description: z.string().trim().max(500).optional().default("") }).safeParse(await body(request));
+  const parsed = z.object({ name: z.string().trim().min(2).max(150), description: z.string().trim().max(500).optional().default(""), featured: z.boolean().optional().default(false) }).safeParse(await body(request));
   if (!parsed.success) return json({ error: "Enter a valid name." }, { status: 400 });
+  if (kind === "categories" && parsed.data.featured && await featuredCategoryCount() >= featuredCategoryLimit) return json({ error: `You can only feature ${featuredCategoryLimit} categories on the storefront. Unfeature another category first.`, code: "FEATURED_LIMIT" }, { status: 409 });
   const slug = `${parsed.data.name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`;
   const [created] = kind === "categories"
-    ? await getDb().insert(categories).values({ name: parsed.data.name, slug, isActive: true })
+    ? await getDb().insert(categories).values({ name: parsed.data.name, slug, isActive: true, featuredOnStorefront: parsed.data.featured })
     : await getDb().insert(healthConditions).values({ name: parsed.data.name, slug, description: parsed.data.description || null, isActive: true });
-  return json({ ok: true, id: created.insertId, name: parsed.data.name }, { status: 201 });
+  return json({ ok: true, id: created.insertId, name: parsed.data.name, featured: kind === "categories" ? parsed.data.featured : undefined }, { status: 201 });
 }
 
 function storageRoot() {

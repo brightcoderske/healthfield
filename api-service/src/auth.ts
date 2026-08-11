@@ -16,7 +16,10 @@ function secret() {
 
 const sessionTokenPrefix = "hfs_";
 const sessionTokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
-const hasStoredTimestamp = (value: Date | null) => value instanceof Date && !Number.isNaN(value.getTime());
+// MySQL hosts running with explicit_defaults_for_timestamp=OFF turn a nullable
+// TIMESTAMP into NOT NULL DEFAULT '0000-00-00 00:00:00', which the driver reads
+// back as an Invalid Date. Treat that zero value as "never set".
+export const hasStoredTimestamp = (value: Date | null) => value instanceof Date && !Number.isNaN(value.getTime());
 
 export async function createSessionToken(session: Session) {
   const now = Date.now();
