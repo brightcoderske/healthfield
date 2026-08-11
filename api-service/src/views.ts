@@ -158,7 +158,12 @@ export async function handleView(request: Request, path: string) {
     const rows = await getDb().select().from(healthConditions).where(eq(healthConditions.isActive, true)).orderBy(asc(healthConditions.displayOrder), asc(healthConditions.name));
     return json({ conditions: rows }, { headers: { "Cache-Control": "public, max-age=300" } });
   }
-  if(path==="blogs")return json({posts:await getDb().select().from(blogPosts).where(eq(blogPosts.isPublished,true)).orderBy(desc(blogPosts.publishedAt))},{headers:{"Cache-Control":"public, max-age=300"}});
+  if(path==="blogs"){
+    const rows=await getDb().select().from(blogPosts).where(eq(blogPosts.isPublished,true)).orderBy(desc(blogPosts.publishedAt));
+    // Reading time is derived here so the index never has to ship article bodies.
+    const posts=rows.map(({content,...post})=>({...post,imageUrl:publicImageUrl(post.imageUrl),readMinutes:Math.max(1,Math.round(content.trim().split(/\s+/).length/200))}));
+    return json({posts},{headers:{"Cache-Control":"public, max-age=300"}});
+  }
   const blogMatch=path.match(/^blogs\/([^/]+)$/);
   if(blogMatch){
     const db=getDb();

@@ -21,7 +21,7 @@
     "release:cpanel": "npm run build && npm run package:cpanel",
     "deploy:cpanel": "node scripts/deploy-cpanel.mjs",
     "start": "node server.cjs",
-    "test": "npm run test:two-factor && npm run test:email-verification && npm run test:mpesa && npm run test:offers && npm run test:catalogue && npm run build && npm run check:api && npm run build:api && npm run smoke:api",
+    "test": "npm run test:two-factor && npm run test:email-verification && npm run test:mpesa && npm run test:offers && npm run test:catalogue && npm run test:richtext && npm run build && npm run check:api && npm run build:api && npm run smoke:api",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -31,7 +31,8 @@
     "db:sync-inventory": "node scripts/sync-inventory.mjs",
     "images:optimize-existing": "node --env-file=api-service/.env scripts/optimize-existing-product-images.mjs",
     "test:offers": "node --experimental-strip-types --test api-service/src/offers.test.ts",
-    "test:catalogue": "node --experimental-strip-types --test lib/catalogue-breaks.test.ts"
+    "test:catalogue": "node --experimental-strip-types --test lib/catalogue-breaks.test.ts",
+    "test:richtext": "node --experimental-strip-types --test lib/rich-text-safety.test.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   description: "Practical pharmacist-reviewed health, medicine and wellness information from Healthfield Pharmacy in Juja and Nairobi.",
 };
 
-type Post = { id:number; title:string; slug:string; excerpt:string; imageUrl:string|null; publishedAt:string|null };
+type Post = { id:number; title:string; slug:string; excerpt:string; imageUrl:string|null; publishedAt:string|null; category:string|null; readMinutes?:number };
 
 export default async function Blog() {
   // This page is prerendered at build time. An unreachable or misbehaving API used

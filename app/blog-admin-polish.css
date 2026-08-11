@@ -47,3 +47,26 @@
 .blog-product-results button>span{min-width:0;display:flex;flex-direction:column}
 .blog-product-results strong{font-size:9.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .blog-product-results small{color:#7c7480;font-size:8.5px}
+
+/* Topic select in the article editor */
+.polished-blog-editor select{min-height:38px;padding:0 10px;border:1px solid #ddd5e0;border-radius:8px;background:#fff;font-size:11px;font-weight:600;color:#4b444e}
+
+/* Rich text toolbar: colour swatches and the extra formatting controls */
+.rich-colour{position:relative;display:inline-flex}
+.rich-swatches{position:absolute;z-index:12;top:calc(100% + 5px);left:0;display:flex;gap:5px;padding:6px;border:1px solid #ddd3e1;border-radius:8px;background:#fff;box-shadow:0 8px 20px rgba(40,18,50,.16)}
+.rich-swatches button{width:20px;height:20px;padding:0;border:1px solid rgba(0,0,0,.12);border-radius:5px;cursor:pointer}
+/* Article typography for the richer blocks */
+.rich-content h2{margin:20px 0 8px;font-size:19px;color:#4a1358}
+.rich-content h3{margin:16px 0 6px;font-size:15px;color:#5d2168}
+.rich-content ul,.rich-content ol{margin:8px 0 12px;padding-left:20px;display:flex;flex-direction:column;gap:5px}
+.rich-content li{line-height:1.6}
+.rich-content p{margin:0 0 11px}
+.rich-content a{color:#b4185f;font-weight:700;text-decoration:underline}
+.rich-content a:hover{color:#7c2382}
+.rich-content mark{background:#fdf0b8;color:inherit;padding:0 3px;border-radius:3px}
+.rich-sizes{padding:5px}
+.rich-sizes button{width:auto;height:26px;padding:0 9px;border:1px solid #e4dcE7;border-radius:6px;background:#fff;color:#4b444e;font-size:10px;font-weight:700;white-space:nowrap}
+.rich-sizes button:hover{border-color:#7c2382;color:#7c2382}
+.rich-content .rt-sm{font-size:.85em}
+.rich-content .rt-lg{font-size:1.22em;font-weight:650}
+.rich-content .rt-xl{font-size:1.5em;font-weight:750;line-height:1.3}

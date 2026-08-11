@@ -385,6 +385,8 @@ export const blogPosts = mysqlTable("blog_posts", {
   slug: varchar("slug", { length: 240 }).notNull(),
   excerpt: varchar("excerpt", { length: 500 }).notNull(),
   content: text("content").notNull(),
+  // Editorial topic shown as a badge on the blog index and used for its filters.
+  category: varchar("category", { length: 60 }),
   imageUrl: varchar("image_url", { length: 500 }),
   metaTitle: varchar("meta_title", { length: 220 }),
   metaDescription: varchar("meta_description", { length: 500 }),

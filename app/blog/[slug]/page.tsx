@@ -1,12 +1,15 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { BackendError, backendPublicJson } from "@/lib/backend-api";
 import { RichText } from "@/app/products/rich-text";
 import { BlogProductPromo, type PromoProduct } from "../blog-product-promo";
+import { ShareArticle } from "../share-article";
+import { PublicFooter, type PublicContact } from "@/app/public-footer";
+import { getSession } from "@/lib/auth";
+import { ArrowLeft, MessageCircle } from "lucide-react";
 
-type Post = { title:string; excerpt:string; content:string; imageUrl:string|null; metaTitle:string|null; metaDescription:string|null; publishedAt:string|null };
+type Post = { title:string; excerpt:string; content:string; imageUrl:string|null; metaTitle:string|null; metaDescription:string|null; publishedAt:string|null; category:string|null };
 type Article = { post: Post; products?: PromoProduct[] };
 
 async function get(slug: string): Promise<Article | null> {
@@ -35,31 +38,55 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function Article({ params }: { params: Promise<{ slug: string }> }) {
   const slug = (await params).slug;
-  const data = await get(slug);
+  // The site footer needs contact details; a failure there must not lose the article.
+  const [data, home, session] = await Promise.all([
+    get(slug),
+    backendPublicJson<{ contact: PublicContact }>("/v1/views/home", 60).catch(() => null),
+    getSession().catch(() => null),
+  ]);
   if (!data) notFound();
   const { post } = data;
   const promoted = data.products || [];
   const { blocks, slots } = layout(post.content, promoted.length);
-  return <main className="blog-article">
-    <header>
-      <Link href="/"><Image src="/healthfield-logo-clean.png" alt="Healthfield Pharmacy" width={210} height={75}/></Link>
-      <Link href="/blog">← Health guide</Link>
-    </header>
-    <article>
-      <span>Pharmacist health guide</span>
-      <h1>{post.title}</h1>
-      <p className="lead">{post.excerpt}</p>
-      {post.imageUrl && <img src={post.imageUrl} alt={post.title}/>}
-      {blocks.map((block, index) => {
-        const promoIndex = slots.indexOf(index);
-        return <div key={index}>
-          {promoIndex > -1 && promoted[promoIndex] && <BlogProductPromo product={promoted[promoIndex]} returnTo={`/blog/${slug}`}/>}
-          <RichText value={block}/>
-        </div>;
-      })}
-      {/* Anything that did not fit a break (very short articles) still gets shown. */}
-      {promoted.slice(slots.length).map((product) => <BlogProductPromo key={product.id} product={product} returnTo={`/blog/${slug}`}/>)}
-      <aside>Health information is general and does not replace diagnosis or advice from your doctor or pharmacist.</aside>
-    </article>
-  </main>;
+  return <>
+  <main className="blog-article">
+    {/* Hero: the artwork carries the headline rather than sitting above it. */}
+    <div className={`article-hero${post.imageUrl ? "" : " no-art"}`}>
+      {post.imageUrl && <img src={post.imageUrl} alt=""/>}
+      <Link className="article-hero-back" href="/blog"><ArrowLeft/> Back to all blogs</Link>
+      <div>
+        {post.category && <span className="article-hero-badge">{post.category}</span>}
+        <h1>{post.title}</h1>
+        <p>{post.excerpt}</p>
+        <small>By Healthfield Pharmacy Team{post.publishedAt ? ` · ${new Date(post.publishedAt).toLocaleDateString("en-KE", { month: "short", day: "numeric", year: "numeric" })}` : ""}</small>
+      </div>
+    </div>
+
+    <div className="article-layout">
+      <article>
+        <div className="article-body">
+          {blocks.map((block, index) => {
+            const promoIndex = slots.indexOf(index);
+            return <div key={index}>
+              {promoIndex > -1 && promoted[promoIndex] && <BlogProductPromo product={promoted[promoIndex]} returnTo={`/blog/${slug}`}/>}
+              <RichText value={block}/>
+            </div>;
+          })}
+          {promoted.slice(slots.length).map((product) => <BlogProductPromo key={product.id} product={product} returnTo={`/blog/${slug}`}/>)}
+          <aside className="article-disclaimer">Health information is general and does not replace diagnosis or advice from your doctor or pharmacist.</aside>
+        </div>
+      </article>
+
+      <aside className="article-rail">
+        <section className="article-advice">
+          <h3>Need health advice?</h3>
+          <p>Our pharmacists are here to help you live healthier every day.</p>
+          <Link prefetch={false} href="/chat"><MessageCircle/> Chat with a Pharmacist</Link>
+        </section>
+        <ShareArticle path={`/blog/${slug}`} title={post.title}/>
+      </aside>
+    </div>
+  </main>
+  {home?.contact && <PublicFooter contact={home.contact} signedIn={!!session}/>}
+  </>;
 }

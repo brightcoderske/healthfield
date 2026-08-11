@@ -19,6 +19,7 @@ import "./responsive-ui.css";
 import "./product-grid.css";
 import "./offers-ui.css";
 import "./catalogue-breaks.css";
+import "./blog-index.css";
 
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 

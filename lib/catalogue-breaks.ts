@@ -133,8 +133,13 @@ function pickProduct(products: BreakProduct[], position: number, used: Set<numbe
     if (product.discountPrice !== null) value += 1;
     return value;
   };
-  const ranked = shuffled(pool, random).sort((left, right) => score(right) - score(left));
-  return ranked[0] ?? null;
+  const product = shuffled(pool, random).sort((left, right) => score(right) - score(left))[0];
+  if (!product) return null;
+  // Only a condition the surrounding products actually share may headline the card.
+  // Using the product's own first condition produced nonsense like "Pregnancy?" over
+  // a cold-and-flu shelf; with no shared condition the card stays neutral instead.
+  const sharedConditionId = product.conditionIds.find((id) => conditions.has(id)) ?? null;
+  return { product, sharedConditionId };
 }
 
 /**
@@ -190,11 +195,13 @@ export function planBreaks(input: {
       guideCursor += 1;
       return;
     }
-    const product = pickProduct(products, position, usedProducts, random);
-    if (!product) return;
-    usedProducts.add(product.id);
-    const conditionName = conditions.find((condition) => product.conditionIds.includes(condition.id))?.name ?? null;
-    plan.push({ position, item: { kind: "product", product: { ...product, conditionName } } });
+    const picked = pickProduct(products, position, usedProducts, random);
+    if (!picked) return;
+    usedProducts.add(picked.product.id);
+    const conditionName = picked.sharedConditionId === null
+      ? null
+      : conditions.find((condition) => condition.id === picked.sharedConditionId)?.name ?? null;
+    plan.push({ position, item: { kind: "product", product: { ...picked.product, conditionName } } });
   });
   return plan;
 }

@@ -93,3 +93,32 @@ test("a recommendation is never a product already scrolled past, and never repea
     assert.ok(indexOfProduct >= entry.position, `product ${entry.item.product.id} sits above the break at ${entry.position}`);
   }
 });
+
+test("the hook only names a condition the surrounding shelf actually shares", () => {
+  // Regression: a card headlined "Pregnancy?" over a cold-and-flu shelf because it
+  // read the recommended product's own first condition instead of a shared one.
+  const COLD = 1, PREGNANCY = 2;
+  const shelf = Array.from({ length: 40 }, (_, index) =>
+    product(index + 1, { categoryId: 1, conditionIds: [COLD] }));
+  // The only candidate left is unrelated to everything on the shelf.
+  const odd = product(99, { name: "Prenatal Vitamins", categoryId: 9, conditionIds: [PREGNANCY] });
+  const plan = planBreaks({
+    products: [...shelf, odd],
+    offers: [], guides: [],
+    conditions: [{ id: COLD, name: "Cold & Flu" }, { id: PREGNANCY, name: "Pregnancy" }],
+    seed: 21,
+  });
+  for (const entry of plan) {
+    if (entry.item.kind !== "product") continue;
+    const { product: shown, conditionName } = entry.item;
+    if (conditionName === null) continue;
+    const shownConditions = shown.conditionIds;
+    assert.ok(shownConditions.includes(COLD) || conditionName !== "Pregnancy",
+      `a "${conditionName}" hook must not headline a shelf that does not share it`);
+  }
+  // And a product sharing nothing with the shelf never claims a condition.
+  const oddEntry = plan.find((entry) => entry.item.kind === "product" && entry.item.product.id === 99);
+  if (oddEntry && oddEntry.item.kind === "product") {
+    assert.equal(oddEntry.item.product.conditionName, null, "an unrelated product must use the neutral hook");
+  }
+});

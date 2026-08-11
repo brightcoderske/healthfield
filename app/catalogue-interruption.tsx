@@ -2,6 +2,7 @@
 
 import { BookOpen, Package, Percent, Sparkles } from "lucide-react";
 import Link from "next/link";
+import { OfferCountdown } from "./offer-countdown";
 
 export type Guide = { id:number; slug:string; title:string; excerpt:string; imageUrl:string|null };
 export type SuggestedProduct = { id:number; name:string; imageUrl:string|null; price:number; discountPrice:number|null; conditionName:string|null };
@@ -24,8 +25,11 @@ function OfferSlide({ offer }: { offer: OfferTeaser }) {
     <div>
       <strong>{offer.title}</strong>
       <p>{offer.description || (offer.isBundle ? `${offer.itemCount} products, one price.` : "Reduced while this offer runs.")}</p>
-      <p className="offer-slide-price">{money(offer.total)}{saving > 0 && <del>{money(offer.normalTotal)}</del>}</p>
-      {offer.endsAt && <small>Ends {new Date(offer.endsAt).toLocaleDateString("en-KE")}</small>}
+      <p className="offer-slide-price">
+        {money(offer.total)}
+        {saving > 0 && <del>{money(offer.normalTotal)}</del>}
+      </p>
+      <OfferCountdown endsAt={offer.endsAt}/>
       <Link prefetch={false} className="catalogue-break-cta" href={`/offers#offer-${offer.id}`}>See the offer</Link>
     </div>
   </article>;
@@ -36,11 +40,12 @@ function OfferSlide({ offer }: { offer: OfferTeaser }) {
 export function CatalogueInterruption({ item }: { item: Interruption }) {
   if (item.kind === "guide") {
     const { guide } = item;
-    return <aside className="catalogue-break catalogue-break-guide">
-      <span className="catalogue-break-flag"><BookOpen/> Health guide</span>
-      <div className="catalogue-break-body">
-        {guide.imageUrl && <span className="catalogue-break-image"><img src={guide.imageUrl} alt="" loading="lazy" decoding="async"/></span>}
-        <div>
+    // A poster, not a tile: the artwork fills the card and the headline sits on it.
+    return <aside className={`catalogue-break catalogue-break-guide${guide.imageUrl ? "" : " no-art"}`}>
+      <div className="guide-poster">
+        {guide.imageUrl && <img src={guide.imageUrl} alt="" loading="lazy" decoding="async"/>}
+        <div className="guide-poster-copy">
+          <span className="guide-poster-flag"><BookOpen/> Health guide</span>
           <strong>{guide.title}</strong>
           <p>{guide.excerpt}</p>
           <Link prefetch={false} className="catalogue-break-cta" href={`/blog/${guide.slug}`}>Read the guide</Link>
@@ -68,9 +73,9 @@ export function CatalogueInterruption({ item }: { item: Interruption }) {
             <p>{offer.description || (offer.isBundle ? `${offer.itemCount} products bought together as one item.` : "Reduced while this offer runs.")}</p>
             <p className="catalogue-break-price">
               {money(offer.total)}
-              {saving > 0 && <em> · save {money(saving)}</em>}
+              {saving > 0 && <><del>{money(offer.normalTotal)}</del><em>save {money(saving)}</em></>}
             </p>
-            {offer.endsAt && <small className="catalogue-break-ends">Ends {new Date(offer.endsAt).toLocaleDateString("en-KE")}</small>}
+            <OfferCountdown endsAt={offer.endsAt}/>
             <Link prefetch={false} className="catalogue-break-cta" href={`/offers#offer-${offer.id}`}>See the offer</Link>
           </div>
         </div>
