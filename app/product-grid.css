@@ -103,3 +103,14 @@
   /* Anchored jumps must clear the pinned header. */
   .approved-section, .offer-card { scroll-margin-top: 130px; }
 }
+
+/* Discount badge --------------------------------------------------------
+   The badge colour was declared in three files (#d52e82, a crimson gradient,
+   and a purple !important that won), so it never matched the brand call to
+   action. Settled here to the same gradient as the hero "Shop Now" button. */
+.discount-badge,
+.approved-product-image .discount-badge,
+.approved-products .approved-product .approved-product-image .discount-badge {
+  background: linear-gradient(90deg, #db1d68, #ec346e) !important;
+  color: #fff !important;
+}
