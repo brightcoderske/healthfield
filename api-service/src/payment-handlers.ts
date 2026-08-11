@@ -22,7 +22,7 @@ async function finalizePosInventory(tx: DatabaseTransaction, orderId: number, ac
   }
 }
 
-async function markPaymentPaid(transactionId: number, details: { receiptNumber: string; amount: number; phone?: string | null; providerPayload?: Record<string, unknown>; actorId?: number | null }) {
+async function markPaymentPaid(transactionId: number, details: { receiptNumber: string | null; amount: number; phone?: string | null; providerPayload?: Record<string, unknown>; actorId?: number | null }) {
   const db = getDb();
   return db.transaction(async (tx) => {
     const [payment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1).for("update");
@@ -97,7 +97,6 @@ export async function handleManualPayment(request: Request) {
   const channel = order.orderNumber.startsWith("POS-") ? "POS" : "ONLINE";
   if (channel === "ONLINE" && message.length < 10) return json({ error: "Paste the complete M-Pesa payment message." }, { status: 400 });
   const receiptNumber = message ? extractMpesaReceipt(message) : null;
-  if (channel === "ONLINE" && !receiptNumber) return json({ error: "We could not find the M-Pesa transaction code in that message." }, { status: 400 });
   if (channel === "POS" ? settings?.posManualEnabled === false : settings?.onlineManualEnabled === false) return json({ error: "Manual M-Pesa payment is currently unavailable." }, { status: 409 });
   if (order.paymentStatus === "PAID") return json({ ok: true, paid: true, orderNumber: order.orderNumber });
   let transaction: typeof paymentTransactions.$inferSelect;
@@ -161,7 +160,6 @@ export async function handlePaymentReview(request: Request, transactionId: numbe
   if (!payment) return json({ error: "Payment not found." }, { status: 404 });
   if (payment.status === "PAID") return json({ ok: true, message: "Payment is already approved." });
   if (input.decision === "APPROVE") {
-    if (!payment.receiptNumber) return json({ error: "A valid M-Pesa receipt code is required before approval." }, { status: 409 });
     await markPaymentPaid(payment.id, { receiptNumber: payment.receiptNumber, amount: Number(payment.amount), phone: payment.phone, actorId: auth.session.userId });
   } else {
     await db.update(paymentTransactions).set({ status: "FAILED", reviewedBy: auth.session.userId, reviewedAt: new Date(), resultDescription: input.note?.trim() || "Payment proof rejected by administrator." }).where(eq(paymentTransactions.id, payment.id));

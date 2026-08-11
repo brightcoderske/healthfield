@@ -17,6 +17,8 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  LayoutGrid,
   MessageCircle,
   ArrowUp,
 } from "lucide-react";
@@ -42,6 +44,10 @@ type CatalogProduct = {
 };
 type CatalogCategory = { id: number; name: string; slug: string };
 type HealthCondition = { id: number; name: string; slug: string };
+
+// The landing grid is 6 columns wide; 10 categories plus the prescription tile and
+// the toggle tile fill exactly two rows, so new categories no longer stretch the page.
+const CATEGORY_PREVIEW = 10;
 
 const categoryPresentation = [
   { icon: Pill, color: "green" },
@@ -102,6 +108,7 @@ export function Storefront({
   const [selectedCategory, setSelectedCategory] = useState<number | null>(initialCategoryId);
   const [selectedCondition, setSelectedCondition] = useState<number | null>(initialConditionId);
   const [conditionQuery, setConditionQuery] = useState("");
+  const [showAllCategories, setShowAllCategories] = useState(false);
   const [visibleCount, setVisibleCount] = useState(24);
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [searchResults, setSearchResults] = useState<{ products: CatalogProduct[]; similar: CatalogProduct[] } | null>(null);
@@ -145,6 +152,8 @@ export function Storefront({
       : categoryPresentation[index % categoryPresentation.length]),
   }));
   const prescriptionCategory = displayedCategories.find((category) => `${category.name} ${category.slug}`.toLowerCase().includes("prescription"));
+  const hiddenCategoryCount = Math.max(0, displayedCategories.length - CATEGORY_PREVIEW);
+  const visibleCategories = showAllCategories ? displayedCategories : displayedCategories.slice(0, CATEGORY_PREVIEW);
   useEffect(() => {
     const term = query.trim();
     if (term.length < 2) return;
@@ -466,14 +475,37 @@ export function Storefront({
             <h2>
               <Menu /> Shop by Category
             </h2>
-            {displayedCategories.map(({ name, icon: Icon, id }) => (
-              <a href={`#category-${id}`} key={id}>
+            {visibleCategories.map(({ name, icon: Icon, id }) => (
+              <a
+                href={`#category-${id}`}
+                key={id}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setSelectedCategory(id);
+                  setVisibleCount(24);
+                  document
+                    .getElementById("products")
+                    ?.scrollIntoView({ behavior: "smooth" });
+                }}
+              >
                 <Icon />
                 {name}
                 <span>›</span>
               </a>
             ))}
-            <button>View All Categories →</button>
+            {hiddenCategoryCount > 0 && !showAllCategories && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAllCategories(true);
+                  document
+                    .getElementById("categories")
+                    ?.scrollIntoView({ behavior: "smooth" });
+                }}
+              >
+                View All Categories →
+              </button>
+            )}
           </aside>
           <section>
             <div>
@@ -549,7 +581,7 @@ export function Storefront({
                   ?.scrollIntoView({ behavior: "smooth" });
               }}
             >
-              View All
+              View All Products
             </button>
           </div>
           <div className="approved-categories">
@@ -562,7 +594,7 @@ export function Storefront({
               </span>
               <small>Upload Prescription</small>
             </a>
-            {displayedCategories.map(({ id, name, icon: Icon, color }) => (
+            {visibleCategories.map(({ id, name, icon: Icon, color }) => (
               <button
                 key={id}
                 id={`category-${id}`}
@@ -580,6 +612,19 @@ export function Storefront({
                 <small>{name}</small>
               </button>
             ))}
+            {hiddenCategoryCount > 0 && (
+              <button
+                type="button"
+                className="category-toggle-tile"
+                aria-expanded={showAllCategories}
+                onClick={() => setShowAllCategories((current) => !current)}
+              >
+                <span className="purple">
+                  {showAllCategories ? <ChevronUp /> : <LayoutGrid />}
+                </span>
+                <small>{showAllCategories ? "Show Less" : `View All (${hiddenCategoryCount} more)`}</small>
+              </button>
+            )}
           </div>
         </section>}
 

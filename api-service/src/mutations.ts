@@ -34,31 +34,37 @@ async function createEmailTwoFactorChallenge(user: { id: number; email: string; 
   const now = Date.now();
   const timing = twoFactorTiming(now);
   const db = getDb();
-  try {
-    await db.transaction(async (tx) => {
-      // Serialize challenges for this account so two login tabs cannot both
-      // announce themselves as the newest valid email code.
-      await tx.select({ id: users.id }).from(users).where(eq(users.id, user.id)).for("update");
-      await tx.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, user.id));
-      await tx.insert(twoFactorChallenges).values({
-        userId: user.id,
-        tokenHash: tokenHash(rawChallenge),
-        codeHash: twoFactorCodeHash(rawChallenge, code),
-        expiresAt: new Date(timing.expiresAtMs),
-        expiresAtMs: timing.expiresAtMs,
-        challengeEndsAtMs: now + twoFactorChallengeLifetimeMs,
-        lastSentAtMs: now,
-      });
-      const delivery = await sendEmail({
-        to: user.email,
-        subject: "Your Healthfield secure login code",
-        message: `Hello ${user.firstName},\n\nYour Healthfield administration login code is ${code}.\n\nIt expires in 10 minutes and can only be used once. If you did not try to sign in, change your password and contact the pharmacy owner immediately.`,
-        channel: "security",
-      });
-      if (!delivery.sent) throw new Error(`Security email delivery failed: ${delivery.reason}`);
+  const challengeHash = tokenHash(rawChallenge);
+  // Commit the challenge before handing off to SMTP. Holding the transaction --
+  // and the user row lock -- open across the provider round-trip let hosting drop
+  // the connection after the code had already been delivered, rolling the row back
+  // so a freshly emailed code verified as "login request not found".
+  await db.transaction(async (tx) => {
+    // Serialize challenges for this account so two login tabs cannot both
+    // announce themselves as the newest valid email code.
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, user.id)).for("update");
+    await tx.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, user.id));
+    await tx.insert(twoFactorChallenges).values({
+      userId: user.id,
+      tokenHash: challengeHash,
+      codeHash: twoFactorCodeHash(rawChallenge, code),
+      expiresAt: new Date(timing.expiresAtMs),
+      expiresAtMs: timing.expiresAtMs,
+      challengeEndsAtMs: now + twoFactorChallengeLifetimeMs,
+      lastSentAtMs: now,
     });
+  });
+  try {
+    const delivery = await sendEmail({
+      to: user.email,
+      subject: "Your Healthfield secure login code",
+      message: `Hello ${user.firstName},\n\nYour Healthfield administration login code is ${code}.\n\nIt expires in 10 minutes and can only be used once. If you did not try to sign in, change your password and contact the pharmacy owner immediately.`,
+      channel: "security",
+    });
+    if (!delivery.sent) throw new Error(`Security email delivery failed: ${delivery.reason}`);
   } catch (error) {
-    await db.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, user.id));
+    // Retire only this challenge: a concurrent login may already have replaced it.
+    await db.delete(twoFactorChallenges).where(eq(twoFactorChallenges.tokenHash, challengeHash)).catch(() => undefined);
     throw error;
   }
   const [name, domain] = user.email.split("@");
@@ -427,8 +433,8 @@ export async function handleOrders(request: Request, id?: number) {
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
   const parsed = z.object({
     fullName: z.string().trim().min(3).max(200), phone: z.string().trim().min(9).max(30), email: z.string().trim().email().optional().or(z.literal("")),
-    fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA_EXPRESS", "MANUAL_MPESA"]), billingPhone: z.string().trim().max(30).optional(), manualPaymentMessage: z.string().trim().max(2500).optional(), deliveryAddress: z.string().trim().max(1000).optional(), deliveryArea: z.string().trim().max(160).optional(),
-    deliveryLatitude: z.number().min(-90).max(90).optional(), deliveryLongitude: z.number().min(-180).max(180).optional(),
+    fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA_EXPRESS", "MANUAL_MPESA"]), billingPhone: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(30).optional()), manualPaymentMessage: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(2500).optional()), deliveryAddress: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(1000).optional()), deliveryArea: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(160).optional()),
+    deliveryLatitude: z.preprocess(value=>value===null?undefined:value,z.number().min(-90).max(90).optional()), deliveryLongitude: z.preprocess(value=>value===null?undefined:value,z.number().min(-180).max(180).optional()),
     checkoutToken: z.string().uuid(), items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).min(1),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid order." }, { status: 400 });
@@ -439,8 +445,8 @@ export async function handleOrders(request: Request, id?: number) {
   const [paymentSettings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber }).from(siteSettings).limit(1);
   if (parsed.data.paymentMethod === "MPESA_EXPRESS" && (!paymentSettings?.onlineMpesaEnabled || !mpesaConfiguration())) return json({ error: "M-Pesa Express is currently unavailable. Choose manual M-Pesa payment.", code: "MPESA_UNAVAILABLE" }, { status: 409 });
   if (parsed.data.paymentMethod === "MANUAL_MPESA" && (!paymentSettings?.onlineManualEnabled || !paymentSettings.mpesaTillNumber)) return json({ error: "Manual M-Pesa payment is currently unavailable.", code: "MANUAL_PAYMENT_UNAVAILABLE" }, { status: 409 });
+  if (parsed.data.paymentMethod === "MANUAL_MPESA" && (parsed.data.manualPaymentMessage || "").trim().length < 10) return json({ error: "Paste the complete M-Pesa payment message." }, { status: 400 });
   const manualReceipt = parsed.data.paymentMethod === "MANUAL_MPESA" ? extractMpesaReceipt(parsed.data.manualPaymentMessage || "") : null;
-  if (parsed.data.paymentMethod === "MANUAL_MPESA" && !manualReceipt) return json({ error: "Paste the complete M-Pesa payment message, including its transaction code." }, { status: 400 });
   const catalog = await db.select().from(products).where(inArray(products.id, parsed.data.items.map((item) => item.productId)));
   if (catalog.length !== new Set(parsed.data.items.map((item) => item.productId)).size) return json({ error: "One or more products are unavailable." }, { status: 409 });
   const lines = parsed.data.items.map((item) => { const product = catalog.find((entry) => entry.id === item.productId)!; const price = Number(product.discountPrice ?? product.price); return { ...item, product, price, total: price * item.quantity }; });

@@ -68,10 +68,14 @@ export function CheckoutForm({ initialCart, initialCatalog, customer, payment }:
     event.preventDefault();
     if (submitting || result) return;
     const form = new FormData(event.currentTarget);
-    if (!customer && !String(form.get("email") || "").trim()) return setError("Enter your email so this guest order can appear in your account if you register later.");
+    const value = (name: string) => {
+      const entry = form.get(name);
+      return typeof entry === "string" ? entry : undefined;
+    };
+    if (!customer && !String(value("email") || "").trim()) return setError("Enter your email so this guest order can appear in your account if you register later.");
     setSubmitting(true); setError("");
     try {
-      const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken: checkoutToken.current, fullName: form.get("fullName"), phone: form.get("phone"), email: form.get("email"), fulfilmentMethod: method, paymentMethod, billingPhone: form.get("billingPhone"), manualPaymentMessage: paymentMethod === "MANUAL_MPESA" ? manualMessage : undefined, deliveryAddress: form.get("deliveryAddress"), deliveryArea: form.get("deliveryArea"), deliveryLatitude: coordinates?.latitude, deliveryLongitude: coordinates?.longitude, items: lines.map((line) => ({ productId: line.product!.id, quantity: line.quantity })) }) });
+      const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken: checkoutToken.current, fullName: value("fullName"), phone: value("phone"), email: value("email"), fulfilmentMethod: method, paymentMethod, billingPhone: value("billingPhone"), manualPaymentMessage: paymentMethod === "MANUAL_MPESA" ? manualMessage.trim() : undefined, deliveryAddress: value("deliveryAddress"), deliveryArea: value("deliveryArea"), deliveryLatitude: coordinates?.latitude, deliveryLongitude: coordinates?.longitude, items: lines.map((line) => ({ productId: line.product!.id, quantity: line.quantity })) }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) return setError(data.error ?? "Unable to start checkout.");
       const nextState = paymentMethod === "MANUAL_MPESA" ? "REVIEW" : data.paymentStatus === "FAILED" ? "FAILED" : "WAITING";
