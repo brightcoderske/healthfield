@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const port = "4311";
 const apiKey = "local-smoke-api-key-at-least-32-characters";
+const paymentEndpointSecret = "local-payment-endpoint-secret-at-least-32-characters";
 const child = spawn(process.execPath, [resolve(root, "api-service", "dist", "server.mjs")], {
   cwd: root,
   stdio: ["ignore", "pipe", "pipe"],
@@ -14,6 +15,12 @@ const child = spawn(process.execPath, [resolve(root, "api-service", "dist", "ser
     AUTH_SECRET: "local-smoke-auth-secret-at-least-32-characters",
     API_SHARED_SECRET: apiKey,
     CORS_ALLOWED_ORIGINS: "https://healthfieldpharmacy.co.ke",
+    MPESA_CONSUMER_KEY: "local-smoke-consumer-key",
+    MPESA_CONSUMER_SECRET: "local-smoke-consumer-secret",
+    MPESA_SHORTCODE: "174379",
+    MPESA_PASSKEY: "local-smoke-passkey",
+    MPESA_CALLBACK_BASE_URL: "https://api.healthfieldpharmacy.co.ke",
+    MPESA_CALLBACK_SECRET: paymentEndpointSecret,
     PORT: port,
   },
 });
@@ -41,11 +48,15 @@ try {
     headers: { Origin: "https://healthfieldpharmacy.co.ke", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization,content-type" },
   });
   const forgotPassword = await fetch(`http://127.0.0.1:${port}/v1/auth/forgot-password`, { method:"POST",headers:{"X-Healthfield-Key":apiKey,"Content-Type":"application/json"},body:JSON.stringify({email:"invalid"}) });
-  const invalidPaymentCallback = await fetch(`http://127.0.0.1:${port}/v1/payments/mpesa/stk/callback/not-a-valid-secret`, { method:"POST",headers:{"Content-Type":"application/json"},body:"{}" });
-  if (health.status !== 200 || noKey.status !== 401 || badOrigin.status !== 403 || unsignedUpload.status !== 401 || preflight.status !== 204 || forgotPassword.status !== 400 || invalidPaymentCallback.status !== 404) {
-    throw new Error(`Unexpected statuses: ${health.status}/${noKey.status}/${badOrigin.status}/${unsignedUpload.status}/${preflight.status}/${forgotPassword.status}/${invalidPaymentCallback.status}`);
+  const paymentBase = `http://127.0.0.1:${port}/v1/payments/mobile-money`;
+  const invalidPaymentNotification = await fetch(`${paymentBase}/stk/notification/not-a-valid-secret`, { method:"POST",headers:{"Content-Type":"application/json"},body:"{}" });
+  const stkNotification = await fetch(`${paymentBase}/stk/notification/${paymentEndpointSecret}`);
+  const c2bConfirmation = await fetch(`${paymentBase}/c2b/confirmation/${paymentEndpointSecret}`);
+  const c2bVerification = await fetch(`${paymentBase}/c2b/verification/${paymentEndpointSecret}`);
+  if (health.status !== 200 || noKey.status !== 401 || badOrigin.status !== 403 || unsignedUpload.status !== 401 || preflight.status !== 204 || forgotPassword.status !== 400 || invalidPaymentNotification.status !== 404 || stkNotification.status !== 405 || c2bConfirmation.status !== 405 || c2bVerification.status !== 405) {
+    throw new Error(`Unexpected statuses: ${health.status}/${noKey.status}/${badOrigin.status}/${unsignedUpload.status}/${preflight.status}/${forgotPassword.status}/${invalidPaymentNotification.status}/${stkNotification.status}/${c2bConfirmation.status}/${c2bVerification.status}`);
   }
-  console.log(`API smoke test passed: health=${health.status}, no-key=${noKey.status}, CORS=${badOrigin.status}, unsigned-upload=${unsignedUpload.status}, preflight=${preflight.status}, forgot-password=${forgotPassword.status}, invalid-payment-callback=${invalidPaymentCallback.status}`);
+  console.log(`API smoke test passed: health=${health.status}, no-key=${noKey.status}, CORS=${badOrigin.status}, unsigned-upload=${unsignedUpload.status}, preflight=${preflight.status}, forgot-password=${forgotPassword.status}, invalid-payment-notification=${invalidPaymentNotification.status}, STK-notification=${stkNotification.status}, C2B-confirmation=${c2bConfirmation.status}, C2B-verification=${c2bVerification.status}`);
 } finally {
   child.kill("SIGTERM");
 }

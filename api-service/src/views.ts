@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, gte, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
 import {
   blogPostProducts, blogPosts, branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
-  offerItems, offers, orderItemFulfilments, orderItems, orders, paymentTransactions, prescriptions, productHealthConditions, productReviews, products,
+  offerItems, offers, orderItemFulfilments, orderItems, orders, paymentTransactions, prescriptionRequestItems, prescriptions, productHealthConditions, productReviews, products,
   siteSettings, users,
 } from "../../db/schema";
 import { requireSession } from "./auth";
@@ -14,7 +14,7 @@ const adminRoles = ["ADMIN", "SUPER_ADMIN"] as const;
 const teamRoles = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
 const productCard = {
   id: products.id, name: products.name, imageUrl: products.imageUrl, price: products.price,
-  discountPrice: products.discountPrice, packSize: products.packSize,
+  discountPrice: products.discountPrice, packSize: products.packSize, prescriptionRequired: products.prescriptionRequired,
 };
 const searchProductCard = {
   ...productCard,
@@ -25,6 +25,30 @@ const searchProductCard = {
   rating: sql<string | null>`avg(case when ${productReviews.isApproved} = true then ${productReviews.rating} end)`,
   reviewCount: sql<number>`count(${productReviews.id})`,
 };
+
+async function prescriptionQueue() {
+  const db = getDb();
+  const [requestRows, itemRows, catalogue, availability] = await Promise.all([
+    db.select({
+      id: prescriptions.id, customerId: prescriptions.customerId, orderId: prescriptions.orderId,
+      senderName: sql<string | null>`coalesce(${prescriptions.senderName}, trim(concat(${users.firstName}, ' ', ${users.lastName})))`,
+      originalFilename: prescriptions.originalFilename, mimeType: prescriptions.mimeType, sizeBytes: prescriptions.sizeBytes,
+      status: prescriptions.status, pharmacistNotes: prescriptions.pharmacistNotes, reviewedBy: prescriptions.reviewedBy,
+      reviewedAt: prescriptions.reviewedAt, reviewVersion: prescriptions.reviewVersion, createdAt: prescriptions.createdAt, updatedAt: prescriptions.updatedAt,
+      orderNumber: orders.orderNumber, orderStatus: orders.status, paymentStatus: orders.paymentStatus, orderTotal: orders.total,
+    }).from(prescriptions).leftJoin(users, eq(users.id, prescriptions.customerId)).leftJoin(orders, eq(orders.id, prescriptions.orderId)).orderBy(desc(prescriptions.createdAt)),
+    db.select().from(prescriptionRequestItems).orderBy(prescriptionRequestItems.id),
+    db.select({ id: products.id, name: products.name, packSize: products.packSize, price: products.price, discountPrice: products.discountPrice, prescriptionRequired: products.prescriptionRequired })
+      .from(products).where(eq(products.isActive, true)).orderBy(asc(products.name)),
+    db.select({ productId: branchInventory.productId, available: sql<number>`sum(greatest(${branchInventory.quantityAvailable} - ${branchInventory.quantityReserved}, 0))` })
+      .from(branchInventory).groupBy(branchInventory.productId),
+  ]);
+  const availableByProduct = new Map(availability.map((row) => [row.productId, Number(row.available)]));
+  return {
+    prescriptions: requestRows.map((request) => ({ ...request, items: itemRows.filter((item) => item.prescriptionId === request.id) })),
+    products: catalogue.map((product) => ({ ...product, available: availableByProduct.get(product.id) || 0 })),
+  };
+}
 
 function images<T extends { imageUrl?: string | null }>(rows: T[]) {
   return rows.map((row) => ({ ...row, imageUrl: publicImageUrl(row.imageUrl) }));
@@ -218,12 +242,31 @@ export async function handleView(request: Request, path: string) {
     const auth = await requireSession(request, ["CUSTOMER"]);
     if ("response" in auth) return auth.response;
     const db = getDb();
-    const [orderRows, catalog, prescriptionRows] = await Promise.all([
-      db.select().from(orders).where(eq(orders.customerId, auth.session.userId)).orderBy(desc(orders.createdAt)),
+    const [orderRows, catalog, prescriptionRows, prescriptionItems] = await Promise.all([
+      db.select().from(orders).where(and(eq(orders.customerId, auth.session.userId),ne(orders.status,"AWAITING_PAYMENT"))).orderBy(desc(orders.createdAt)),
       db.select(productCard).from(products).where(eq(products.isActive, true)).orderBy(desc(products.isFeatured), desc(products.createdAt)).limit(24),
-      db.select({id:prescriptions.id,originalFilename:prescriptions.originalFilename,status:prescriptions.status,pharmacistNotes:prescriptions.pharmacistNotes,createdAt:prescriptions.createdAt,reviewedAt:prescriptions.reviewedAt}).from(prescriptions).where(eq(prescriptions.customerId,auth.session.userId)).orderBy(desc(prescriptions.createdAt)),
+      db.select({ id:prescriptions.id, orderId:prescriptions.orderId, originalFilename:prescriptions.originalFilename, status:prescriptions.status, pharmacistNotes:prescriptions.pharmacistNotes, createdAt:prescriptions.createdAt, reviewedAt:prescriptions.reviewedAt, orderNumber:orders.orderNumber, orderStatus:orders.status, paymentStatus:orders.paymentStatus, orderTotal:orders.total })
+        .from(prescriptions).leftJoin(orders,eq(orders.id,prescriptions.orderId)).where(eq(prescriptions.customerId,auth.session.userId)).orderBy(desc(prescriptions.createdAt)),
+      db.select().from(prescriptionRequestItems).innerJoin(prescriptions,eq(prescriptions.id,prescriptionRequestItems.prescriptionId)).where(eq(prescriptions.customerId,auth.session.userId)).orderBy(prescriptionRequestItems.id),
     ]);
-    return json({ orders: orderRows, catalog: images(catalog), prescriptions:prescriptionRows });
+    return json({ orders: orderRows, catalog: images(catalog), prescriptions:prescriptionRows.map((request)=>({...request,items:prescriptionItems.filter((row)=>row.prescription_request_items.prescriptionId===request.id).map((row)=>row.prescription_request_items)})) });
+  }
+  const customerPrescriptionMatch = path.match(/^account\/prescriptions\/(\d+)$/);
+  if (customerPrescriptionMatch) {
+    const auth = await requireSession(request, ["CUSTOMER"]);
+    if ("response" in auth) return auth.response;
+    const id = Number(customerPrescriptionMatch[1]);
+    const db = getDb();
+    const [prescription] = await db.select().from(prescriptions).where(and(eq(prescriptions.id, id), eq(prescriptions.customerId, auth.session.userId))).limit(1);
+    if (!prescription) return json({ error: "Prescription request not found." }, { status: 404 });
+    const [items, orderRows, customerRows, settingsRows] = await Promise.all([
+      db.select().from(prescriptionRequestItems).where(eq(prescriptionRequestItems.prescriptionId, id)).orderBy(prescriptionRequestItems.id),
+      prescription.orderId ? db.select().from(orders).where(and(eq(orders.id, prescription.orderId), eq(orders.customerId, auth.session.userId))).limit(1) : Promise.resolve([]),
+      db.select({ firstName:users.firstName,lastName:users.lastName,email:users.email,phone:users.phone }).from(users).where(eq(users.id,auth.session.userId)).limit(1),
+      db.select({ onlineMpesaEnabled:siteSettings.onlineMpesaEnabled,onlineManualEnabled:siteSettings.onlineManualEnabled,mpesaTillNumber:siteSettings.mpesaTillNumber,mpesaAccountName:siteSettings.mpesaAccountName }).from(siteSettings).limit(1),
+    ]);
+    const settings = settingsRows[0];
+    return json({ request:prescription, items, order:orderRows[0]||null, customer:customerRows[0], payment:{ onlineMpesaEnabled:Boolean(settings?.onlineMpesaEnabled&&paymentConfigurationSummary().mpesaConfigured),onlineManualEnabled:Boolean(settings?.onlineManualEnabled&&settings.mpesaTillNumber),tillNumber:settings?.mpesaTillNumber||null,accountName:settings?.mpesaAccountName||null } });
   }
   const customerOrderMatch = path.match(/^account\/orders\/(\d+)$/);
   if (customerOrderMatch) {
@@ -275,7 +318,7 @@ export async function handleView(request: Request, path: string) {
       const since = new Date(Date.now() - 92 * 24 * 60 * 60 * 1000);
       const [[{ newOrders }], [{ pendingPrescriptions }], [{ activeProducts }], [{ lowStock }], [{ customers }], [{ newChats }], recentOrders, analytics] = await Promise.all([
         db.select({ newOrders: count() }).from(orders).where(eq(orders.status, "NEW")),
-        db.select({ pendingPrescriptions: count() }).from(prescriptions).where(eq(prescriptions.status, "RECEIVED")),
+        db.select({ pendingPrescriptions: count() }).from(prescriptions).where(inArray(prescriptions.status, ["RECEIVED","UNDER_REVIEW","MORE_INFORMATION_REQUIRED"])),
         db.select({ activeProducts: count() }).from(products).where(eq(products.isActive, true)),
         db.select({ lowStock: count() }).from(branchInventory).where(sql`${branchInventory.quantityAvailable} <= ${branchInventory.reorderLevel}`),
         db.select({ customers: count() }).from(users).where(eq(users.role, "CUSTOMER")),
@@ -313,7 +356,7 @@ export async function handleView(request: Request, path: string) {
       return json({ customer, orders:customerOrders, prescriptions:customerPrescriptions });
     }
     if (view === "chats") { const [chats,unread]=await Promise.all([db.select({ id: chatConversations.id, status: chatConversations.status, lastMessageAt: chatConversations.lastMessageAt, firstName: users.firstName, lastName: users.lastName, email: users.email }).from(chatConversations).innerJoin(users, eq(users.id, chatConversations.customerId)).orderBy(desc(chatConversations.lastMessageAt)),db.select({conversationId:chatMessages.conversationId,total:count()}).from(chatMessages).innerJoin(users,eq(users.id,chatMessages.senderId)).where(and(eq(users.role,"CUSTOMER"),isNull(chatMessages.readAt))).groupBy(chatMessages.conversationId)]);return json({chats:chats.map(chat=>({...chat,unread:Number(unread.find(row=>row.conversationId===chat.id)?.total||0)}))}); }
-    if (view === "prescriptions") return json({ prescriptions: await db.select({ id: prescriptions.id, customerId: prescriptions.customerId, orderId: prescriptions.orderId, senderName: sql<string | null>`coalesce(${prescriptions.senderName}, trim(concat(${users.firstName}, ' ', ${users.lastName})))`, storageKey: prescriptions.storageKey, originalFilename: prescriptions.originalFilename, mimeType: prescriptions.mimeType, sizeBytes: prescriptions.sizeBytes, status: prescriptions.status, pharmacistNotes: prescriptions.pharmacistNotes, reviewedBy: prescriptions.reviewedBy, reviewedAt: prescriptions.reviewedAt, createdAt: prescriptions.createdAt, updatedAt: prescriptions.updatedAt }).from(prescriptions).leftJoin(users, eq(users.id, prescriptions.customerId)).orderBy(desc(prescriptions.createdAt)) });
+    if (view === "prescriptions") return json(await prescriptionQueue());
     if (view === "campaigns") return json({ campaigns: await db.select().from(campaigns).orderBy(desc(campaigns.createdAt)).limit(30) });
     if (view === "stores") return json({ stores: await db.select().from(branches).orderBy(desc(branches.createdAt)) });
     if (view === "staff") {
@@ -377,7 +420,7 @@ export async function handleView(request: Request, path: string) {
     const db = getDb();
     const [[{ newOrders }], [{ pending }], [{ lowStock }], queue] = await Promise.all([
       db.select({ newOrders: count() }).from(orders).where(eq(orders.status, "NEW")),
-      db.select({ pending: count() }).from(prescriptions).where(eq(prescriptions.status, "RECEIVED")),
+      db.select({ pending: count() }).from(prescriptions).where(inArray(prescriptions.status, ["RECEIVED","UNDER_REVIEW","MORE_INFORMATION_REQUIRED"])),
       db.select({ lowStock: count() }).from(branchInventory).where(sql`${branchInventory.quantityAvailable} <= ${branchInventory.reorderLevel}`),
       db.select().from(orders).orderBy(desc(orders.createdAt)).limit(10),
     ]);
@@ -386,7 +429,7 @@ export async function handleView(request: Request, path: string) {
   if (path === "staff/prescriptions") {
     const auth = await requireSession(request, [...teamRoles]);
     if ("response" in auth) return auth.response;
-    return json({ prescriptions: await getDb().select({ id: prescriptions.id, customerId: prescriptions.customerId, orderId: prescriptions.orderId, senderName: sql<string | null>`coalesce(${prescriptions.senderName}, trim(concat(${users.firstName}, ' ', ${users.lastName})))`, storageKey: prescriptions.storageKey, originalFilename: prescriptions.originalFilename, mimeType: prescriptions.mimeType, sizeBytes: prescriptions.sizeBytes, status: prescriptions.status, pharmacistNotes: prescriptions.pharmacistNotes, reviewedBy: prescriptions.reviewedBy, reviewedAt: prescriptions.reviewedAt, createdAt: prescriptions.createdAt, updatedAt: prescriptions.updatedAt }).from(prescriptions).leftJoin(users, eq(users.id, prescriptions.customerId)).orderBy(desc(prescriptions.createdAt)) });
+    return json(await prescriptionQueue());
   }
   if (path === "walk-in-sale") {
     const auth = await requireSession(request, [...teamRoles]);

@@ -1,5 +1,5 @@
 import { createHash, randomInt, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import bcrypt, { hash } from "bcryptjs";
 import { and, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
@@ -7,8 +7,9 @@ import sharp from "sharp";
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions,
-  activityLogs, authSessions, blogPostProducts, blogPosts, categories, offerItems, offers, emailVerificationTokens, healthConditions, prescriptions, productHealthConditions, productReviews, products, siteSettings, twoFactorChallenges, users,
+  activityLogs, authSessions, blogPostProducts, blogPosts, categories, offerItems, offers, emailVerificationTokens, healthConditions, prescriptionRequestItems, prescriptions, productHealthConditions, productReviews, products, siteSettings, twoFactorChallenges, users,
 } from "../../db/schema";
+import { canApplyPrescriptionAction, prescriptionReviewActions, type PrescriptionReviewAction, type PrescriptionStatus } from "../../lib/prescription-workflow";
 import { createPasswordResetToken, createSessionToken, createUploadToken, hasStoredTimestamp, requireSession, requestSession, revokeSession, revokeUserSessions, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
 import { apportionBundle, isBundle, loadLiveOffers, offerPriceMap, offerTotal } from "./offers";
@@ -21,7 +22,7 @@ import { secureHashEqual, twoFactorChallengeLifetimeMs, twoFactorCodeHash, twoFa
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
-const orderStatuses = ["NEW", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"] as const;
+const orderStatuses = ["NEW", "AWAITING_PAYMENT", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"] as const;
 
 function storefrontOrigin() {
   return (process.env.APP_URL || process.env.STOREFRONT_URL || "https://healthfieldpharmacy.co.ke").replace(/\/$/, "");
@@ -285,7 +286,7 @@ export async function handleAuth(request: Request, action: string) {
     }
   }
   if (action === "change-password" && request.method === "POST") {
-    const auth = await requireSession(request, [...team]);
+    const auth = await requireSession(request, [...team, "CUSTOMER"]);
     if ("response" in auth) return auth.response;
     const parsed = z.object({ currentPassword: z.string().min(8).max(128), newPassword: z.string().min(8).max(128).regex(/[A-Z]/).regex(/[a-z]/).regex(/[0-9]/) }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Use a strong new password." }, { status: 400 });
@@ -339,7 +340,9 @@ export async function handleOrders(request: Request, id?: number) {
     const db = getDb();
     const [order] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, status: orders.status }).from(orders).where(eq(orders.id, id)).limit(1);
     if (!order) return json({ error: "Order not found." }, { status: 404 });
-    if (!["NEW", "CONFIRMED", "UNDER_REVIEW", "CANCELLED"].includes(order.status)) return json({ error: "Only unfulfilled or cancelled orders can be deleted. Completed and dispatched orders are retained for audit records." }, { status: 409 });
+    const [linkedPrescription]=await db.select({id:prescriptions.id}).from(prescriptions).where(eq(prescriptions.orderId,id)).limit(1);
+    if(linkedPrescription)return json({error:`This is a frozen prescription proposal. Delete prescription #${linkedPrescription.id} from the prescription modal so both records are handled safely.`},{status:409});
+    if (!["NEW", "AWAITING_PAYMENT", "CONFIRMED", "UNDER_REVIEW", "CANCELLED"].includes(order.status)) return json({ error: "Only unfulfilled or cancelled orders can be deleted. Completed and dispatched orders are retained for audit records." }, { status: 409 });
     await db.transaction(async tx => {
       const items = await tx.select({ id: orderItems.id, productId: orderItems.productId }).from(orderItems).where(eq(orderItems.orderId, id));
       if (items.length) {
@@ -375,6 +378,7 @@ export async function handleOrders(request: Request, id?: number) {
     if (!order) return json({ error: "Order not found." }, { status: 404 });
     const editable=!['READY_FOR_DISPATCH','OUT_FOR_DELIVERY','READY_FOR_PICKUP','COMPLETED','CANCELLED'].includes(order.status);
     const {status,fulfilments,...details}=parsed.data;
+    if(order.status==="AWAITING_PAYMENT"&&order.paymentStatus!=="PAID"&&status!=="AWAITING_PAYMENT")return json({error:"A frozen prescription proposal cannot enter fulfilment before customer payment. Manage it from the prescription request."},{status:409});
     if (["BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED"].includes(status) && order.prescriptionStatus !== "NOT_REQUIRED" && order.prescriptionStatus !== "APPROVED") return json({ error: "Approve the linked prescription before fulfilling or dispatching this order." }, { status: 409 });
     if (["CONFIRMED","BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED"].includes(status) && order.paymentStatus !== "PAID") return json({ error: "Confirm payment before approving, processing or dispatching this order." }, { status: 409 });
     if (!editable && status !== order.status) return json({ error: "A dispatched, completed or cancelled order cannot move to another status." }, { status: 409 });
@@ -484,23 +488,16 @@ export async function handleOrders(request: Request, id?: number) {
   const session = await requestSession(request);
   const customerSession = session?.role === "CUSTOMER" ? session : null;
   if (!customerSession && !parsed.data.email) return json({ error: "Enter your email so this guest order can be linked if you create an account later." }, { status: 400 });
-  const requiresPrescription = catalog.some(product => product.prescriptionRequired);
-  let customerPrescription: typeof prescriptions.$inferSelect | undefined;
-  if (requiresPrescription) {
-    if (!customerSession) return json({ error: "Sign in and upload a prescription before ordering prescription medicine.", code: "PRESCRIPTION_REQUIRED" }, { status: 409 });
-    [customerPrescription] = await db.select().from(prescriptions).where(and(eq(prescriptions.customerId, customerSession.userId), isNull(prescriptions.orderId))).orderBy(desc(prescriptions.createdAt)).limit(1);
-    if (!customerPrescription) return json({ error: "Upload a prescription before placing this order.", code: "PRESCRIPTION_REQUIRED" }, { status: 409 });
-    if (customerPrescription.status === "DECLINED") return json({ error: "Your latest prescription was declined. Upload a new valid prescription.", code: "PRESCRIPTION_REQUIRED" }, { status: 409 });
-  }
+  const requiresPrescription = catalog.some(product => product.prescriptionRequired) || (parsed.data.offerItems || []).some((requested) => liveOffers.find((offer) => offer.id === requested.offerId)?.items.some((item) => item.prescriptionRequired));
+  if (requiresPrescription) return json({ error: "Prescription medicines must be submitted for pharmacist review before they can be priced or paid for.", code: "PRESCRIPTION_REVIEW_REQUIRED" }, { status: 409 });
   const orderEmail = customerSession ? customerSession.email.trim().toLowerCase() : (parsed.data.email || "").trim().toLowerCase();
   const orderNumber = `HF-${Date.now().toString().slice(-8)}`;
   const result = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, paymentMethod: parsed.data.paymentMethod, paymentReference: manualReceipt, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: requiresPrescription ? "UNDER_REVIEW" : "NEW", prescriptionStatus: requiresPrescription ? customerPrescription!.status : "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
+    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, paymentMethod: parsed.data.paymentMethod, paymentReference: manualReceipt, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: "NEW", prescriptionStatus: "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
     await tx.insert(orderItems).values([
       ...lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })),
       ...bundleLines.map((line) => ({ orderId: created.insertId, productId: line.productId, productName: line.productName, quantity: line.quantity, unitPrice: line.unitPrice.toString(), lineTotal: line.total.toString(), offerId: line.offerId, offerTitle: line.offerTitle })),
     ]);
-    if (customerPrescription) await tx.update(prescriptions).set({ orderId: created.insertId }).where(eq(prescriptions.id, customerPrescription.id));
     const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: (subtotal + deliveryFee).toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
     return { orderId: created.insertId, paymentId: payment.insertId };
   });
@@ -851,22 +848,148 @@ export async function serveProductImage(filename: string) {
   } catch { return json({ error: "Image not found." }, { status: 404 }); }
 }
 
+const prescriptionLineSchema = z.object({
+  productId: z.number().int().positive(),
+  requestedQuantity: z.number().int().min(0).max(99).optional().default(0),
+  approvedQuantity: z.number().int().min(0).max(99).nullable().optional().default(null),
+  unitPrice: z.number().positive().max(10_000_000).nullable().optional().default(null),
+  availability: z.enum(["PENDING", "AVAILABLE", "PARTIALLY_AVAILABLE", "UNAVAILABLE"]),
+  source: z.enum(["CUSTOMER_CART", "PHARMACIST"]).optional().default("PHARMACIST"),
+  pharmacistNote: z.string().trim().max(500).optional().default(""),
+});
+
+class PrescriptionWorkflowError extends Error {
+  constructor(message: string, readonly status = 409) { super(message); }
+}
+
 export async function handlePrescriptions(request: Request, downloadId?: number) {
   if (downloadId) {
-    const auth = await requireSession(request, [...team]);
+    const auth = await requireSession(request, [...team, "CUSTOMER"]);
     if ("response" in auth) return auth.response;
     const db=getDb();
+    if(request.method==="DELETE"){
+      if(!admins.includes(auth.session.role as typeof admins[number]))return json({error:"Only an administrator can delete a prescription request."},{status:403});
+      try{
+        const deleted=await db.transaction(async(tx)=>{
+          const [record]=await tx.select().from(prescriptions).where(eq(prescriptions.id,downloadId)).limit(1).for("update");
+          if(!record)throw new PrescriptionWorkflowError("Prescription request not found.",404);
+          let deletedOrderNumber:string|null=null;
+          if(record.orderId){
+            const [order]=await tx.select().from(orders).where(eq(orders.id,record.orderId)).limit(1).for("update");
+            if(order){
+              if(order.paymentStatus==="PAID"||!["NEW","AWAITING_PAYMENT","UNDER_REVIEW","CANCELLED"].includes(order.status))throw new PrescriptionWorkflowError("This prescription is linked to a paid or active fulfilment order and must be retained for the order history.");
+              deletedOrderNumber=order.orderNumber;
+              const items=await tx.select({id:orderItems.id,productId:orderItems.productId}).from(orderItems).where(eq(orderItems.orderId,order.id));
+              if(items.length){
+                const fulfilments=await tx.select().from(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId,items.map((item)=>item.id)));
+                for(const fulfilment of fulfilments){
+                  const item=items.find((row)=>row.id===fulfilment.orderItemId);
+                  if(!item?.productId||fulfilment.quantityReserved<=0)continue;
+                  const [stock]=await tx.select().from(branchInventory).where(and(eq(branchInventory.branchId,fulfilment.branchId),eq(branchInventory.productId,item.productId))).limit(1).for("update");
+                  if(stock)await tx.update(branchInventory).set({quantityReserved:Math.max(0,stock.quantityReserved-fulfilment.quantityReserved),updatedBy:auth.session.userId}).where(eq(branchInventory.id,stock.id));
+                }
+                await tx.delete(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId,items.map((item)=>item.id)));
+              }
+              const payments=await tx.select({id:paymentTransactions.id,status:paymentTransactions.status}).from(paymentTransactions).where(eq(paymentTransactions.orderId,order.id));
+              if(payments.some((payment)=>!["FAILED","CANCELLED"].includes(payment.status)))throw new PrescriptionWorkflowError("This prescription has a payment in progress or retained payment history and cannot be deleted.");
+              if(payments.length){
+                await tx.update(mpesaIncomingPayments).set({matchedTransactionId:null}).where(inArray(mpesaIncomingPayments.matchedTransactionId,payments.map((payment)=>payment.id)));
+                await tx.update(mpesaStkCallbacks).set({processedTransactionId:null}).where(inArray(mpesaStkCallbacks.processedTransactionId,payments.map((payment)=>payment.id)));
+                await tx.delete(paymentTransactions).where(eq(paymentTransactions.orderId,order.id));
+              }
+              await tx.delete(prescriptions).where(eq(prescriptions.id,downloadId));
+              await tx.delete(orderItems).where(eq(orderItems.orderId,order.id));
+              await tx.delete(orders).where(eq(orders.id,order.id));
+            }else await tx.delete(prescriptions).where(eq(prescriptions.id,downloadId));
+          }else await tx.delete(prescriptions).where(eq(prescriptions.id,downloadId));
+          await tx.insert(activityLogs).values({actorId:auth.session.userId,action:"PRESCRIPTION_DELETED",entityType:"prescription",entityId:String(downloadId),metadata:{originalFilename:record.originalFilename,deletedOrderNumber}});
+          return{storageKey:record.storageKey,deletedOrderNumber};
+        });
+        await unlink(path.join(storageRoot(),"prescriptions",path.basename(deleted.storageKey))).catch((error)=>console.warn("Deleted prescription file was already unavailable",{prescriptionId:downloadId,error}));
+        return json({ok:true,message:deleted.deletedOrderNumber?`Prescription and unpaid proposal ${deleted.deletedOrderNumber} were deleted.`:"Prescription request was deleted."});
+      }catch(error){
+        if(error instanceof PrescriptionWorkflowError)return json({error:error.message},{status:error.status});
+        console.error("Prescription deletion failed",{prescriptionId:downloadId,error});
+        return json({error:"The prescription could not be deleted."},{status:500});
+      }
+    }
     if(request.method==="PATCH"){
-      if(!team.includes(auth.session.role as typeof team[number]))return json({error:"Not allowed."},{status:403});
-      const parsed=z.object({status:z.enum(["RECEIVED","UNDER_REVIEW","APPROVED","MORE_INFORMATION_REQUIRED","DECLINED"]),pharmacistNotes:z.string().trim().max(2000).optional().default("")}).safeParse(await body(request));
-      if(!parsed.success)return json({error:"Choose a valid prescription status."},{status:400});
-      const [record]=await db.select({id:prescriptions.id,email:users.email,firstName:users.firstName}).from(prescriptions).leftJoin(users,eq(users.id,prescriptions.customerId)).where(eq(prescriptions.id,downloadId)).limit(1);
-      if(!record)return json({error:"Prescription not found."},{status:404});
-      await db.update(prescriptions).set({status:parsed.data.status,pharmacistNotes:parsed.data.pharmacistNotes||null,reviewedBy:auth.session.userId,reviewedAt:new Date()}).where(eq(prescriptions.id,downloadId));
-      const [linked]=await db.select({orderId:prescriptions.orderId}).from(prescriptions).where(eq(prescriptions.id,downloadId)).limit(1);
-      if(linked?.orderId)await db.update(orders).set({prescriptionStatus:parsed.data.status,status:parsed.data.status==="APPROVED"?"CONFIRMED":parsed.data.status==="DECLINED"?"CANCELLED":"UNDER_REVIEW"}).where(eq(orders.id,linked.orderId));
-      if(record.email)void sendEmail({to:record.email,subject:"Prescription review update",message:`Hello ${record.firstName||"customer"},\n\nYour prescription status is now ${parsed.data.status.replaceAll("_"," ").toLowerCase()}.${parsed.data.pharmacistNotes?`\n\nPharmacist note: ${parsed.data.pharmacistNotes}`:""}\n\nSign in to your Healthfield account to track progress.`,action:{label:"View prescription progress",url:`${storefrontOrigin()}/account#prescriptions`},channel:"orders"});
-      return json({ok:true,status:parsed.data.status});
+      if(!team.includes(auth.session.role as typeof team[number]))return json({error:"Only pharmacy staff can review prescriptions."},{status:403});
+      const parsed=z.object({action:z.enum(prescriptionReviewActions),reviewVersion:z.number().int().nonnegative(),pharmacistNotes:z.string().trim().max(2000).optional().default(""),items:z.array(prescriptionLineSchema).max(50).optional()}).safeParse(await body(request));
+      if(!parsed.success)return json({error:parsed.error.issues[0]?.message||"Check the prescription review details."},{status:400});
+      const action=parsed.data.action as PrescriptionReviewAction;
+      if(["REQUEST_CLARIFICATION","DECLINE"].includes(action)&&parsed.data.pharmacistNotes.length<5)return json({error:"Add a clear note for the customer before continuing."},{status:400});
+      if(action==="APPROVE"&&!parsed.data.items?.length)return json({error:"Add at least one medicine before approving this prescription."},{status:400});
+      if(parsed.data.items&&new Set(parsed.data.items.map((item)=>item.productId)).size!==parsed.data.items.length)return json({error:"Each medicine can appear only once."},{status:400});
+      try{
+        const result=await db.transaction(async(tx)=>{
+          const [record]=await tx.select().from(prescriptions).where(eq(prescriptions.id,downloadId)).limit(1).for("update");
+          if(!record)throw new PrescriptionWorkflowError("Prescription request not found.",404);
+          if(record.reviewVersion!==parsed.data.reviewVersion)throw new PrescriptionWorkflowError("This prescription changed in another session. Close the modal and open it again.");
+          if(!canApplyPrescriptionAction(record.status as PrescriptionStatus,action))throw new PrescriptionWorkflowError(`This prescription cannot perform ${action.replaceAll("_"," ").toLowerCase()} from its current stage.`);
+          const [customer]=record.customerId?await tx.select({id:users.id,firstName:users.firstName,lastName:users.lastName,email:users.email,phone:users.phone,role:users.role}).from(users).where(eq(users.id,record.customerId)).limit(1):[];
+          if(!customer||customer.role!=="CUSTOMER")throw new PrescriptionWorkflowError("This request is not linked to an active customer account.");
+          let normalizedItems:Array<{productId:number;productName:string;requestedQuantity:number;approvedQuantity:number|null;unitPrice:string|null;availability:"PENDING"|"AVAILABLE"|"PARTIALLY_AVAILABLE"|"UNAVAILABLE";source:"CUSTOMER_CART"|"PHARMACIST";pharmacistNote:string|null}>|undefined;
+          if(parsed.data.items){
+            const productIds=parsed.data.items.map((item)=>item.productId);
+            const [catalogue,stockRows,existingItems]=await Promise.all([
+              tx.select({id:products.id,name:products.name,isActive:products.isActive}).from(products).where(inArray(products.id,productIds)),
+              tx.select({productId:branchInventory.productId,available:sql<number>`sum(greatest(${branchInventory.quantityAvailable} - ${branchInventory.quantityReserved}, 0))`}).from(branchInventory).where(inArray(branchInventory.productId,productIds)).groupBy(branchInventory.productId),
+              tx.select().from(prescriptionRequestItems).where(eq(prescriptionRequestItems.prescriptionId,downloadId)),
+            ]);
+            if(catalogue.length!==productIds.length||catalogue.some((product)=>!product.isActive))throw new PrescriptionWorkflowError("One or more selected medicines are no longer active.",400);
+            const stock=new Map(stockRows.map((row)=>[row.productId,Number(row.available)])),existing=new Map(existingItems.map((item)=>[item.productId,item]));
+            normalizedItems=parsed.data.items.map((line)=>{
+              const product=catalogue.find((entry)=>entry.id===line.productId)!,previous=existing.get(line.productId);
+              const approvedQuantity=line.availability==="UNAVAILABLE"?null:line.approvedQuantity,unitPrice=line.availability==="UNAVAILABLE"?null:line.unitPrice;
+              if(action==="APPROVE"&&line.availability==="PENDING")throw new PrescriptionWorkflowError(`Confirm availability for ${product.name}.`,400);
+              if(action==="APPROVE"&&line.availability!=="UNAVAILABLE"&&(!approvedQuantity||!unitPrice))throw new PrescriptionWorkflowError(`Confirm the quantity and price for ${product.name}.`,400);
+              if(action==="APPROVE"&&approvedQuantity&&approvedQuantity>(stock.get(line.productId)||0))throw new PrescriptionWorkflowError(`Only ${stock.get(line.productId)||0} units of ${product.name} are currently available.`);
+              return{productId:line.productId,productName:product.name,requestedQuantity:Math.max(line.requestedQuantity,previous?.requestedQuantity||0),approvedQuantity,unitPrice:unitPrice?.toFixed(2)||null,availability:line.availability,source:previous?.source||line.source,pharmacistNote:line.pharmacistNote||null};
+            });
+            await tx.delete(prescriptionRequestItems).where(eq(prescriptionRequestItems.prescriptionId,downloadId));
+            if(normalizedItems.length)await tx.insert(prescriptionRequestItems).values(normalizedItems.map((item)=>({...item,prescriptionId:downloadId})));
+          }
+          let nextStatus:PrescriptionStatus=record.status as PrescriptionStatus,orderId=record.orderId,orderNumber:string|null=null,orderTotal:number|null=null;
+          if(action==="START_REVIEW")nextStatus="UNDER_REVIEW";
+          if(action==="REQUEST_CLARIFICATION")nextStatus="MORE_INFORMATION_REQUIRED";
+          if(action==="DECLINE")nextStatus="DECLINED";
+          if(action==="APPROVE"){
+            nextStatus="APPROVED";
+            const approvedLines=(normalizedItems||[]).filter((item)=>item.availability!=="UNAVAILABLE"&&item.approvedQuantity&&item.unitPrice);
+            if(!approvedLines.length)throw new PrescriptionWorkflowError("At least one available, priced medicine is required for approval.",400);
+            const subtotal=approvedLines.reduce((sum,item)=>sum+Number(item.unitPrice)*Number(item.approvedQuantity),0);
+            const linkedOrder=record.orderId?(await tx.select().from(orders).where(eq(orders.id,record.orderId)).limit(1).for("update"))[0]:undefined;
+            if(linkedOrder?.paymentStatus==="PAID"){
+              orderId=linkedOrder.id;orderNumber=linkedOrder.orderNumber;orderTotal=Number(linkedOrder.total);
+              await tx.update(orders).set({prescriptionStatus:"APPROVED",status:"CONFIRMED"}).where(eq(orders.id,linkedOrder.id));
+            }else{
+              if(linkedOrder){
+                const attempts=await tx.select({status:paymentTransactions.status}).from(paymentTransactions).where(eq(paymentTransactions.orderId,linkedOrder.id));
+                if(attempts.some((payment)=>!["FAILED","CANCELLED"].includes(payment.status)))throw new PrescriptionWorkflowError("This linked order already has a payment awaiting confirmation and cannot be repriced.");
+                await tx.delete(orderItems).where(eq(orderItems.orderId,linkedOrder.id));
+                await tx.update(orders).set({checkoutToken:null,customerName:`${customer.firstName} ${customer.lastName}`.trim(),phone:customer.phone||"",email:customer.email,fulfilmentMethod:"PICKUP",deliveryAddress:null,deliveryArea:null,deliveryLatitude:null,deliveryLongitude:null,status:"AWAITING_PAYMENT",paymentStatus:"PENDING",paymentMethod:"PENDING",paymentReference:null,amountPaid:"0",prescriptionStatus:"APPROVED",subtotal:subtotal.toFixed(2),deliveryFee:"0",discount:"0",total:subtotal.toFixed(2)}).where(eq(orders.id,linkedOrder.id));
+                orderId=linkedOrder.id;orderNumber=linkedOrder.orderNumber;
+              }else{
+                orderNumber=`HF-RX-${Date.now().toString().slice(-8)}-${downloadId}`;
+                const [created]=await tx.insert(orders).values({orderNumber,customerId:customer.id,customerName:`${customer.firstName} ${customer.lastName}`.trim(),phone:customer.phone||"",email:customer.email,fulfilmentMethod:"PICKUP",status:"AWAITING_PAYMENT",paymentStatus:"PENDING",paymentMethod:"PENDING",prescriptionStatus:"APPROVED",subtotal:subtotal.toFixed(2),deliveryFee:"0",discount:"0",total:subtotal.toFixed(2)});
+                orderId=created.insertId;
+              }
+              await tx.insert(orderItems).values(approvedLines.map((item)=>({orderId:orderId!,productId:item.productId,productName:item.productName,quantity:item.approvedQuantity!,unitPrice:item.unitPrice!,lineTotal:(Number(item.unitPrice)*Number(item.approvedQuantity)).toFixed(2)})));
+              orderTotal=subtotal;
+            }
+          }
+          const reviewVersion=record.reviewVersion+1;
+          await tx.update(prescriptions).set({status:nextStatus,orderId,pharmacistNotes:parsed.data.pharmacistNotes||record.pharmacistNotes,reviewedBy:auth.session.userId,reviewedAt:new Date(),reviewVersion}).where(eq(prescriptions.id,downloadId));
+          await tx.insert(activityLogs).values({actorId:auth.session.userId,action:`PRESCRIPTION_${action}`,entityType:"prescription",entityId:String(downloadId),metadata:{from:record.status,to:nextStatus,orderId,itemCount:normalizedItems?.length}});
+          const savedItems=await tx.select().from(prescriptionRequestItems).where(eq(prescriptionRequestItems.prescriptionId,downloadId)).orderBy(prescriptionRequestItems.id);
+          return{customer,status:nextStatus,reviewVersion,orderId,orderNumber,orderTotal,items:savedItems};
+        });
+        if(action==="REQUEST_CLARIFICATION")void sendEmail({to:result.customer.email,subject:"Action required for your prescription",message:`Hello ${result.customer.firstName},\n\nA pharmacist needs more information before completing your prescription request.\n\n${parsed.data.pharmacistNotes}`,action:{label:"Review prescription request",url:`${storefrontOrigin()}/account/prescriptions/${downloadId}`},channel:"orders"});
+        if(action==="APPROVE")void sendEmail({to:result.customer.email,subject:"Your prescription is approved and ready",message:`Hello ${result.customer.firstName},\n\nYour prescription has been approved. The confirmed medicines total KES ${Number(result.orderTotal).toLocaleString()}. Review the proposed order, choose delivery or pickup and proceed to payment.`,action:{label:"Review and pay",url:`${storefrontOrigin()}/account/prescriptions/${downloadId}`},channel:"orders"});
+        if(action==="DECLINE")void sendEmail({to:result.customer.email,subject:"Prescription review update",message:`Hello ${result.customer.firstName},\n\nThis prescription request could not be approved.\n\n${parsed.data.pharmacistNotes}`,action:{label:"View prescription request",url:`${storefrontOrigin()}/account/prescriptions/${downloadId}`},channel:"orders"});
+        return json({ok:true,...result});
+      }catch(error){if(error instanceof PrescriptionWorkflowError)return json({error:error.message},{status:error.status});console.error("Prescription review failed",{prescriptionId:downloadId,action,error});return json({error:"The prescription review could not be saved."},{status:500});}
     }
     const [record] = await db.select().from(prescriptions).where(eq(prescriptions.id, downloadId)).limit(1);
     if (!record) return json({ error: "Prescription not found." }, { status: 404 });
@@ -876,11 +999,17 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
       return new Response(buffer, { headers: { "Content-Type": record.mimeType, "Content-Disposition": `inline; filename="${safeFilename(record.originalFilename)}"`, "Cache-Control": "private, no-store" } });
     } catch { return json({ error: "Prescription file is missing." }, { status: 404 }); }
   }
-  const auth = await requireSession(request, undefined, true);
+  const auth = await requireSession(request, ["CUSTOMER"], true);
   if ("response" in auth) return auth.response;
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
   const form = await request.formData();
   const file = form.get("prescription");
   if (!(file instanceof File)) return json({ error: "Choose a prescription file." }, { status: 400 });
+  let submittedItems: unknown = [];
+  try { submittedItems = JSON.parse(String(form.get("items") || "[]")); }
+  catch { return json({ error: "The linked prescription medicines are invalid." }, { status: 400 }); }
+  const uploadItems = z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).max(50).safeParse(submittedItems);
+  if (!uploadItems.success || new Set(uploadItems.data.map((item) => item.productId)).size !== uploadItems.data.length) return json({ error: "The linked prescription medicines are invalid." }, { status: 400 });
   const allowed = new Map([["application/pdf", ".pdf"], ["image/png", ".png"], ["image/jpeg", ".jpg"]]);
   const extension = allowed.get(file.type);
   if (!extension) return json({ error: "Only PDF, PNG, JPG and JPEG files are supported." }, { status: 415 });
@@ -888,17 +1017,110 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   const bytes = new Uint8Array(await file.arrayBuffer());
   const valid = file.type === "application/pdf" ? bytes.slice(0, 4).toString() === "37,80,68,70" : file.type === "image/png" ? bytes.slice(0, 8).toString() === "137,80,78,71,13,10,26,10" : bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   if (!valid) return json({ error: "The file content does not match its format." }, { status: 400 });
+  const db = getDb();
+  const linkedProducts = uploadItems.data.length ? await db.select({ id: products.id, name: products.name, prescriptionRequired: products.prescriptionRequired, isActive: products.isActive }).from(products).where(inArray(products.id, uploadItems.data.map((item) => item.productId))) : [];
+  if (linkedProducts.length !== uploadItems.data.length || linkedProducts.some((product) => !product.isActive || !product.prescriptionRequired)) return json({ error: "Only active prescription medicines can be linked from the cart." }, { status: 409 });
   const directory = path.join(storageRoot(), "prescriptions");
   await mkdir(directory, { recursive: true });
   const storedName = `${randomUUID()}${extension}`;
-  await writeFile(path.join(directory, storedName), bytes, { flag: "wx" });
-  const [sender] = await getDb().select({ firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.id, auth.session.userId)).limit(1);
-  const senderName = `${sender?.firstName || auth.session.firstName} ${sender?.lastName || ""}`.trim().slice(0, 200);
-  const displayName = `Prescription - ${senderName} - ${new Date().toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}${extension}`;
-  const [created] = await getDb().insert(prescriptions).values({ customerId: auth.session.userId, senderName, storageKey: storedName, originalFilename: displayName, mimeType: file.type, sizeBytes: file.size, status: "RECEIVED" });
-  void sendEmail({to:auth.session.email,subject:"Prescription received",message:`Hello ${auth.session.firstName},\n\nWe received your prescription and it is awaiting pharmacist review. Track its progress from your Healthfield account.`,action:{label:"Track prescription",url:`${storefrontOrigin()}/account#prescriptions`},channel:"orders"});
-  if(process.env.NOTIFICATION_EMAIL)void sendEmail({to:process.env.NOTIFICATION_EMAIL,subject:"New prescription awaiting review",message:`A new prescription upload is awaiting pharmacist review. Reference: ${created.insertId}.`,channel:"orders"});
-  return json({ ok: true, id: created.insertId }, { status: 201 });
+  const storedPath = path.join(directory, storedName);
+  await writeFile(storedPath, bytes, { flag: "wx" });
+  try {
+    const [sender] = await db.select({ firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.id, auth.session.userId)).limit(1);
+    const senderName = `${sender?.firstName || auth.session.firstName} ${sender?.lastName || ""}`.trim().slice(0, 200);
+    const displayName = `Prescription - ${senderName} - ${new Date().toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}${extension}`;
+    const created = await db.transaction(async (tx) => {
+      const [requestRow] = await tx.insert(prescriptions).values({ customerId: auth.session.userId, senderName, storageKey: storedName, originalFilename: displayName, mimeType: file.type, sizeBytes: file.size, status: "UNDER_REVIEW" });
+      if (linkedProducts.length) await tx.insert(prescriptionRequestItems).values(linkedProducts.map((product) => ({ prescriptionId: requestRow.insertId, productId: product.id, productName: product.name, requestedQuantity: uploadItems.data.find((item) => item.productId === product.id)!.quantity, availability: "PENDING" as const, source: "CUSTOMER_CART" as const })));
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_REQUEST_CREATED", entityType: "prescription", entityId: String(requestRow.insertId), metadata: { linkedProductIds: linkedProducts.map((product) => product.id) } });
+      return requestRow;
+    });
+    void sendEmail({ to: auth.session.email, subject: "Prescription under pharmacist review", message: `Hello ${auth.session.firstName},\n\nWe received your prescription and placed it under pharmacist review.${linkedProducts.length ? ` ${linkedProducts.length} prescription ${linkedProducts.length === 1 ? "medicine was" : "medicines were"} linked from your cart; prices will be confirmed by the pharmacist.` : " The pharmacist will identify the medicines, availability, quantities and prices."}`, action: { label: "Track prescription", url: `${storefrontOrigin()}/account/prescriptions/${created.insertId}` }, channel: "orders" });
+    if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New prescription under review", message: `A new prescription request is ready for pharmacist review. Reference: ${created.insertId}.`, channel: "orders" });
+    return json({ ok: true, id: created.insertId, linkedProductIds: linkedProducts.map((product) => product.id) }, { status: 201 });
+  } catch (error) {
+    await unlink(storedPath).catch(() => undefined);
+    console.error("Prescription request creation failed", error);
+    return json({ error: "The prescription could not be saved. Please try again." }, { status: 500 });
+  }
+}
+
+export async function handlePrescriptionCheckout(request: Request, prescriptionId: number) {
+  const auth = await requireSession(request, ["CUSTOMER"], true);
+  if ("response" in auth) return auth.response;
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  const parsed = z.object({
+    checkoutToken: z.string().uuid(), fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA_EXPRESS", "MANUAL_MPESA"]),
+    phone: z.string().trim().min(9).max(30), billingPhone: z.string().trim().min(9).max(30).optional(), manualPaymentMessage: z.string().trim().max(2500).optional(),
+    deliveryAddress: z.string().trim().max(1000).optional(), deliveryArea: z.string().trim().max(160).optional(), deliveryLatitude: z.number().min(-90).max(90).optional(), deliveryLongitude: z.number().min(-180).max(180).optional(),
+  }).safeParse(await body(request));
+  if (!parsed.success) return json({ error: parsed.error.issues[0]?.message || "Check the checkout details." }, { status: 400 });
+  if (parsed.data.fulfilmentMethod === "DELIVERY" && !parsed.data.deliveryAddress) return json({ error: "Delivery address is required." }, { status: 400 });
+  const db = getDb();
+  const [settings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber }).from(siteSettings).limit(1);
+  if (parsed.data.paymentMethod === "MPESA_EXPRESS" && (!settings?.onlineMpesaEnabled || !mpesaConfiguration())) return json({ error: "M-Pesa Express is currently unavailable. Choose manual M-Pesa payment." }, { status: 409 });
+  if (parsed.data.paymentMethod === "MANUAL_MPESA" && (!settings?.onlineManualEnabled || !settings.mpesaTillNumber)) return json({ error: "Manual M-Pesa payment is currently unavailable." }, { status: 409 });
+  if (parsed.data.paymentMethod === "MANUAL_MPESA" && (parsed.data.manualPaymentMessage || "").length < 10) return json({ error: "Paste the complete M-Pesa payment message." }, { status: 400 });
+  const manualReceipt = parsed.data.paymentMethod === "MANUAL_MPESA" ? extractMpesaReceipt(parsed.data.manualPaymentMessage || "") : null;
+  try {
+    const outcome = await db.transaction(async (tx) => {
+      const [requestRow] = await tx.select().from(prescriptions).where(and(eq(prescriptions.id, prescriptionId), eq(prescriptions.customerId, auth.session.userId))).limit(1).for("update");
+      if (!requestRow || requestRow.status !== "APPROVED" || !requestRow.orderId) throw new PrescriptionWorkflowError("This prescription is not ready for checkout.");
+      const [order] = await tx.select().from(orders).where(and(eq(orders.id, requestRow.orderId), eq(orders.customerId, auth.session.userId))).limit(1).for("update");
+      if (!order) throw new PrescriptionWorkflowError("The proposed order could not be found.", 404);
+      if (order.paymentStatus === "PAID") return { duplicate: true, order, paymentId: null };
+      if (order.status !== "AWAITING_PAYMENT") throw new PrescriptionWorkflowError("This prescription order is no longer awaiting payment.");
+      const proposalLines=await tx.select({productId:orderItems.productId,productName:orderItems.productName,quantity:orderItems.quantity}).from(orderItems).where(eq(orderItems.orderId,order.id));
+      if(!proposalLines.length)throw new PrescriptionWorkflowError("The proposed order has no medicines. Ask the pharmacy to review it again.");
+      const productIds=proposalLines.flatMap((line)=>line.productId?[line.productId]:[]);
+      const stockRows=productIds.length?await tx.select({productId:branchInventory.productId,available:sql<number>`sum(greatest(${branchInventory.quantityAvailable} - ${branchInventory.quantityReserved}, 0))`}).from(branchInventory).where(inArray(branchInventory.productId,productIds)).groupBy(branchInventory.productId):[];
+      const stock=new Map(stockRows.map((row)=>[row.productId,Number(row.available)]));
+      const changed=proposalLines.filter((line)=>!line.productId||(stock.get(line.productId)||0)<line.quantity);
+      if(changed.length){
+        const note=`Availability changed for ${changed.map((line)=>line.productName).join(", ")}. A pharmacist is rechecking the proposal before payment.`;
+        await tx.update(prescriptions).set({status:"MORE_INFORMATION_REQUIRED",pharmacistNotes:note,reviewVersion:requestRow.reviewVersion+1}).where(eq(prescriptions.id,prescriptionId));
+        await tx.insert(activityLogs).values({actorId:auth.session.userId,action:"PRESCRIPTION_CHECKOUT_STOCK_REVIEW",entityType:"prescription",entityId:String(prescriptionId),metadata:{orderId:order.id,products:changed.map((line)=>line.productName)}});
+        return{availabilityChanged:true as const,note,order};
+      }
+      const total = Number(order.subtotal) + (parsed.data.fulfilmentMethod === "DELIVERY" ? 250 : 0);
+      if (parsed.data.paymentMethod === "MPESA_EXPRESS" && !Number.isInteger(total)) throw new PrescriptionWorkflowError("M-Pesa Express requires a whole-shilling total. Choose manual M-Pesa.");
+      if (order.checkoutToken === parsed.data.checkoutToken) {
+        const [payment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
+        return { duplicate: true, order: { ...order, total: total.toFixed(2) }, paymentId: payment?.id || null };
+      }
+      const attempts = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt));
+      if (attempts.some((payment) => ["INITIATED", "PENDING", "REQUIRES_REVIEW"].includes(payment.status))) throw new PrescriptionWorkflowError("A payment for this prescription is already awaiting confirmation.");
+      await tx.update(orders).set({ checkoutToken: parsed.data.checkoutToken, phone: parsed.data.phone, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, paymentMethod: parsed.data.paymentMethod, paymentStatus: "PENDING", paymentReference: manualReceipt, deliveryFee: parsed.data.fulfilmentMethod === "DELIVERY" ? "250" : "0", total: total.toFixed(2) }).where(eq(orders.id, order.id));
+      const [payment] = await tx.insert(paymentTransactions).values({ orderId: order.id, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: total.toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_CHECKOUT_STARTED", entityType: "order", entityId: String(order.id), metadata: { prescriptionId, paymentMethod: parsed.data.paymentMethod, total } });
+      return { duplicate: false, order: { ...order, checkoutToken: parsed.data.checkoutToken, total: total.toFixed(2) }, paymentId: payment.insertId };
+    });
+    if("availabilityChanged" in outcome){
+      void sendEmail({to:auth.session.email,subject:"Your prescription proposal needs a new availability check",message:`Hello ${auth.session.firstName},\n\n${outcome.note}\n\nYou have not been charged. Your normal shopping cart is unaffected.`,action:{label:"View prescription update",url:`${storefrontOrigin()}/account/prescriptions/${prescriptionId}`},channel:"orders"});
+      return json({error:outcome.note},{status:409});
+    }
+    if (outcome.duplicate) return json({ ok: true, id: outcome.order.id, orderNumber: outcome.order.orderNumber, total: Number(outcome.order.total), paymentStatus: outcome.order.paymentStatus, duplicate: true });
+    let paymentStatus: "PENDING" | "FAILED" = "PENDING";
+    let paymentMessage = parsed.data.paymentMethod === "MANUAL_MPESA" ? "Payment proof submitted for administrator approval." : "Check your phone and enter your M-Pesa PIN.";
+    if (parsed.data.paymentMethod === "MPESA_EXPRESS") {
+      try {
+        const stk = await initiateStkPush({ orderNumber: outcome.order.orderNumber, phone: parsed.data.billingPhone || parsed.data.phone, amount: Number(outcome.order.total) });
+        await db.update(paymentTransactions).set({ status: "PENDING", checkoutRequestId: stk.checkoutRequestId, merchantRequestId: stk.merchantRequestId, phone: stk.phone, resultDescription: stk.customerMessage, providerPayload: stk.providerPayload }).where(eq(paymentTransactions.id, outcome.paymentId!));
+        await replayStoredStkCallback(stk.checkoutRequestId);
+        paymentMessage = stk.customerMessage;
+      } catch (error) {
+        paymentStatus = "FAILED";
+        paymentMessage = error instanceof Error ? error.message : "M-Pesa Express could not start.";
+        await db.update(paymentTransactions).set({ status: "FAILED", resultDescription: paymentMessage }).where(eq(paymentTransactions.id, outcome.paymentId!));
+        await db.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, outcome.order.id));
+      }
+    }
+    return json({ ok: true, id: outcome.order.id, orderNumber: outcome.order.orderNumber, total: Number(outcome.order.total), paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
+  } catch (error) {
+    if (error instanceof PrescriptionWorkflowError) return json({ error: error.message }, { status: error.status });
+    console.error("Prescription checkout failed", { prescriptionId, error });
+    return json({ error: "Prescription checkout could not be started." }, { status: 500 });
+  }
 }
 
 export async function handleInventory(request: Request, id: number) {

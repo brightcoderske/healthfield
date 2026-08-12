@@ -189,20 +189,18 @@ export function Storefront({
     ...displayedCategories.filter((category) => !category.featuredOnStorefront),
   ].slice(0, CATEGORY_PREVIEW);
   const hiddenCategoryCount = Math.max(0, displayedCategories.length - visibleCategories.length);
-  // Which cards break up the catalogue scroll, and where. The rules (spacing,
-  // relevance, urgency, seeded variation) live in lib/catalogue-breaks.
+  // Which offer and blog cards break up the catalogue scroll, and where. The rules
+  // (spacing, relevance, urgency, seeded variation) live in lib/catalogue-breaks.
   const breakPlan = useMemo(() => planBreaks({
     products: filtered.slice(0, visibleCount).map((product) => ({
-      id: product.id, name: product.name, imageUrl: product.imageUrl, price: product.price,
-      discountPrice: product.discountPrice, categoryId: product.categoryId, conditionIds: product.conditionIds,
+      id: product.id, name: product.name,
     })),
     offers,
     guides,
-    conditions: initialConditions,
     seed: layoutSeed,
     // A shopper mid-search or mid-filter is working towards something specific.
     focused: Boolean(query.trim() || selectedCategory || selectedCondition || offersOnly),
-  }), [filtered, visibleCount, offers, guides, initialConditions, layoutSeed, query, selectedCategory, selectedCondition, offersOnly]);
+  }), [filtered, visibleCount, offers, guides, layoutSeed, query, selectedCategory, selectedCondition, offersOnly]);
   const breakAt = useMemo(() => new Map(breakPlan.map((entry) => [entry.position, entry.item])), [breakPlan]);
 
   const visibleConditions = initialConditions.slice(0, CONDITION_PREVIEW);

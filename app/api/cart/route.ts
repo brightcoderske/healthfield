@@ -44,3 +44,18 @@ export async function DELETE() {
   response.cookies.set(CART_COOKIE, "", { path: "/", maxAge: 0 });
   return response;
 }
+
+export async function PATCH(request: Request) {
+  const parsed = await request.json().catch(() => null) as { productIds?: unknown } | null;
+  const productIds = Array.isArray(parsed?.productIds)
+    ? [...new Set(parsed.productIds.map(Number).filter((id) => Number.isInteger(id) && id > 0))].slice(0, 50)
+    : [];
+  if (!productIds.length) return NextResponse.json({ error: "Choose cart products to remove." }, { status: 400 });
+  const jar = await cookies();
+  const cart = parseCart(jar.get(CART_COOKIE)?.value);
+  const offers = parseCartOffers(jar.get(CART_COOKIE)?.value);
+  for (const productId of productIds) delete cart[productId];
+  const response = NextResponse.json({ ok: true, cart, offers });
+  response.cookies.set(CART_COOKIE, serializeCart(cart, offers), { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 30, path: "/" });
+  return response;
+}

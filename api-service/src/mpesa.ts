@@ -50,6 +50,10 @@ export function mpesaPassword(shortcode: string, passkey: string, timestamp: str
   return Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
 }
 
+export function buildStkNotificationUrl(baseUrl: string, secret: string) {
+  return `${baseUrl.replace(/\/$/, "")}/v1/payments/mobile-money/stk/notification/${encodeURIComponent(secret)}`;
+}
+
 export function extractMpesaReceipt(message: string) {
   const labelled = message.toUpperCase().match(/(?:M-?PESA\s+)?(?:CODE|RECEIPT|TRANSACTION)\s*[:#-]?\s*([A-Z0-9]{10,12})/i)?.[1];
   if (labelled) return labelled;
@@ -92,7 +96,7 @@ export async function initiateStkPush(input: { orderNumber: string; phone: strin
       PartyA: phone,
       PartyB: config.shortcode,
       PhoneNumber: phone,
-      CallBackURL: `${config.callbackBaseUrl}/v1/payments/mpesa/stk/callback/${encodeURIComponent(config.callbackSecret)}`,
+      CallBackURL: buildStkNotificationUrl(config.callbackBaseUrl, config.callbackSecret),
       AccountReference: input.orderNumber.slice(0, 12),
       TransactionDesc: `Healthfield ${input.orderNumber}`.slice(0, 20),
     }),

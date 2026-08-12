@@ -32,8 +32,28 @@ function layout(content: string, promoCount: number) {
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
-  const data = await get((await params).slug);
-  return data ? { title: data.post.metaTitle || data.post.title, description: data.post.metaDescription || data.post.excerpt } : {};
+  const slug = (await params).slug;
+  const data = await get(slug);
+  if (!data) return {};
+  const title = data.post.metaTitle || data.post.title;
+  const description = data.post.metaDescription || data.post.excerpt;
+  const path = `/blog/${slug}`;
+  const image = data.post.imageUrl || "/healthfield-hero-pharmacist.png";
+  return {
+    title,
+    description,
+    alternates: { canonical: path },
+    openGraph: {
+      type: "article",
+      siteName: "Healthfield Pharmacy",
+      title,
+      description,
+      url: path,
+      images: [{ url: image, alt: data.post.title }],
+      publishedTime: data.post.publishedAt || undefined,
+    },
+    twitter: { card: "summary_large_image", title, description, images: [image] },
+  };
 }
 
 export default async function Article({ params }: { params: Promise<{ slug: string }> }) {
@@ -46,6 +66,8 @@ export default async function Article({ params }: { params: Promise<{ slug: stri
   ]);
   if (!data) notFound();
   const { post } = data;
+  const origin = (process.env.APP_URL || (process.env.NODE_ENV === "production" ? "https://healthfieldpharmacy.co.ke" : "http://localhost:3000")).replace(/\/$/, "");
+  const shareUrl = `${origin}/blog/${encodeURIComponent(slug)}`;
   const promoted = data.products || [];
   const { blocks, slots } = layout(post.content, promoted.length);
   return <>
@@ -83,7 +105,7 @@ export default async function Article({ params }: { params: Promise<{ slug: stri
           <p>Our pharmacists are here to help you live healthier every day.</p>
           <Link prefetch={false} href="/chat"><MessageCircle/> Chat with a Pharmacist</Link>
         </section>
-        <ShareArticle path={`/blog/${slug}`} title={post.title}/>
+        <ShareArticle url={shareUrl} title={post.title} summary={post.excerpt}/>
       </aside>
     </div>
   </main>

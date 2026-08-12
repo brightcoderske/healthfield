@@ -1,6 +1,5 @@
 "use client";
 
-import { Timer } from "lucide-react";
 import { useEffect, useState } from "react";
 
 function remaining(endsAt: string, now: number) {
@@ -36,24 +35,12 @@ export function OfferCountdown({ endsAt }: { endsAt: string | null }) {
   const pad = (value: number) => String(value).padStart(2, "0");
   // Seconds are always shown. Without them a multi-day offer only changed once a
   // minute, so the clock looked frozen — the visible tick is the whole point.
-  const segments: Array<[string, string]> = [
-    ...(left.days > 0 ? [[String(left.days), "days"] as [string, string]] : []),
-    [pad(left.hours), "hrs"],
-    [pad(left.minutes), "min"],
-    [pad(left.seconds), "sec"],
-  ];
+  const counter = [pad(left.days), pad(left.hours), pad(left.minutes), pad(left.seconds)].join(":");
 
-  return <span className={`offer-countdown${left.urgent ? " is-urgent" : ""}`}
-    aria-label={`Offer ends in ${left.days} days ${left.hours} hours ${left.minutes} minutes`}>
-    <Timer aria-hidden="true"/>
-    <em>{left.urgent ? "Ends today" : "Ends in"}</em>
-    <span className="offer-countdown-clock">
-      {segments.map(([value, label], index) => (
-        <span key={label}>
-          <b>{value}</b><i>{label}</i>
-          {index < segments.length - 1 && <s aria-hidden="true">:</s>}
-        </span>
-      ))}
-    </span>
-  </span>;
+  return <time className={`offer-countdown${left.urgent ? " is-urgent" : ""}`}
+    dateTime={endsAt}
+    title="Days : hours : minutes : seconds"
+    aria-label={`Offer ends in ${left.days} days ${left.hours} hours ${left.minutes} minutes ${left.seconds} seconds`}>
+    {counter}
+  </time>;
 }

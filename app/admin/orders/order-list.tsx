@@ -6,7 +6,7 @@ import styles from "./order-list.module.css";
 
 type Order={id:number;orderNumber:string;customerName:string;phone:string;status:string;createdAt:string;paymentStatus:string;paymentMethod:string;amountPaid:string;fulfilmentMethod:string;total:string;deliveryArea:string|null};
 const removable=new Set(["NEW","CONFIRMED","UNDER_REVIEW","CANCELLED"]);
-const allStatuses=["NEW","CONFIRMED","UNDER_REVIEW","BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED","CANCELLED"] as const;
+const allStatuses=["NEW","AWAITING_PAYMENT","CONFIRMED","UNDER_REVIEW","BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED","CANCELLED"] as const;
 const paymentName=(method:string)=>method==="MPESA_EXPRESS"?"M-Pesa Express":method==="MANUAL_MPESA"?"Manual M-Pesa":"Cash";
 
 export function OrderList({orders,statuses=allStatuses,filterKey="healthfield-order-status-filters",pageSize,emptyHint}:{orders:Order[];statuses?:readonly string[];filterKey?:string;pageSize?:number;emptyHint?:string}){

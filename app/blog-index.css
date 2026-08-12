@@ -149,6 +149,12 @@
   display: grid; place-items: center; cursor: pointer; color: #fff;
 }
 .article-share svg { width: 16px; fill: currentColor; }
+.article-share .share-native {
+  width: auto; padding: 0 13px; border-radius: 999px; gap: 6px;
+  display: inline-flex; background: linear-gradient(90deg, #76257f, #c5267d); font-size: 10px; font-weight: 800;
+}
+.article-share .share-native:hover { background: linear-gradient(90deg, #641c6d, #a91f6a); }
+.article-share .share-native svg { fill: none; stroke: currentColor; stroke-width: 2; }
 .article-share .share-fb { background: #1877f2; }
 .article-share .share-x { background: #111; }
 .article-share .share-wa { background: #25d366; }

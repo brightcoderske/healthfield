@@ -34,6 +34,8 @@ yarn-error.log*
 stderr.log
 .dev-server*.log
 /.codex-logs/
+/.codex*.log
+/.claude/
 
 # env files (can opt-in for committing if needed)
 .env*

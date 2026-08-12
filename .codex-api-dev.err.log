@@ -1,1 +1,0 @@
-$ node scripts/build-api.mjs && node --env-file=.env.local api-service/dist/server.mjs

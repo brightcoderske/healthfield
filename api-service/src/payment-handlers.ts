@@ -37,7 +37,8 @@ async function markPaymentPaid(transactionId: number, details: { receiptNumber: 
     if (payment.channel === "POS" && order.paymentStatus !== "PAID") await finalizePosInventory(tx, order.id, details.actorId ?? null);
     const paidAt = new Date();
     await tx.update(paymentTransactions).set({ status: "PAID", receiptNumber: details.receiptNumber, phone: details.phone || payment.phone, verifiedAt: paidAt, reviewedBy: details.actorId ?? payment.reviewedBy, reviewedAt: details.actorId ? paidAt : payment.reviewedAt, resultCode: "0", resultDescription: "Payment confirmed", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
-    await tx.update(orders).set({ paymentStatus: "PAID", paymentReference: details.receiptNumber, amountPaid: details.amount.toFixed(2), ...(payment.channel === "POS" ? { status: "COMPLETED" as const } : {}) }).where(eq(orders.id, order.id));
+    const paidOrderStatus = payment.channel === "POS" ? "COMPLETED" : ["NEW", "AWAITING_PAYMENT"].includes(order.status) ? "CONFIRMED" : order.status;
+    await tx.update(orders).set({ paymentStatus: "PAID", paymentReference: details.receiptNumber, amountPaid: details.amount.toFixed(2), status: paidOrderStatus }).where(eq(orders.id, order.id));
     await tx.insert(activityLogs).values({ actorId: details.actorId ?? null, action: "PAYMENT_CONFIRMED", entityType: "order", entityId: String(order.id), metadata: { transactionId: payment.id, method: payment.method, receiptNumber: details.receiptNumber, amount: details.amount } });
     return order.id;
   });
@@ -195,7 +196,7 @@ export async function handlePaymentCancel(request: Request) {
   return json({ ok: true });
 }
 
-export async function handleStkCallback(request: Request) {
+export async function handleStkNotification(request: Request) {
   if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
   const parsed = parseStkCallback(payload);
@@ -207,7 +208,7 @@ export async function handleStkCallback(request: Request) {
   if (!payment) return json({ ResultCode: 0, ResultDesc: "Accepted" });
   if (parsed.resultCode === "0" && parsed.receiptNumber && parsed.amount !== null) {
     try { await markPaymentPaid(payment.id, { receiptNumber: parsed.receiptNumber, amount: parsed.amount, phone: parsed.phone, providerPayload: payload }); }
-    catch (error) { console.error("M-Pesa callback requires review", { transactionId: payment.id, error }); }
+    catch (error) { console.error("Mobile-money notification requires review", { transactionId: payment.id, error }); }
   } else {
     await db.update(paymentTransactions).set({ status: "FAILED", resultCode: parsed.resultCode, resultDescription: parsed.resultDescription, providerPayload: payload }).where(and(eq(paymentTransactions.id, payment.id), eq(paymentTransactions.status, "PENDING")));
     await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
@@ -232,7 +233,7 @@ export async function replayStoredStkCallback(checkoutRequestId: string) {
   return true;
 }
 
-export async function handleC2bCallback(request: Request) {
+export async function handleC2bConfirmation(request: Request) {
   if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
   const incoming = parseC2bPayment(payload);
@@ -261,7 +262,7 @@ export async function handleC2bCallback(request: Request) {
   return json({ ResultCode: 0, ResultDesc: "Accepted" });
 }
 
-export async function handleC2bValidation(request: Request) {
+export async function handleC2bVerification(request: Request) {
   if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
   try { parseC2bPayment(payload); return json({ ResultCode: 0, ResultDesc: "Accepted" }); }

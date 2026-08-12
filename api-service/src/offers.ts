@@ -24,7 +24,7 @@ export async function loadLiveOffers(now = new Date()): Promise<ResolvedOffer[]>
   const members = await db.select({
     offerId: offerItems.offerId, productId: offerItems.productId, quantity: offerItems.quantity,
     offerPrice: offerItems.offerPrice, name: products.name, imageUrl: products.imageUrl,
-    price: products.price, discountPrice: products.discountPrice, isActive: products.isActive,
+    price: products.price, discountPrice: products.discountPrice, prescriptionRequired: products.prescriptionRequired, isActive: products.isActive,
   }).from(offerItems).innerJoin(products, eq(products.id, offerItems.productId))
     .orderBy(asc(offerItems.displayOrder), asc(offerItems.id));
 
@@ -43,6 +43,7 @@ export async function loadLiveOffers(now = new Date()): Promise<ResolvedOffer[]>
       quantity: member.quantity,
       normalPrice: Number(member.discountPrice ?? member.price),
       offerPrice: member.offerPrice === null ? null : Number(member.offerPrice),
+      prescriptionRequired: member.prescriptionRequired,
     })),
     // An offer whose products were all de-listed is dropped rather than shown empty.
   })).filter((offer) => offer.items.length > 0);

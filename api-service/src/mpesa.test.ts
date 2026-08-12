@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, parseC2bPayment, parseStkCallback } from "./mpesa.ts";
+import { buildStkNotificationUrl, extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, parseC2bPayment, parseStkCallback } from "./mpesa.ts";
 
 test("normalizes supported Kenyan mobile number formats", () => {
   assert.equal(normalizeKenyanPhone("0712 345 678"), "254712345678");
@@ -12,6 +12,13 @@ test("builds Daraja timestamp and password", () => {
   const timestamp = mpesaTimestamp(new Date(2026, 7, 7, 14, 5, 9));
   assert.equal(timestamp, "20260807140509");
   assert.equal(mpesaPassword("174379", "pass", timestamp), Buffer.from(`174379pass${timestamp}`).toString("base64"));
+});
+
+test("builds the neutral public STK notification URL", () => {
+  assert.equal(
+    buildStkNotificationUrl("https://api.healthfieldpharmacy.co.ke/", "secret/value"),
+    "https://api.healthfieldpharmacy.co.ke/v1/payments/mobile-money/stk/notification/secret%2Fvalue",
+  );
 });
 
 test("extracts receipts and parses successful callbacks", () => {

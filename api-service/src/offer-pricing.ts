@@ -10,6 +10,7 @@ export type ResolvedOfferItem = {
   quantity: number;
   normalPrice: number;
   offerPrice: number | null;
+  prescriptionRequired: boolean;
 };
 
 export type ResolvedOffer = {

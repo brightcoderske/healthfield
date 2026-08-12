@@ -1,16 +1,15 @@
 "use client";
 
-import { Check, Link2 } from "lucide-react";
+import { Check, Link2, Share2 } from "lucide-react";
 import { useState } from "react";
 
-/** Share row. The network links are plain hrefs; only "copy" needs the client. */
-export function ShareArticle({ path, title }: { path: string; title: string }) {
+/** Native mobile sharing first; direct network links remain useful fallbacks. */
+export function ShareArticle({ url, title, summary }: { url: string; title: string; summary: string }) {
   const [copied, setCopied] = useState(false);
-  const url = typeof window === "undefined" ? path : `${window.location.origin}${path}`;
   const encoded = encodeURIComponent(url);
   const text = encodeURIComponent(title);
 
-  async function copy() {
+  async function copy(): Promise<void> {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
@@ -18,9 +17,24 @@ export function ShareArticle({ path, title }: { path: string; title: string }) {
     } catch { /* clipboard unavailable; the address bar still has it */ }
   }
 
+  async function share() {
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share({ title, text: summary, url });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      }
+    }
+    await copy();
+  }
+
   return <div className="article-share">
     <h3>Share this article</h3>
     <div>
+      <button type="button" className="share-native" onClick={share} aria-label="Share using your phone">
+        {copied ? <Check/> : <Share2/>}<span>{copied ? "Link copied" : "Share"}</span>
+      </button>
       <a className="share-fb" href={`https://www.facebook.com/sharer/sharer.php?u=${encoded}`} target="_blank" rel="noreferrer" aria-label="Share on Facebook">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.03 1.79-4.7 4.53-4.7 1.31 0 2.69.24 2.69.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.89v2.27h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07Z"/></svg>
       </a>

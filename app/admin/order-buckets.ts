@@ -3,7 +3,7 @@
 export const pastOrderStatuses = ["OUT_FOR_DELIVERY", "COMPLETED"] as const;
 
 export const activeOrderStatuses = [
-  "NEW", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY",
+  "NEW", "AWAITING_PAYMENT", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY",
   "READY_FOR_DISPATCH", "READY_FOR_PICKUP", "CANCELLED",
 ] as const;
 

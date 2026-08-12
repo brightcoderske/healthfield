@@ -6,7 +6,7 @@ const offer = (over: Partial<ResolvedOffer> & { items: ResolvedOffer["items"] })
   id: 1, title: "Offer", slug: "offer", description: null, imageUrl: null, endsAt: null, bundlePrice: null, ...over,
 });
 const item = (productId: number, normalPrice: number, offerPrice: number | null, quantity = 1) =>
-  ({ productId, name: `P${productId}`, imageUrl: null, quantity, normalPrice, offerPrice });
+  ({ productId, name: `P${productId}`, imageUrl: null, quantity, normalPrice, offerPrice, prescriptionRequired: false });
 
 test("a single-product offer replaces that product's price", () => {
   const map = offerPriceMap([offer({ items: [item(7, 500, 380)] })]);

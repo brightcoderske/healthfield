@@ -1,40 +1,86 @@
 "use client";
 
-import { ExternalLink, FileText, X } from "lucide-react";
-import { useState } from "react";
+/* eslint-disable @next/next/no-img-element */
 
-type Item = { id:number; senderName:string|null; originalFilename:string; createdAt:string; status:string; mimeType:string; pharmacistNotes:string|null };
-const statuses = ["RECEIVED", "UNDER_REVIEW", "APPROVED", "MORE_INFORMATION_REQUIRED", "DECLINED"];
+import { AlertTriangle, CheckCircle2, ExternalLink, FileText, PackagePlus, Plus, Search, Trash2, X, XCircle } from "lucide-react";
+import Link from "next/link";
+import { useMemo, useState } from "react";
+import { prescriptionStatuses, prescriptionStatusLabels, type PrescriptionReviewAction, type PrescriptionStatus } from "@/lib/prescription-workflow";
 
-export function PrescriptionManager({ initialItems }: { initialItems: Item[] }) {
-  const [items, setItems] = useState(initialItems);
-  const [saving, setSaving] = useState<number | null>(null);
-  const [previewing, setPreviewing] = useState<Item | null>(null);
-  async function update(item: Item, status: string, notes: string) {
-    setSaving(item.id);
-    const response = await fetch(`/api/prescriptions/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, pharmacistNotes: notes }) });
-    if (response.ok) setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, status, pharmacistNotes: notes } : row));
-    setSaving(null);
+export type PrescriptionRequestItem = {
+  id:number;prescriptionId:number;productId:number|null;productName:string;requestedQuantity:number;approvedQuantity:number|null;
+  unitPrice:string|null;availability:"PENDING"|"AVAILABLE"|"PARTIALLY_AVAILABLE"|"UNAVAILABLE";source:"CUSTOMER_CART"|"PHARMACIST";pharmacistNote:string|null;
+};
+export type PrescriptionProduct = { id:number;name:string;packSize:string|null;price:string;discountPrice:string|null;prescriptionRequired:boolean;available:number };
+export type PrescriptionRecord = {
+  id:number;customerId:number|null;orderId:number|null;senderName:string|null;originalFilename:string;createdAt:string;status:string;mimeType:string;
+  pharmacistNotes:string|null;reviewVersion:number;orderNumber:string|null;orderStatus:string|null;paymentStatus:string|null;orderTotal:string|null;items:PrescriptionRequestItem[];
+};
+
+type DraftLine = { productId:number;productName:string;requestedQuantity:number;approvedQuantity:number;unitPrice:number;availability:"PENDING"|"AVAILABLE"|"PARTIALLY_AVAILABLE"|"UNAVAILABLE";source:"CUSTOMER_CART"|"PHARMACIST";pharmacistNote:string };
+type StatusFilter = "ALL" | PrescriptionStatus;
+
+function isPrescriptionStatus(status:string):status is PrescriptionStatus{return prescriptionStatuses.includes(status as PrescriptionStatus)}
+function statusLabel(status:string){return isPrescriptionStatus(status)?prescriptionStatusLabels[status]:status.replaceAll("_"," ")}
+function statusClass(status:string){return status.toLowerCase().replaceAll("_","-")}
+function initials(name:string){return name.split(/\s+/).filter(Boolean).slice(0,2).map((part)=>part[0]).join("").toUpperCase()}
+function suggestedAvailability(product:PrescriptionProduct,quantity:number):DraftLine["availability"]{return product.available>=quantity?"AVAILABLE":product.available>0?"PARTIALLY_AVAILABLE":"UNAVAILABLE"}
+
+export function PrescriptionManager({ initialItems, products, customerProfileBase, allowDelete=false }: { initialItems:PrescriptionRecord[];products:PrescriptionProduct[];customerProfileBase?:string;allowDelete?:boolean }) {
+  const [items,setItems]=useState(initialItems),[query,setQuery]=useState(""),[statusFilter,setStatusFilter]=useState<StatusFilter>("ALL"),[activeId,setActiveId]=useState<number|null>(null);
+  const [draft,setDraft]=useState<DraftLine[]>([]),[notes,setNotes]=useState(""),[productQuery,setProductQuery]=useState(""),[saving,setSaving]=useState(false),[message,setMessage]=useState(""),[confirming,setConfirming]=useState<PrescriptionReviewAction|"DELETE"|null>(null);
+  const active=items.find((item)=>item.id===activeId)||null;
+  const counts=useMemo(()=>Object.fromEntries(prescriptionStatuses.map((status)=>[status,items.filter((item)=>item.status===status).length])) as Record<PrescriptionStatus,number>,[items]);
+  const shown=useMemo(()=>{const term=query.trim().toLowerCase();return items.filter((item)=>(statusFilter==="ALL"||item.status===statusFilter)&&(!term||[item.senderName,item.originalFilename,item.pharmacistNotes,item.orderNumber,item.id].join(" ").toLowerCase().includes(term)))},[items,query,statusFilter]);
+  const availableProducts=useMemo(()=>{const used=new Set(draft.map((line)=>line.productId)),term=productQuery.trim().toLowerCase();return products.filter((product)=>!used.has(product.id)&&(!term||`${product.name} ${product.packSize||""}`.toLowerCase().includes(term))).slice(0,8)},[draft,productQuery,products]);
+  const proposalTotal=draft.filter((line)=>line.availability!=="UNAVAILABLE").reduce((sum,line)=>sum+(Number(line.approvedQuantity)||0)*(Number(line.unitPrice)||0),0);
+
+  function openReview(item:PrescriptionRecord){
+    setActiveId(item.id);setNotes(item.pharmacistNotes||"");setProductQuery("");setMessage("");setConfirming(null);
+    setDraft(item.items.flatMap((line)=>{if(!line.productId)return[];const product=products.find((entry)=>entry.id===line.productId);return[{productId:line.productId,productName:line.productName,requestedQuantity:line.requestedQuantity,approvedQuantity:line.approvedQuantity||line.requestedQuantity||1,unitPrice:Number(line.unitPrice??product?.discountPrice??product?.price??0),availability:line.availability,source:line.source,pharmacistNote:line.pharmacistNote||""}]}));
   }
-  const fileUrl = previewing ? `/api/prescriptions/${previewing.id}/download` : "";
+  function closeReview(){if(saving)return;setActiveId(null);setConfirming(null)}
+  function addProduct(product:PrescriptionProduct){const quantity=1;setDraft((current)=>[...current,{productId:product.id,productName:product.name,requestedQuantity:0,approvedQuantity:quantity,unitPrice:Number(product.discountPrice??product.price),availability:suggestedAvailability(product,quantity),source:"PHARMACIST",pharmacistNote:""}]);setProductQuery("")}
+  function changeLine(productId:number,patch:Partial<DraftLine>){setDraft((current)=>current.map((line)=>line.productId===productId?{...line,...patch}:line))}
+  function removeLine(productId:number){setDraft((current)=>current.filter((line)=>line.productId!==productId))}
+
+  async function applyAction(action:PrescriptionReviewAction){
+    if(!active||saving)return;
+    if(["REQUEST_CLARIFICATION","DECLINE"].includes(action)&&notes.trim().length<5){setMessage("Add a clear customer note before continuing.");return}
+    setSaving(true);setMessage("");setConfirming(null);
+    const response=await fetch(`/api/prescriptions/${active.id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,reviewVersion:active.reviewVersion,pharmacistNotes:notes,items:action==="START_REVIEW"||action==="DECLINE"?undefined:draft})});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok){setMessage(data.error||"The prescription review could not be saved.");setSaving(false);return}
+    const updated:PrescriptionRecord={...active,status:data.status,reviewVersion:data.reviewVersion,orderId:data.orderId??active.orderId,orderNumber:data.orderNumber??active.orderNumber,orderStatus:action==="APPROVE"?"AWAITING_PAYMENT":active.orderStatus,paymentStatus:action==="APPROVE"?"PENDING":active.paymentStatus,orderTotal:data.orderTotal==null?active.orderTotal:String(data.orderTotal),pharmacistNotes:notes||active.pharmacistNotes,items:data.items||active.items};
+    setItems((current)=>current.map((item)=>item.id===active.id?updated:item));setActiveId(updated.id);setDraft((data.items||[]).flatMap((line:PrescriptionRequestItem)=>line.productId?[{productId:line.productId,productName:line.productName,requestedQuantity:line.requestedQuantity,approvedQuantity:line.approvedQuantity||line.requestedQuantity||1,unitPrice:Number(line.unitPrice||0),availability:line.availability,source:line.source,pharmacistNote:line.pharmacistNote||""}]:[]));
+    setMessage(action==="SAVE_REVIEW"?"Review draft saved.":action==="APPROVE"?"Approved proposal created and customer notified.":action==="REQUEST_CLARIFICATION"?"Customer notified that action is required.":action==="DECLINE"?"Request declined and customer notified.":"Pharmacist review started.");setSaving(false);
+  }
+
+  async function deletePrescription(){
+    if(!active||saving)return;
+    setSaving(true);setMessage("");
+    const response=await fetch(`/api/prescriptions/${active.id}`,{method:"DELETE"});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok){setMessage(data.error||"The prescription could not be deleted.");setConfirming(null);setSaving(false);return}
+    setItems((current)=>current.filter((item)=>item.id!==active.id));
+    setConfirming(null);setSaving(false);setActiveId(null);
+  }
+
+  const fileUrl=active?`/api/prescriptions/${active.id}/download`:"";
   return <>
-    <section className="prescription-review-list" aria-label="Prescription review queue">
-      <div className="prescription-review-head"><span>Sender</span><span>Prescription</span><span>Status</span><span>Pharmacist note</span><span>Action</span></div>
-      {items.map((item) => <article key={item.id}>
-        <div className="prescription-sender"><small>Sender</small><button type="button" onClick={() => setPreviewing(item)}>{item.senderName || "Customer"}</button></div>
-        <div className="prescription-file"><small>Prescription</small><button type="button" onClick={() => setPreviewing(item)}><FileText /> <span>{item.originalFilename}</span><ExternalLink /></button><small>{new Date(item.createdAt).toLocaleString()} · {item.mimeType}</small></div>
-        <label><span>Status</span><select defaultValue={item.status} id={`status-${item.id}`}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
-        <label><span>Pharmacist note</span><input id={`notes-${item.id}`} defaultValue={item.pharmacistNotes || ""} placeholder="Note to customer" /></label>
-        <button className="prescription-update" disabled={saving === item.id} onClick={() => update(item, (document.getElementById(`status-${item.id}`) as HTMLSelectElement).value, (document.getElementById(`notes-${item.id}`) as HTMLInputElement).value)}>{saving === item.id ? "Saving…" : "Update"}</button>
-      </article>)}
-      {!items.length && <div className="prescription-empty"><FileText /><strong>No prescriptions awaiting review</strong><span>New uploads will appear here with the sender and file name.</span></div>}
-    </section>
-    {previewing && <div className="prescription-preview-modal" role="dialog" aria-modal="true" aria-label={`Prescription from ${previewing.senderName || "customer"}`} onClick={() => setPreviewing(null)}>
-      <section onClick={(event) => event.stopPropagation()}>
-        <header><div><small>Prescription from</small><h2>{previewing.senderName || "Customer"}</h2><p>{previewing.originalFilename}</p></div><button type="button" onClick={() => setPreviewing(null)} aria-label="Close prescription preview"><X /></button></header>
-        <div className="prescription-preview-content">{previewing.mimeType.startsWith("image/") ? <img src={fileUrl} alt={`Prescription uploaded by ${previewing.senderName || "customer"}`} /> : <iframe src={fileUrl} title={previewing.originalFilename} />}</div>
-        <footer><a href={fileUrl} target="_blank" rel="noreferrer">Open in a new tab <ExternalLink /></a></footer>
+    <div className="prescription-queue-tools"><label className="prescription-search"><Search/><input type="search" value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="Search sender, file, note or prescription ID" aria-label="Search prescriptions"/></label><div className="prescription-state-filters" role="group" aria-label="Filter prescriptions by state"><button type="button" className={statusFilter==="ALL"?"active":""} onClick={()=>setStatusFilter("ALL")}>All <span>{items.length}</span></button>{prescriptionStatuses.map((status)=><button type="button" key={status} className={`${statusClass(status)} ${statusFilter===status?"active":""}`} onClick={()=>setStatusFilter(status)}>{prescriptionStatusLabels[status]} <span>{counts[status]}</span></button>)}</div><p><strong>{shown.length}</strong> of {items.length} prescriptions</p></div>
+    <section className="prescription-review-list" aria-label="Prescription review queue"><div className="prescription-review-head"><span>Sender</span><span>Prescription</span><span>Stage</span><span>Proposal</span><span>Action</span></div>{shown.map((item)=>{const sender=item.senderName||"Customer";return <article key={item.id} className={`prescription-review-row prescription-state-${statusClass(item.status)}`}><div className="prescription-sender"><small>Sender</small>{item.customerId&&customerProfileBase?<Link className="prescription-customer-link" href={`${customerProfileBase}/${item.customerId}`}><span className="prescription-sender-avatar">{initials(sender)||"C"}</span><span><strong>{sender}</strong><em>View customer profile</em></span></Link>:<span className="prescription-customer-link"><span className="prescription-sender-avatar">{initials(sender)||"C"}</span><span><strong>{sender}</strong><em>Prescription customer</em></span></span>}</div><div className="prescription-file"><small>Prescription</small><button type="button" onClick={()=>openReview(item)}><FileText/><span>{item.originalFilename}</span><ExternalLink/></button><small>{new Date(item.createdAt).toLocaleString("en-KE")} · {item.mimeType}</small></div><div className="prescription-row-stage"><small>Stage</small><strong>{statusLabel(item.status)}</strong><span>{item.paymentStatus==="PAID"?"Payment confirmed":item.orderStatus?.replaceAll("_"," ")||"Awaiting pharmacist"}</span></div><div className="prescription-row-proposal"><small>Proposal</small><strong>{item.items.length} {item.items.length===1?"medicine":"medicines"}</strong><span>{item.orderTotal?`KES ${Number(item.orderTotal).toLocaleString()}`:"Price pending"}</span></div><button className="prescription-update" type="button" onClick={()=>openReview(item)}>Open</button></article>})}{!shown.length?<div className="prescription-empty"><FileText/><strong>{items.length?"No matching prescriptions":"No prescription requests"}</strong><span>{items.length?"Try another search or state.":"New uploads will appear here."}</span></div>:null}</section>
+    {active?<div className="prescription-preview-modal prescription-workflow-modal" role="dialog" aria-modal="true" aria-label={`Process prescription from ${active.senderName||"customer"}`} onClick={closeReview}><section onClick={(event)=>event.stopPropagation()}>
+      <div className="prescription-workflow-document"><header><div><small>Prescription document</small><h2>{active.originalFilename}</h2></div><a href={fileUrl} target="_blank" rel="noreferrer">Open original <ExternalLink/></a></header><div>{active.mimeType.startsWith("image/")?<img src={fileUrl} alt={`Prescription uploaded by ${active.senderName||"customer"}`}/>:<iframe src={fileUrl} title={active.originalFilename}/>}</div></div>
+      <section className="prescription-workflow-panel"><header><div><span className={`prescription-workflow-status ${statusClass(active.status)}`}>{statusLabel(active.status)}</span><h2>{active.senderName||"Customer"}</h2><p>Request #{active.id} · {new Date(active.createdAt).toLocaleString("en-KE")}</p></div><div className="prescription-modal-header-actions">{allowDelete?<button className="prescription-delete-action" type="button" onClick={()=>setConfirming("DELETE")} aria-label="Delete prescription"><Trash2/></button>:null}<button type="button" onClick={closeReview} aria-label="Close prescription workflow"><X/></button></div></header>
+        {active.status==="RECEIVED"?<div className="prescription-workflow-intro"><FileText/><h3>Ready for pharmacist review</h3><p>Open the document, then start the controlled medicine and pricing review.</p><button type="button" disabled={saving} onClick={()=>applyAction("START_REVIEW")}>Start pharmacist review</button></div>:null}
+        {active.status==="MORE_INFORMATION_REQUIRED"?<div className="prescription-workflow-intro attention"><AlertTriangle/><h3>Waiting for clarification</h3><p>{active.pharmacistNotes||"The customer needs to provide more information."}</p><div><Link href="/admin/chats">Open customer chats</Link><button type="button" disabled={saving} onClick={()=>applyAction("START_REVIEW")}>Clarification resolved—resume review</button></div></div>:null}
+        {active.status==="DECLINED"?<div className="prescription-workflow-intro declined"><XCircle/><h3>Request not approved</h3><p>{active.pharmacistNotes||"No pharmacist note was recorded."}</p></div>:null}
+        {active.status==="APPROVED"?<div className="prescription-approved-summary"><CheckCircle2/><h3>Proposal locked and sent</h3><p>The customer can pay this saved proposal later while continuing to use their normal shopping cart.</p><div>{active.items.filter((item)=>item.availability!=="UNAVAILABLE").map((item)=><article key={item.id}><span><strong>{item.productName}</strong><small>Qty {item.approvedQuantity} · KES {Number(item.unitPrice).toLocaleString()} each</small></span><b>KES {(Number(item.unitPrice)*Number(item.approvedQuantity)).toLocaleString()}</b></article>)}</div><footer><span>Total</span><strong>KES {Number(active.orderTotal||0).toLocaleString()}</strong></footer>{active.orderId?<Link href={`/admin/orders/${active.orderId}`}>Open linked order {active.orderNumber}</Link>:null}</div>:null}
+        {active.status==="UNDER_REVIEW"?<><div className="prescription-medicine-builder"><header><div><PackagePlus/><span><strong>Medicines and pricing</strong><small>Cart-linked lines are a starting point. Add any active product, including non-prescription products.</small></span></div><b>KES {proposalTotal.toLocaleString()}</b></header><div className="prescription-product-picker"><Search/><input value={productQuery} onChange={(event)=>setProductQuery(event.target.value)} placeholder="Search catalogue to add a medicine"/>{productQuery?<div>{availableProducts.map((product)=><button type="button" key={product.id} onClick={()=>addProduct(product)}><span><strong>{product.name}</strong><small>{product.packSize||"Healthfield product"} · {product.available} available</small></span><Plus/></button>)}{!availableProducts.length?<p>No matching active products.</p>:null}</div>:null}</div><div className="prescription-medicine-lines">{draft.map((line)=>{const product=products.find((entry)=>entry.id===line.productId);return <article key={line.productId}><header><span><strong>{line.productName}</strong><small>{line.source==="CUSTOMER_CART"?`Customer requested ${line.requestedQuantity}`:"Added by pharmacist"} · {product?.available||0} in stock</small></span><button type="button" onClick={()=>removeLine(line.productId)} aria-label={`Remove ${line.productName}`}><Trash2/></button></header><div><label>Approved quantity<input type="number" min="1" max="99" value={line.approvedQuantity} disabled={line.availability==="UNAVAILABLE"} onChange={(event)=>changeLine(line.productId,{approvedQuantity:Number(event.target.value)})}/></label><label>Unit price (KES)<input type="number" min="0.01" step="0.01" value={line.unitPrice} disabled={line.availability==="UNAVAILABLE"} onChange={(event)=>changeLine(line.productId,{unitPrice:Number(event.target.value)})}/></label><label>Availability<select value={line.availability} onChange={(event)=>changeLine(line.productId,{availability:event.target.value as DraftLine["availability"]})}><option value="PENDING">Pending check</option><option value="AVAILABLE">Available</option><option value="PARTIALLY_AVAILABLE">Partially available</option><option value="UNAVAILABLE">Unavailable</option></select></label></div><input value={line.pharmacistNote} onChange={(event)=>changeLine(line.productId,{pharmacistNote:event.target.value})} placeholder="Optional line note"/></article>})}{!draft.length?<div className="prescription-no-medicines"><PackagePlus/><strong>No medicines added yet</strong><span>Search the catalogue above to build the proposal.</span></div>:null}</div></div><label className="prescription-customer-note"><span>Customer note</span><textarea rows={3} value={notes} onChange={(event)=>setNotes(event.target.value)} placeholder="Required when clarification or decline is selected"/></label><div className="prescription-workflow-actions"><button type="button" disabled={saving} onClick={()=>applyAction("SAVE_REVIEW")}>Save draft</button><button type="button" disabled={saving} onClick={()=>setConfirming("REQUEST_CLARIFICATION")}>Action required</button><button type="button" disabled={saving||!draft.length} onClick={()=>setConfirming("APPROVE")}>Approve proposal</button><button type="button" disabled={saving} onClick={()=>setConfirming("DECLINE")}>Decline</button></div></>:null}
+        {message?<div className="form-message" role="status">{message}</div>:null}
+        {confirming?<div className="prescription-confirm-action" role="alertdialog" aria-modal="true"><section className={confirming==="DELETE"?"danger":""}><span>{confirming==="APPROVE"?<CheckCircle2/>:confirming==="REQUEST_CLARIFICATION"?<AlertTriangle/>:confirming==="DELETE"?<Trash2/>:<XCircle/>}</span><h3>{confirming==="APPROVE"?"Approve and send this proposal?":confirming==="REQUEST_CLARIFICATION"?"Request customer clarification?":confirming==="DELETE"?"Permanently delete this prescription?":"Decline this request?"}</h3><p>{confirming==="APPROVE"?`This locks ${draft.filter((line)=>line.availability!=="UNAVAILABLE").length} medicine lines at KES ${proposalTotal.toLocaleString()} and creates a saved order for the customer.`:confirming==="DELETE"?"The uploaded document and any unpaid frozen proposal will be removed. Paid or active fulfilment records cannot be deleted.":"The customer will be notified with the note you entered."}</p><div><button type="button" onClick={()=>setConfirming(null)}>Go back</button><button type="button" disabled={saving} onClick={()=>confirming==="DELETE"?deletePrescription():applyAction(confirming)}>{saving?"Saving…":confirming==="DELETE"?"Delete permanently":"Confirm"}</button></div></section></div>:null}
       </section>
-    </div>}
+    </section></div>:null}
   </>;
 }

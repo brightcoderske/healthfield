@@ -1,114 +1,125 @@
 "use client";
 
-import { BookOpen, Package, Percent, Sparkles } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, Flame, Percent, Sparkles, Tag } from "lucide-react";
 import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { OfferCountdown } from "./offer-countdown";
 
 export type Guide = { id:number; slug:string; title:string; excerpt:string; imageUrl:string|null };
-export type SuggestedProduct = { id:number; name:string; imageUrl:string|null; price:number; discountPrice:number|null; conditionName:string|null };
 export type OfferTeaser = { id:number; title:string; description:string|null; total:number; normalTotal:number; isBundle:boolean; itemCount:number; imageUrl:string|null; endsAt:string|null };
 
 export type Interruption =
-  | { kind:"guide"; guide:Guide }
-  | { kind:"product"; product:SuggestedProduct }
+  | { kind:"guide"; guide:Guide; guides?:Guide[] }
   | { kind:"offer"; offer:OfferTeaser; offers?:OfferTeaser[] };
 
 const money = (value: number) => `KES ${Math.round(value).toLocaleString("en-KE")}`;
 
-function OfferSlide({ offer }: { offer: OfferTeaser }) {
+function OfferSlide({ offer, index }: { offer: OfferTeaser; index: number }) {
   const saving = offer.normalTotal > offer.total ? offer.normalTotal - offer.total : 0;
-  return <article className="offer-slide">
-    <Link prefetch={false} className="offer-slide-image" href={`/offers#offer-${offer.id}`} aria-label={`See ${offer.title}`}>
-      {offer.imageUrl ? <img src={offer.imageUrl} alt="" loading="lazy" decoding="async"/> : <Percent/>}
-      {saving > 0 && <span className="offer-slide-badge">Save {money(saving)}</span>}
+  const blue = index % 2 === 1;
+  return <article className={`offer-slide ${blue ? "is-blue" : "is-pink"}`}>
+    <Link prefetch={false} className="offer-slide-card" href={`/offers#offer-${offer.id}`} aria-label={`See ${offer.title}`}>
+      <span className="offer-slide-ribbon">
+        {blue ? <Sparkles aria-hidden="true"/> : <Flame aria-hidden="true"/>}
+        {blue ? "Special offer" : "Hot deal"}
+      </span>
+      <div className="offer-slide-copy">
+        <strong>{offer.title}</strong>
+        <p>{offer.description || (offer.isBundle ? `${offer.itemCount} products, one price.` : "Reduced while this offer runs.")}</p>
+        <p className="offer-slide-price">
+          {money(offer.total)}
+          {saving > 0 && <del>{money(offer.normalTotal)}</del>}
+        </p>
+        {saving > 0 && <span className="offer-slide-badge"><small>You save</small>{money(saving)}</span>}
+      </div>
+      <span className="offer-slide-image" aria-hidden="true">
+        {offer.imageUrl ? <img src={offer.imageUrl} alt="" loading="lazy" decoding="async"/> : <Percent/>}
+      </span>
+      <span className="offer-slide-footer">
+        <OfferCountdown endsAt={offer.endsAt}/>
+        <span className="offer-slide-action">View offer <ChevronRight aria-hidden="true"/></span>
+      </span>
     </Link>
-    <div>
-      <strong>{offer.title}</strong>
-      <p>{offer.description || (offer.isBundle ? `${offer.itemCount} products, one price.` : "Reduced while this offer runs.")}</p>
-      <p className="offer-slide-price">
-        {money(offer.total)}
-        {saving > 0 && <del>{money(offer.normalTotal)}</del>}
-      </p>
-      <OfferCountdown endsAt={offer.endsAt}/>
-      <Link prefetch={false} className="catalogue-break-cta" href={`/offers#offer-${offer.id}`}>See the offer</Link>
-    </div>
   </article>;
+}
+
+function GuideSlide({ guide }: { guide: Guide }) {
+  return <article className={`guide-slide${guide.imageUrl ? "" : " no-art"}`}>
+    <Link prefetch={false} className="guide-slide-image" href={`/blog/${guide.slug}`} aria-label={`Read ${guide.title}`}>
+      {guide.imageUrl ? <img src={guide.imageUrl} alt="" loading="lazy" decoding="async"/> : <BookOpen/>}
+      <div className="guide-slide-copy">
+        <span><BookOpen/> Health guide</span>
+        <strong>{guide.title}</strong>
+        <p>{guide.excerpt}</p>
+        <b>Read the guide <ChevronRight/></b>
+      </div>
+    </Link>
+  </article>;
+}
+
+function GuideRail({ guides }: { guides: Guide[] }) {
+  const rail = useRef<HTMLDivElement>(null);
+  const [controls, setControls] = useState({ previous: false, next: false });
+
+  const updateControls = useCallback(() => {
+    const element = rail.current;
+    if (!element) return;
+    const previous = element.scrollLeft > 2;
+    const next = element.scrollLeft < element.scrollWidth - element.clientWidth - 2;
+    setControls((current) => current.previous === previous && current.next === next ? current : { previous, next });
+  }, []);
+
+  useEffect(() => {
+    updateControls();
+    const element = rail.current;
+    if (!element) return;
+    const observer = new ResizeObserver(updateControls);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [guides.length, updateControls]);
+
+  function slide(direction: -1 | 1) {
+    const element = rail.current;
+    if (!element) return;
+    const firstCard = element.querySelector<HTMLElement>(".guide-slide");
+    const distance = (firstCard?.offsetWidth ?? Math.round(element.clientWidth * 0.82)) + 14;
+    element.scrollBy({ left: distance * direction, behavior: "smooth" });
+  }
+
+  return <aside className={`catalogue-break catalogue-break-guide${guides.length === 1 ? " is-single" : ""}`}>
+    <header className="guide-rail-header">
+      <div><span><BookOpen/> Health guides</span><strong>Helpful reads from our pharmacy</strong></div>
+      {guides.length > 1 && <nav aria-label="Browse health guides">
+        <button type="button" onClick={() => slide(-1)} disabled={!controls.previous} aria-label="Previous health guides"><ChevronLeft/></button>
+        <button type="button" onClick={() => slide(1)} disabled={!controls.next} aria-label="Next health guides"><ChevronRight/></button>
+      </nav>}
+    </header>
+    <div className={`guide-slider${guides.length === 1 ? " is-single" : ""}`} ref={rail} onScroll={updateControls}>
+      {guides.map((guide) => <GuideSlide key={guide.id} guide={guide}/>)}
+    </div>
+  </aside>;
 }
 
 // A full-width break in the catalogue grid. It reads as editorial rather than as a
 // product tile so the scroll has a change of rhythm instead of more of the same.
 export function CatalogueInterruption({ item }: { item: Interruption }) {
   if (item.kind === "guide") {
-    const { guide } = item;
-    // A poster, not a tile: the artwork fills the card and the headline sits on it.
-    return <aside className={`catalogue-break catalogue-break-guide${guide.imageUrl ? "" : " no-art"}`}>
-      <div className="guide-poster">
-        {guide.imageUrl && <img src={guide.imageUrl} alt="" loading="lazy" decoding="async"/>}
-        <div className="guide-poster-copy">
-          <span className="guide-poster-flag"><BookOpen/> Health guide</span>
-          <strong>{guide.title}</strong>
-          <p>{guide.excerpt}</p>
-          <Link prefetch={false} className="catalogue-break-cta" href={`/blog/${guide.slug}`}>Read the guide</Link>
-        </div>
-      </div>
-    </aside>;
+    const guides = item.guides && item.guides.length ? item.guides : [item.guide];
+    return <GuideRail guides={guides}/>;
   }
 
   if (item.kind === "offer") {
     const list = item.offers && item.offers.length ? item.offers : [item.offer];
-
-    // A lone offer is given the wide layout with a large image. Stretching a single
-    // narrow card across the whole row just leaves a band of empty space.
-    if (list.length === 1) {
-      const offer = list[0];
-      const saving = offer.normalTotal > offer.total ? offer.normalTotal - offer.total : 0;
-      return <aside className="catalogue-break catalogue-break-offer">
-        <span className="catalogue-break-flag"><Percent/> {offer.isBundle ? "Collection offer" : "Limited offer"}</span>
-        <div className="catalogue-break-body">
-          <Link prefetch={false} className="catalogue-break-image" href={`/offers#offer-${offer.id}`} aria-label={`See ${offer.title}`}>
-            {offer.imageUrl ? <img src={offer.imageUrl} alt="" loading="lazy" decoding="async"/> : <Percent/>}
-          </Link>
-          <div>
-            <strong>{offer.title}</strong>
-            <p>{offer.description || (offer.isBundle ? `${offer.itemCount} products bought together as one item.` : "Reduced while this offer runs.")}</p>
-            <p className="catalogue-break-price">
-              {money(offer.total)}
-              {saving > 0 && <><del>{money(offer.normalTotal)}</del><em>save {money(saving)}</em></>}
-            </p>
-            <OfferCountdown endsAt={offer.endsAt}/>
-            <Link prefetch={false} className="catalogue-break-cta" href={`/offers#offer-${offer.id}`}>See the offer</Link>
-          </div>
-        </div>
-      </aside>;
-    }
-
-    // Several offers ride in one break: a slider showing one card on a phone and two
-    // or three on a wide screen, so extra width shows more offers, not more padding.
-    return <aside className="catalogue-break catalogue-break-offer">
-      <span className="catalogue-break-flag"><Percent/> Offers on now</span>
-      <div className="offer-slider">
-        {list.map((offer) => <OfferSlide key={offer.id} offer={offer}/>)}
+    return <aside className={`catalogue-break catalogue-break-offer${list.length === 1 ? " is-single" : ""}`}>
+      <header className="offer-rail-header">
+        <span><Tag/> {list.length === 1 && list[0].isBundle ? "Collection offer" : "Offers on now"}</span>
+        <Link prefetch={false} href="/offers">View all offers <ChevronRight/></Link>
+      </header>
+      <div className={`offer-slider${list.length === 1 ? " is-single" : ""}`}>
+        {list.map((offer, index) => <OfferSlide key={offer.id} offer={offer} index={index}/>)}
       </div>
     </aside>;
   }
 
-  const { product } = item;
-  const selling = product.discountPrice ?? product.price;
-  // The condition gives the hook a reason to exist: "Itchy eyes? …" rather than a
-  // bare advert. Products with no linked condition fall back to a neutral line.
-  const hook = product.conditionName ? `${product.conditionName}?` : "Looking for something specific?";
-  return <aside className="catalogue-break catalogue-break-product">
-    <span className="catalogue-break-flag"><Sparkles/> Recommended for you</span>
-    <div className="catalogue-break-body">
-      <Link prefetch={false} className="catalogue-break-image" href={`/products/${product.id}`} aria-label={`View ${product.name}`}>
-        {product.imageUrl ? <img src={product.imageUrl} alt={product.name} loading="lazy" decoding="async"/> : <Package/>}
-      </Link>
-      <div>
-        <strong>{hook}</strong>
-        <p>Have you considered <b>{product.name}</b>? It is stocked and ready to ship from our pharmacy.</p>
-        <p className="catalogue-break-price">KES {Math.round(selling).toLocaleString("en-KE")}</p>
-        <Link prefetch={false} className="catalogue-break-cta" href={`/products/${product.id}`}>Inspect the product</Link>
-      </div>
-    </div>
-  </aside>;
+  return null;
 }

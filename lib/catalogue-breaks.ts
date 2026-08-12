@@ -11,8 +11,7 @@
  */
 
 export type BreakProduct = {
-  id: number; name: string; imageUrl: string | null; price: number; discountPrice: number | null;
-  categoryId: number; conditionIds: number[];
+  id: number; name: string;
 };
 export type BreakOffer = {
   id: number; title: string; description: string | null; total: number; normalTotal: number;
@@ -21,11 +20,10 @@ export type BreakOffer = {
 export type BreakGuide = { id: number; slug: string; title: string; excerpt: string; imageUrl: string | null };
 
 export type BreakItem =
-  // `offers` carries the lead offer first plus the rest, so a wide screen can slide
-  // through several rather than stretching one card across the whole row.
+  // Each collection carries its lead item first plus the rest, so a wide screen can
+  // slide through several rather than stretching one card across the whole row.
   | { kind: "offer"; offer: BreakOffer; offers: BreakOffer[] }
-  | { kind: "guide"; guide: BreakGuide }
-  | { kind: "product"; product: BreakProduct & { conditionName: string | null } };
+  | { kind: "guide"; guide: BreakGuide; guides: BreakGuide[] };
 
 export const INTERRUPTION_EVERY = 10;
 export const MIN_PRODUCTS_BEFORE_BREAK = 3;
@@ -109,40 +107,6 @@ function rankGuides(guides: BreakGuide[], context: string[], random: () => numbe
 }
 
 /**
- * Picks a product worth pointing at from a given break position.
- *
- * Preference order: something the reader has not already scrolled past, related to
- * what surrounds the break, and ideally reduced — a recommendation the shopper has
- * already seen, or one unrelated to what they are browsing, is wasted space.
- */
-function pickProduct(products: BreakProduct[], position: number, used: Set<number>, random: () => number) {
-  const above = new Set(products.slice(0, position).map((product) => product.id));
-  const nearby = products.slice(Math.max(0, position - 3), position + 3);
-  const categories = new Set(nearby.map((product) => product.categoryId));
-  const conditions = new Set(nearby.flatMap((product) => product.conditionIds));
-
-  const candidates = products.filter((product) => !used.has(product.id));
-  const unseen = candidates.filter((product) => !above.has(product.id));
-  const pool = unseen.length ? unseen : candidates;
-  if (!pool.length) return null;
-
-  const score = (product: BreakProduct) => {
-    let value = 0;
-    if (categories.has(product.categoryId)) value += 2;
-    if (product.conditionIds.some((id) => conditions.has(id))) value += 2;
-    if (product.discountPrice !== null) value += 1;
-    return value;
-  };
-  const product = shuffled(pool, random).sort((left, right) => score(right) - score(left))[0];
-  if (!product) return null;
-  // Only a condition the surrounding products actually share may headline the card.
-  // Using the product's own first condition produced nonsense like "Pregnancy?" over
-  // a cold-and-flu shelf; with no shared condition the card stays neutral instead.
-  const sharedConditionId = product.conditionIds.find((id) => conditions.has(id)) ?? null;
-  return { product, sharedConditionId };
-}
-
-/**
  * Builds the full plan: which card sits at which position.
  *
  * Kinds rotate so two neighbouring breaks are never the same type, and only kinds
@@ -152,12 +116,11 @@ export function planBreaks(input: {
   products: BreakProduct[];
   offers: BreakOffer[];
   guides: BreakGuide[];
-  conditions: Array<{ id: number; name: string }>;
   seed: number;
   focused?: boolean;
   now?: number;
 }) {
-  const { products, offers, guides, conditions, seed, focused = false, now = Date.now() } = input;
+  const { products, offers, guides, seed, focused = false, now = Date.now() } = input;
   const random = seededRandom(seed);
   const positions = breakPositions(products.length, { focused, random });
   if (!positions.length) return [] as Array<{ position: number; item: BreakItem }>;
@@ -166,14 +129,16 @@ export function planBreaks(input: {
   const rankedOffers = rankOffers(offers, random, now);
   const rankedGuides = rankGuides(guides, context, random);
 
-  const kinds: Array<"offer" | "guide" | "product"> = [];
+  const kinds: Array<"offer" | "guide"> = [];
   if (rankedOffers.length) kinds.push("offer");
   if (rankedGuides.length) kinds.push("guide");
-  kinds.push("product");
+  // No live offer or published guide means no interruption. This explicit guard
+  // keeps the seeded rotation from indexing an empty list and prevents any fallback
+  // to the removed product-recommendation card.
+  if (!kinds.length) return [] as Array<{ position: number; item: BreakItem }>;
   // Start the rotation at a seeded point so the first card is not always an offer.
   const start = Math.floor(random() * kinds.length);
 
-  const usedProducts = new Set<number>();
   const plan: Array<{ position: number; item: BreakItem }> = [];
   // Each kind walks its own ranked list. Indexing by slot number instead would mean
   // the best-ranked offer or guide is only shown first by coincidence.
@@ -191,17 +156,12 @@ export function planBreaks(input: {
       return;
     }
     if (kind === "guide") {
-      plan.push({ position, item: { kind: "guide", guide: rankedGuides[guideCursor % rankedGuides.length] } });
+      const start = guideCursor % rankedGuides.length;
+      const rotated = [...rankedGuides.slice(start), ...rankedGuides.slice(0, start)];
+      plan.push({ position, item: { kind: "guide", guide: rotated[0], guides: rotated } });
       guideCursor += 1;
       return;
     }
-    const picked = pickProduct(products, position, usedProducts, random);
-    if (!picked) return;
-    usedProducts.add(picked.product.id);
-    const conditionName = picked.sharedConditionId === null
-      ? null
-      : conditions.find((condition) => condition.id === picked.sharedConditionId)?.name ?? null;
-    plan.push({ position, item: { kind: "product", product: { ...picked.product, conditionName } } });
   });
   return plan;
 }

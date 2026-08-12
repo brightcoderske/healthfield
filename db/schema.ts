@@ -129,7 +129,7 @@ export const orders = mysqlTable("orders", {
   deliveryArea: varchar("delivery_area", { length: 160 }),
   deliveryLatitude: decimal("delivery_latitude", { precision: 10, scale: 7 }),
   deliveryLongitude: decimal("delivery_longitude", { precision: 10, scale: 7 }),
-  status: mysqlEnum("status", ["NEW", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"]).default("NEW").notNull(),
+  status: mysqlEnum("status", ["NEW", "AWAITING_PAYMENT", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"]).default("NEW").notNull(),
   paymentStatus: mysqlEnum("payment_status", ["PENDING", "PAID", "FAILED", "REFUNDED"]).default("PENDING").notNull(),
   paymentMethod: varchar("payment_method", { length: 20 }).default("MPESA").notNull(),
   paymentReference: varchar("payment_reference", { length: 100 }),
@@ -241,8 +241,26 @@ export const prescriptions = mysqlTable("prescriptions", {
   pharmacistNotes: text("pharmacist_notes"),
   reviewedBy: int("reviewed_by").references(() => users.id),
   reviewedAt: timestamp("reviewed_at"),
+  reviewVersion: int("review_version").default(0).notNull(),
   ...timestamps,
 }, (table) => [index("prescriptions_review_queue_idx").on(table.status, table.createdAt)]);
+
+export const prescriptionRequestItems = mysqlTable("prescription_request_items", {
+  id: int("id").autoincrement().primaryKey(),
+  prescriptionId: int("prescription_id").notNull().references(() => prescriptions.id, { onDelete: "cascade" }),
+  productId: int("product_id").references(() => products.id, { onDelete: "set null" }),
+  productName: varchar("product_name", { length: 220 }).notNull(),
+  requestedQuantity: int("requested_quantity").default(0).notNull(),
+  approvedQuantity: int("approved_quantity"),
+  unitPrice: decimal("unit_price", { precision: 12, scale: 2 }),
+  availability: mysqlEnum("availability", ["PENDING", "AVAILABLE", "PARTIALLY_AVAILABLE", "UNAVAILABLE"]).default("PENDING").notNull(),
+  source: mysqlEnum("source", ["CUSTOMER_CART", "PHARMACIST"]).default("PHARMACIST").notNull(),
+  pharmacistNote: text("pharmacist_note"),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("prescription_request_product_unique").on(table.prescriptionId, table.productId),
+  index("prescription_request_items_request_idx").on(table.prescriptionId, table.id),
+]);
 
 export const activityLogs = mysqlTable("activity_logs", {
   id: int("id").autoincrement().primaryKey(),

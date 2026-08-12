@@ -9,9 +9,9 @@ import { getDb, closeDb } from "./db";
 import { json } from "./http";
 import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
-import { handleC2bCallback, handleC2bValidation, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentReview, handlePaymentStatus, handleStkCallback } from "./payment-handlers";
+import { handleC2bConfirmation, handleC2bVerification, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentReview, handlePaymentStatus, handleStkNotification } from "./payment-handlers";
 import {
-  handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOffers, handleOrders, handlePrescriptions, handleTaxonomy,
+  handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
 } from "./mutations";
 
@@ -70,12 +70,12 @@ async function route(request: Request, ip: string): Promise<Response> {
   // Browser navigations and <img> tags often omit Origin; only enforce CORS for credentialed cross-origin API calls.
   if (origin && !allowedOrigins.has(origin) && url.pathname.startsWith("/v1/")) return json({ error: "Origin not allowed." }, { status: 403 });
   if (url.pathname === "/health") return json({ service: "healthfield-api", status: "ok", timestamp: new Date().toISOString(), deployment: deploymentInfo() });
-  const paymentCallback = url.pathname.match(/^\/v1\/payments\/mpesa\/(stk|c2b)\/(callback|validation)\/([^/]+)$/);
-  if (paymentCallback) {
+  const paymentNotificationRoute = url.pathname.match(/^\/v1\/payments\/mobile-money\/(stk\/notification|c2b\/confirmation|c2b\/verification)\/([^/]+)$/);
+  if (paymentNotificationRoute) {
     const configuredSecret = mpesaConfiguration()?.callbackSecret || "";
-    const suppliedSecret = decodeURIComponent(paymentCallback[3]);
-    if (!configuredSecret || !safeEqual(suppliedSecret, configuredSecret)) return json({ error: "Callback not found." }, { status: 404 });
-    return responseOf(paymentCallback[1] === "stk" ? handleStkCallback(request) : paymentCallback[2] === "validation" ? handleC2bValidation(request) : handleC2bCallback(request));
+    const suppliedSecret = decodeURIComponent(paymentNotificationRoute[2]);
+    if (!configuredSecret || !safeEqual(suppliedSecret, configuredSecret)) return json({ error: "Payment endpoint not found." }, { status: 404 });
+    return responseOf(paymentNotificationRoute[1] === "stk/notification" ? handleStkNotification(request) : paymentNotificationRoute[1] === "c2b/verification" ? handleC2bVerification(request) : handleC2bConfirmation(request));
   }
   const imageMatch = url.pathname.match(/^\/uploads\/products\/([^/]+)$/);
   if (imageMatch && request.method === "GET") return serveProductImage(imageMatch[1]);
@@ -123,6 +123,8 @@ async function route(request: Request, ip: string): Promise<Response> {
   const reviewMatch = url.pathname.match(/^\/v1\/products\/(\d+)\/reviews$/);
   if (reviewMatch) return responseOf(handleReviews(request, Number(reviewMatch[1])));
   if (url.pathname === "/v1/prescriptions") return responseOf(handlePrescriptions(request));
+  const prescriptionCheckoutMatch = url.pathname.match(/^\/v1\/prescriptions\/(\d+)\/checkout$/);
+  if (prescriptionCheckoutMatch) return responseOf(handlePrescriptionCheckout(request, Number(prescriptionCheckoutMatch[1])));
   const prescriptionMatch = url.pathname.match(/^\/v1\/prescriptions\/(\d+)\/download$/);
   if (prescriptionMatch) return responseOf(handlePrescriptions(request, Number(prescriptionMatch[1])));
   const prescriptionStatusMatch = url.pathname.match(/^\/v1\/prescriptions\/(\d+)$/);

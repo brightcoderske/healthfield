@@ -5,7 +5,7 @@ import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
 import styles from "./order-status-manager.module.css";
 
-const statuses = ["NEW", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"] as const;
+const statuses = ["NEW", "AWAITING_PAYMENT", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"] as const;
 const steps = ["NEW", "CONFIRMED", "BEING_FULFILLED", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "COMPLETED"];
 const packedStatuses = ["READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED"];
 
