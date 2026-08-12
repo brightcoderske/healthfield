@@ -3,7 +3,7 @@ import { activityLogs, branchInventory, mpesaIncomingPayments, mpesaStkCallbacks
 import { requireSession } from "./auth";
 import { getDb } from "./db";
 import { json } from "./http";
-import { extractMpesaReceipt, mpesaConfiguration, parseC2bPayment, parseStkCallback, queryStkPush } from "./mpesa";
+import { classifyStkQueryResult, extractMpesaReceipt, mpesaConfiguration, parseC2bPayment, parseStkCallback, queryStkPush } from "./mpesa";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -133,20 +133,31 @@ export async function handlePaymentReconcile(request: Request) {
     return json({ ok: true, paid, ...(await paymentStatus(checkoutToken)) });
   }
   if (!payment.checkoutRequestId) return json({ error: payment.resultDescription || "M-Pesa Express was not started.", code: "MPESA_NOT_STARTED" }, { status: 409 });
+  // Daraja may acknowledge an STK request before it becomes queryable. The
+  // secret-protected notification route is authoritative, so do not query in that gap.
+  if (Date.now() - payment.createdAt.getTime() < 10_000) {
+    return json({ ok: true, paid: false, message: "Payment prompt sent. Waiting for the phone response.", ...status }, { status: 202 });
+  }
   try {
     const result = await queryStkPush(payment.checkoutRequestId);
-    const resultCode = String(result.ResultCode ?? "");
-    if (resultCode === "0") {
+    const outcome = classifyStkQueryResult(result);
+    if (outcome.state === "PAID") {
       const receiptNumber = String(result.MpesaReceiptNumber || payment.receiptNumber || "");
       if (!receiptNumber) return json({ ok: true, paid: false, message: "M-Pesa approved the request; waiting for the receipt callback." }, { status: 202 });
       await markPaymentPaid(payment.id, { receiptNumber, amount: Number(payment.amount), phone: payment.phone, providerPayload: result });
       return json({ ok: true, paid: true, ...(await paymentStatus(checkoutToken)) });
     }
-    await db.update(paymentTransactions).set({ status: "FAILED", resultCode, resultDescription: String(result.ResultDesc || "M-Pesa payment was not completed."), providerPayload: result }).where(eq(paymentTransactions.id, payment.id));
-    await db.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, payment.orderId));
-    return json({ ok: true, paid: false, failed: true, message: String(result.ResultDesc || "M-Pesa payment was not completed."), ...(await paymentStatus(checkoutToken)) });
+    if (outcome.state === "PENDING") {
+      return json({ ok: true, paid: false, message: "Waiting for the payment response.", ...status }, { status: 202 });
+    }
+    await db.update(paymentTransactions).set({ status: "FAILED", resultCode: outcome.resultCode, resultDescription: outcome.resultDescription || "M-Pesa payment was not completed.", providerPayload: result }).where(and(eq(paymentTransactions.id, payment.id), eq(paymentTransactions.status, "PENDING")));
+    await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
+    const latestStatus = await paymentStatus(checkoutToken);
+    if (latestStatus?.order.paymentStatus === "PAID") return json({ ok: true, paid: true, ...latestStatus });
+    return json({ ok: true, paid: false, failed: true, message: outcome.resultDescription || "M-Pesa payment was not completed.", ...latestStatus });
   } catch (error) {
-    return json({ ok: true, paid: false, message: error instanceof Error ? error.message : "Payment confirmation is still pending.", ...(await paymentStatus(checkoutToken)) }, { status: 202 });
+    console.warn("STK status query is still pending", { transactionId: payment.id, message: error instanceof Error ? error.message : "Unknown provider response" });
+    return json({ ok: true, paid: false, message: "Payment confirmation is still pending.", ...(await paymentStatus(checkoutToken)) }, { status: 202 });
   }
 }
 
@@ -200,12 +211,17 @@ export async function handleStkNotification(request: Request) {
   if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
   const parsed = parseStkCallback(payload);
+  if (!parsed.checkoutRequestId || !parsed.merchantRequestId) return json({ ResultCode: 1, ResultDesc: "Invalid notification" }, { status: 400 });
   const db = getDb();
   let callbackId = 0;
   try { const [created] = await db.insert(mpesaStkCallbacks).values({ checkoutRequestId: parsed.checkoutRequestId, providerPayload: payload }); callbackId = created.insertId; }
   catch { const [existing] = await db.select({ id: mpesaStkCallbacks.id }).from(mpesaStkCallbacks).where(eq(mpesaStkCallbacks.checkoutRequestId, parsed.checkoutRequestId)).limit(1); callbackId = existing?.id || 0; }
   const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.checkoutRequestId, parsed.checkoutRequestId)).limit(1);
   if (!payment) return json({ ResultCode: 0, ResultDesc: "Accepted" });
+  if (!payment.merchantRequestId || payment.merchantRequestId !== parsed.merchantRequestId) {
+    console.warn("Rejected mismatched STK notification", { transactionId: payment.id });
+    return json({ ResultCode: 0, ResultDesc: "Accepted" });
+  }
   if (parsed.resultCode === "0" && parsed.receiptNumber && parsed.amount !== null) {
     try { await markPaymentPaid(payment.id, { receiptNumber: parsed.receiptNumber, amount: parsed.amount, phone: parsed.phone, providerPayload: payload }); }
     catch (error) { console.error("Mobile-money notification requires review", { transactionId: payment.id, error }); }

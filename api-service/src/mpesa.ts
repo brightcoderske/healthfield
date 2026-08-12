@@ -3,6 +3,7 @@ export type MpesaConfiguration = {
   consumerKey: string;
   consumerSecret: string;
   shortcode: string;
+  partyB: string;
   passkey: string;
   transactionType: "CustomerPayBillOnline" | "CustomerBuyGoodsOnline";
   callbackSecret: string;
@@ -10,6 +11,12 @@ export type MpesaConfiguration = {
 };
 
 type JsonRecord = Record<string, unknown>;
+
+export type StkQueryOutcome = {
+  state: "PAID" | "PENDING" | "FAILED";
+  resultCode: string;
+  resultDescription: string;
+};
 
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
@@ -26,16 +33,19 @@ export function mpesaConfiguration(): MpesaConfiguration | null {
   const consumerSecret = process.env.MPESA_CONSUMER_SECRET?.trim() || "";
   const shortcode = process.env.MPESA_SHORTCODE?.trim() || "";
   const passkey = process.env.MPESA_PASSKEY?.trim() || "";
+  const transactionType = process.env.MPESA_TRANSACTION_TYPE?.trim() || "";
+  const partyB = transactionType === "CustomerBuyGoodsOnline" ? process.env.MPESA_PARTY_B?.trim() || "" : shortcode;
   const callbackSecret = process.env.MPESA_CALLBACK_SECRET?.trim() || "";
   const callbackBaseUrl = (process.env.MPESA_CALLBACK_BASE_URL || process.env.API_PUBLIC_URL || "").replace(/\/$/, "");
-  if (!consumerKey || !consumerSecret || !shortcode || !passkey || callbackSecret.length < 24 || !/^https:\/\//i.test(callbackBaseUrl)) return null;
+  if (!consumerKey || !consumerSecret || !/^\d{5,8}$/.test(shortcode) || !/^\d{5,8}$/.test(partyB) || !passkey || !["CustomerPayBillOnline", "CustomerBuyGoodsOnline"].includes(transactionType) || callbackSecret.length < 24 || !/^https:\/\//i.test(callbackBaseUrl)) return null;
   return {
     baseUrl: (process.env.MPESA_BASE_URL || "https://api.safaricom.co.ke").replace(/\/$/, ""),
     consumerKey,
     consumerSecret,
     shortcode,
+    partyB,
     passkey,
-    transactionType: process.env.MPESA_TRANSACTION_TYPE === "CustomerBuyGoodsOnline" ? "CustomerBuyGoodsOnline" : "CustomerPayBillOnline",
+    transactionType: transactionType as MpesaConfiguration["transactionType"],
     callbackSecret,
     callbackBaseUrl,
   };
@@ -52,6 +62,44 @@ export function mpesaPassword(shortcode: string, passkey: string, timestamp: str
 
 export function buildStkNotificationUrl(baseUrl: string, secret: string) {
   return `${baseUrl.replace(/\/$/, "")}/v1/payments/mobile-money/stk/notification/${encodeURIComponent(secret)}`;
+}
+
+export function classifyStkQueryResult(payload: JsonRecord): StkQueryOutcome {
+  const resultCode = String(payload.ResultCode ?? "").trim();
+  const resultDescription = String(payload.ResultDesc || payload.errorMessage || payload.ResponseDescription || "").trim();
+  if (resultCode === "0") return { state: "PAID", resultCode, resultDescription };
+
+  const normalizedDescription = resultDescription.toLowerCase();
+  const explicitlyPending = [
+    "transaction does not exist",
+    "transaction is being processed",
+    "request is being processed",
+    "still processing",
+    "pending",
+  ].some((message) => normalizedDescription.includes(message));
+  if (!resultCode || explicitlyPending) return { state: "PENDING", resultCode, resultDescription };
+
+  // Known final customer/provider outcomes. Unknown codes stay pending so a
+  // delayed provider notification cannot be contradicted by an eager query.
+  const terminalCodes = new Set(["1", "1001", "1019", "1025", "1032", "1037", "2001"]);
+  return { state: terminalCodes.has(resultCode) ? "FAILED" : "PENDING", resultCode, resultDescription };
+}
+
+export function buildStkPushPayload(config: MpesaConfiguration, input: { orderNumber: string; phone: string; amount: number }, timestamp: string) {
+  const accountReference = input.orderNumber.replace(/[^a-z0-9]/gi, "").slice(0, 12) || "Healthfield";
+  return {
+    BusinessShortCode: Number(config.shortcode),
+    Password: mpesaPassword(config.shortcode, config.passkey, timestamp),
+    Timestamp: timestamp,
+    TransactionType: config.transactionType,
+    Amount: input.amount,
+    PartyA: Number(input.phone),
+    PartyB: Number(config.partyB),
+    PhoneNumber: Number(input.phone),
+    CallBackURL: buildStkNotificationUrl(config.callbackBaseUrl, config.callbackSecret),
+    AccountReference: accountReference,
+    TransactionDesc: `Healthfield ${accountReference}`.slice(0, 13),
+  };
 }
 
 export function extractMpesaReceipt(message: string) {
@@ -87,19 +135,7 @@ export async function initiateStkPush(input: { orderNumber: string; phone: strin
   const data = await mpesaJson(`${config.baseUrl}/mpesa/stkpush/v1/processrequest`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      BusinessShortCode: config.shortcode,
-      Password: mpesaPassword(config.shortcode, config.passkey, timestamp),
-      Timestamp: timestamp,
-      TransactionType: config.transactionType,
-      Amount: input.amount,
-      PartyA: phone,
-      PartyB: config.shortcode,
-      PhoneNumber: phone,
-      CallBackURL: buildStkNotificationUrl(config.callbackBaseUrl, config.callbackSecret),
-      AccountReference: input.orderNumber.slice(0, 12),
-      TransactionDesc: `Healthfield ${input.orderNumber}`.slice(0, 20),
-    }),
+    body: JSON.stringify(buildStkPushPayload(config, { ...input, phone }, timestamp)),
   });
   const checkoutRequestId = String(data.CheckoutRequestID || "");
   if (!checkoutRequestId || String(data.ResponseCode || "") !== "0") throw new Error(String(data.ResponseDescription || data.CustomerMessage || "M-Pesa could not start the payment request."));
@@ -114,7 +150,7 @@ export async function queryStkPush(checkoutRequestId: string) {
   return mpesaJson(`${config.baseUrl}/mpesa/stkpushquery/v1/query`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ BusinessShortCode: config.shortcode, Password: mpesaPassword(config.shortcode, config.passkey, timestamp), Timestamp: timestamp, CheckoutRequestID: checkoutRequestId }),
+    body: JSON.stringify({ BusinessShortCode: Number(config.shortcode), Password: mpesaPassword(config.shortcode, config.passkey, timestamp), Timestamp: timestamp, CheckoutRequestID: checkoutRequestId }),
   });
 }
 
