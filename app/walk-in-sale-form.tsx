@@ -1,45 +1,146 @@
 "use client";
 
-import { Clipboard, LoaderCircle, Smartphone, WalletCards } from "lucide-react";
+import { CheckCircle2, Clipboard, LoaderCircle, Minus, Plus, RefreshCw, Smartphone, WalletCards } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type Product={id:number;name:string;sku:string;price:number;discountPrice:number|null};
-type Branch={id:number;name:string};
-type Stock={branchId:number;productId:number;available:number};
-type PaymentOptions={cashEnabled:boolean;mpesaEnabled:boolean;manualEnabled:boolean;tillNumber:string|null;accountName:string|null};
-type PaymentMethod="CASH"|"MPESA_EXPRESS"|"MANUAL_MPESA";
-type PendingSale={orderNumber:string;total:number;state:"WAITING"|"FAILED";message:string};
+type Product = { id: number; name: string; sku: string; price: number; discountPrice: number | null };
+type Branch = { id: number; name: string };
+type Stock = { branchId: number; productId: number; available: number };
+type PaymentOptions = { cashEnabled: boolean; mpesaEnabled: boolean; manualEnabled: boolean; smsEnabled: boolean; tillNumber: string | null; accountName: string | null };
+type PaymentMethod = "CASH" | "MPESA_EXPRESS" | "MANUAL_MPESA";
+type SaleState = { orderNumber: string; total: number; state: "WAITING" | "FAILED" | "COMPLETE"; message: string };
 
-export function WalkInSaleForm({branches,products,stock,payment}:{branches:Branch[];products:Product[];stock:Stock[];payment:PaymentOptions}){
-  const router=useRouter();
-  const firstMethod:PaymentMethod=payment.cashEnabled?"CASH":payment.mpesaEnabled?"MPESA_EXPRESS":"MANUAL_MPESA";
-  const [branchId,setBranchId]=useState(branches[0]?.id||0),[query,setQuery]=useState(""),[cart,setCart]=useState<Record<number,number>>({}),[customerName,setCustomerName]=useState(""),[phone,setPhone]=useState(""),[email,setEmail]=useState(""),[message,setMessage]=useState(""),[sending,setSending]=useState(false),[method,setMethod]=useState<PaymentMethod>(firstMethod),[pending,setPending]=useState<PendingSale|null>(null),[copied,setCopied]=useState(false);
-  const checkoutToken=useRef(crypto.randomUUID()),pollCount=useRef(0);
-  const pendingState=pending?.state,pendingOrderNumber=pending?.orderNumber,pendingTotal=pending?.total;
-  const rows=useMemo(()=>products.filter(product=>cart[product.id]).map(product=>({...product,quantity:cart[product.id],available:stock.find(row=>row.branchId===branchId&&row.productId===product.id)?.available||0})),[products,cart,stock,branchId]);
-  const matches=useMemo(()=>products.filter(product=>(`${product.name} ${product.sku}`.toLowerCase().includes(query.toLowerCase()))&&((stock.find(row=>row.branchId===branchId&&row.productId===product.id)?.available||0)>0)).slice(0,12),[products,query,branchId,stock]);
-  const total=rows.reduce((sum,row)=>sum+(row.discountPrice??row.price)*row.quantity,0);
+export function WalkInSaleForm({ branches, products, stock, payment, backHref = "/staff" }: { branches: Branch[]; products: Product[]; stock: Stock[]; payment: PaymentOptions; backHref?: string }) {
+  const router = useRouter();
+  const firstMethod: PaymentMethod = payment.cashEnabled ? "CASH" : payment.mpesaEnabled ? "MPESA_EXPRESS" : "MANUAL_MPESA";
+  const [branchId, setBranchId] = useState(branches[0]?.id || 0);
+  const [query, setQuery] = useState("");
+  const [cart, setCart] = useState<Record<number, number>>({});
+  const [customerName, setCustomerName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [method, setMethod] = useState<PaymentMethod>(firstMethod);
+  const [sale, setSale] = useState<SaleState | null>(null);
+  const [copied, setCopied] = useState(false);
+  const checkoutToken = useRef(crypto.randomUUID());
+  const pollCount = useRef(0);
 
-  useEffect(()=>{
-    if(pendingState!=="WAITING"||!pendingOrderNumber||pendingTotal===undefined)return;
-    const activeOrderNumber=pendingOrderNumber,activeTotal=pendingTotal;
-    let cancelled=false;
-    async function check(){pollCount.current+=1;const response=await fetch("/api/payments/reconcile",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({checkoutToken:checkoutToken.current})}).catch(()=>null);if(!response||cancelled)return;const data=await response.json().catch(()=>({}));if(data.paid||data.order?.paymentStatus==="PAID"){setMessage(`Sale ${activeOrderNumber} paid and completed — KES ${activeTotal.toLocaleString()}.`);setPending(null);setCart({});checkoutToken.current=crypto.randomUUID();router.refresh()}else if(data.failed||data.order?.paymentStatus==="FAILED"||pollCount.current>=24)setPending(current=>current?{...current,state:"FAILED",message:data.message||"Payment was not confirmed. Switch to till payment or cancel this pending sale."}:current)}
-    void check();const timer=window.setInterval(()=>void check(),4000);return()=>{cancelled=true;window.clearInterval(timer)}
-  },[pendingState,pendingOrderNumber,pendingTotal,router]);
+  const availability = useMemo(() => new Map(stock.filter((row) => row.branchId === branchId).map((row) => [row.productId, row.available])), [stock, branchId]);
+  const availableFor = useCallback((productId: number) => availability.get(productId) || 0, [availability]);
+  const rows = useMemo(() => products.filter((product) => cart[product.id]).map((product) => ({ ...product, quantity: cart[product.id], available: availableFor(product.id) })), [products, cart, availableFor]);
+  const matches = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    if (!term) return [];
+    return products.filter((product) => `${product.name} ${product.sku}`.toLowerCase().includes(term) && availableFor(product.id) > 0).slice(0, 12);
+  }, [products, query, availableFor]);
+  const total = rows.reduce((sum, row) => sum + (row.discountPrice ?? row.price) * row.quantity, 0);
 
-  function quantity(id:number,value:number){setCart(current=>{const next={...current};if(value>0)next[id]=value;else delete next[id];return next})}
-  async function copyTill(){if(!payment.tillNumber)return;try{await navigator.clipboard.writeText(payment.tillNumber);setCopied(true);window.setTimeout(()=>setCopied(false),2000)}catch{setMessage(`Till number: ${payment.tillNumber}`)}}
+  useEffect(() => {
+    if (sale?.state !== "WAITING") return;
+    let cancelled = false;
+    async function check() {
+      pollCount.current += 1;
+      const response = await fetch("/api/payments/reconcile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken: checkoutToken.current }) }).catch(() => null);
+      if (!response || cancelled) return;
+      const data = await response.json().catch(() => ({}));
+      if (data.paid || data.order?.paymentStatus === "PAID") {
+        setSale((current) => current ? { ...current, state: "COMPLETE", message: `Payment confirmed. Receipt ${data.order?.paymentReference || "received"}.` } : current);
+      } else if (data.failed || data.order?.paymentStatus === "FAILED") {
+        setSale((current) => current ? { ...current, state: "FAILED", message: data.message || data.payment?.resultDescription || "Payment was not completed." } : current);
+      } else if (pollCount.current >= 24) {
+        setSale((current) => current ? { ...current, state: "FAILED", message: "Payment has not been confirmed. Retry the prompt before using till payment." } : current);
+      }
+    }
+    void check();
+    const timer = window.setInterval(() => void check(), 4_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [sale?.state]);
 
-  async function submit(event:FormEvent){event.preventDefault();if(!rows.length)return setMessage("Add at least one product.");setSending(true);setMessage("");const response=await fetch("/api/walk-in-sales",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({branchId,customerName,phone,email,checkoutToken:checkoutToken.current,paymentMethod:method,billingPhone:phone,items:rows.map(row=>({productId:row.id,quantity:row.quantity}))})}).catch(()=>null),data=await response?.json().catch(()=>({}));if(response?.ok&&data.paid){setMessage(`Sale ${data.orderNumber} completed — KES ${Number(data.total).toLocaleString()}.`);setCart({});setCustomerName("");setPhone("");setEmail("");checkoutToken.current=crypto.randomUUID();router.refresh()}else if(response?.ok){pollCount.current=0;setPending({orderNumber:data.orderNumber,total:Number(data.total),state:data.paymentStatus==="FAILED"?"FAILED":"WAITING",message:data.message||"Waiting for payment confirmation."})}else setMessage(data?.error||"Sale could not be completed.");setSending(false)}
+  function setQuantity(id: number, value: number) {
+    const available = availableFor(id);
+    setCart((current) => {
+      const next = { ...current };
+      if (value > 0) next[id] = Math.min(available, value);
+      else delete next[id];
+      return next;
+    });
+  }
 
-  async function submitFallback(event:FormEvent){event.preventDefault();setSending(true);const response=await fetch("/api/payments/manual",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({checkoutToken:checkoutToken.current})}),data=await response.json().catch(()=>({}));if(response.ok){if(data.paid){setMessage(`Sale ${pending?.orderNumber} paid and completed.`);setPending(null);setCart({});checkoutToken.current=crypto.randomUUID();router.refresh()}else{pollCount.current=0;setPending(current=>current?{...current,state:"WAITING",message:data.message}:current)}}else setMessage(data.error||"Till payment could not be started.");setSending(false)}
-  async function cancelPending(){if(!confirm("Cancel this unpaid counter sale and release its reserved stock?"))return;setSending(true);const response=await fetch("/api/payments/cancel",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({checkoutToken:checkoutToken.current})}),data=await response.json().catch(()=>({}));if(response.ok){setPending(null);setCart({});setMessage("Pending sale cancelled and reserved stock released.");checkoutToken.current=crypto.randomUUID();router.refresh()}else setMessage(data.error||"Pending sale could not be cancelled.");setSending(false)}
+  function addProduct(product: Product) {
+    setQuantity(product.id, (cart[product.id] || 0) + 1);
+    setQuery("");
+    setMessage(`${product.name} added. Search for another product or adjust its quantity in the sale summary.`);
+  }
 
-  const tillPanel=payment.manualEnabled?<div className="pos-till-panel"><div><span>M-Pesa Till</span><strong>{payment.tillNumber}</strong><small>{payment.accountName||"Healthfield Pharmacy"} · KES {(pending?.total??total).toLocaleString()}</small></div><button type="button" onClick={copyTill}><Clipboard/>{copied?"Copied":"Copy till"}</button><p>Pay the exact amount. This sale completes automatically when M-Pesa confirms the till receipt.</p></div>:null;
+  async function copyTill() {
+    if (!payment.tillNumber) return;
+    try { await navigator.clipboard.writeText(payment.tillNumber); setCopied(true); window.setTimeout(() => setCopied(false), 2_000); }
+    catch { setMessage(`Till number: ${payment.tillNumber}`); }
+  }
 
-  if(pending)return <main className="walkin-sale pos-payment-wait"><header><a href="/staff">← Staff workspace</a><div><span>Payment in progress</span><h1>{pending.orderNumber}</h1></div></header><section>{pending.state==="WAITING"?<LoaderCircle className="spin"/>:<WalletCards/>}<h2>{pending.state==="WAITING"?"Waiting for M-Pesa confirmation":"Payment was not completed"}</h2><p>{pending.message}</p><strong>KES {pending.total.toLocaleString()}</strong>{pending.state==="FAILED"&&payment.manualEnabled?<form onSubmit={submitFallback}>{tillPanel}<button disabled={sending}>{sending?"Switching…":"Switch to till payment"}</button></form>:null}<button className="cancel-pending-sale" type="button" disabled={sending} onClick={cancelPending}>Cancel unpaid sale</button>{message?<p className="form-message">{message}</p>:null}</section></main>;
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!rows.length) return setMessage("Add at least one product.");
+    setSending(true); setMessage("");
+    const response = await fetch("/api/walk-in-sales", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ branchId, customerName, phone, email, checkoutToken: checkoutToken.current, paymentMethod: method, billingPhone: phone, items: rows.map((row) => ({ productId: row.id, quantity: row.quantity })) }) }).catch(() => null);
+    const data = await response?.json().catch(() => ({}));
+    if (response?.ok && data.paid) {
+      setSale({ orderNumber: data.orderNumber, total: Number(data.total), state: "COMPLETE", message: "Payment recorded and stock updated." });
+    } else if (response?.ok) {
+      pollCount.current = 0;
+      setSale({ orderNumber: data.orderNumber, total: Number(data.total), state: data.paymentStatus === "FAILED" ? "FAILED" : "WAITING", message: data.message || "Waiting for payment confirmation." });
+    } else setMessage(data?.error || "Sale could not be completed.");
+    setSending(false);
+  }
 
-  return <main className="walkin-sale"><header><a href="/staff">← Staff workspace</a><div><span>Point of sale</span><h1>Walk-in sale</h1><p>Choose cash, M-Pesa Express or automatic till payment. Stock is deducted only after payment completes.</p></div></header><form onSubmit={submit}><section><label>Branch<select value={branchId} onChange={event=>{setBranchId(Number(event.target.value));setCart({})}}>{branches.map(branch=><option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label><div className="walkin-customer"><label>Customer name<input value={customerName} onChange={event=>setCustomerName(event.target.value)} placeholder="Walk-in customer"/></label><label>Phone<input value={phone} onChange={event=>setPhone(event.target.value)} placeholder="Recommended for automatic matching" required={method==="MPESA_EXPRESS"}/></label><label>Email<input type="email" value={email} onChange={event=>setEmail(event.target.value)} placeholder="Optional"/></label></div><h2>Add products</h2><label className="walkin-search">Search by product name or SKU<input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Type to search products"/></label><div className="walkin-products">{query?matches.map(product=>{const available=stock.find(row=>row.branchId===branchId&&row.productId===product.id)?.available||0;return <article key={product.id}><span><strong>{product.name}</strong><small>{product.sku} · {available} available</small></span><b>KES {Number(product.discountPrice??product.price).toLocaleString()}</b><input aria-label={`Quantity for ${product.name}`} type="number" min="0" max={available} value={cart[product.id]||0} onChange={event=>quantity(product.id,Math.min(available,Number(event.target.value)||0))}/></article>}):<p className="walkin-hint">Search to add a product. Only matching in-stock products are shown.</p>}</div></section><aside><h2>Sale summary</h2>{rows.length?rows.map(row=><div key={row.id}><span>{row.name} × {row.quantity}</span><b>KES {((row.discountPrice??row.price)*row.quantity).toLocaleString()}</b></div>):<p>No products selected.</p>}<footer><span>Total</span><strong>KES {total.toLocaleString()}</strong></footer><div className="pos-payment-methods">{payment.cashEnabled?<label><input type="radio" checked={method==="CASH"} onChange={()=>setMethod("CASH")}/><span>Cash</span></label>:null}{payment.mpesaEnabled?<label><input type="radio" checked={method==="MPESA_EXPRESS"} onChange={()=>setMethod("MPESA_EXPRESS")}/><span><Smartphone/>M-Pesa push</span></label>:null}{payment.manualEnabled?<label><input type="radio" checked={method==="MANUAL_MPESA"} onChange={()=>setMethod("MANUAL_MPESA")}/><span>Pay to till</span></label>:null}</div>{method==="MANUAL_MPESA"?tillPanel:null}<button disabled={sending||!rows.length}>{sending?"Starting payment…":method==="CASH"?"Complete cash sale":method==="MPESA_EXPRESS"?"Send M-Pesa prompt":"Start till payment"}</button>{message?<p className="form-message">{message}</p>:null}</aside></form></main>
+  async function retryPayment() {
+    setSending(true); setMessage("");
+    const response = await fetch("/api/payments/retry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken: checkoutToken.current, billingPhone: phone }) }).catch(() => null);
+    const data = await response?.json().catch(() => ({}));
+    if (!response?.ok) setMessage(data?.error || "The payment prompt could not be sent.");
+    else if (data.paymentStatus === "PAID" || data.order?.paymentStatus === "PAID") setSale((current) => current ? { ...current, state: "COMPLETE", message: "Payment confirmed and stock updated." } : current);
+    else {
+      checkoutToken.current = data.checkoutToken || checkoutToken.current;
+      pollCount.current = 0;
+      setSale((current) => current ? { ...current, state: "WAITING", message: data.message || "Approve the new payment prompt on the customer's phone." } : current);
+    }
+    setSending(false);
+  }
+
+  async function submitFallback(event: FormEvent) {
+    event.preventDefault(); setSending(true); setMessage("");
+    const response = await fetch("/api/payments/manual", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken: checkoutToken.current }) }).catch(() => null);
+    const data = await response?.json().catch(() => ({}));
+    if (!response?.ok) setMessage(data?.error || "Till payment could not be started.");
+    else if (data.paid) setSale((current) => current ? { ...current, state: "COMPLETE", message: "Till payment confirmed and stock updated." } : current);
+    else { pollCount.current = 0; setSale((current) => current ? { ...current, state: "WAITING", message: data.message } : current); }
+    setSending(false);
+  }
+
+  async function cancelPending() {
+    if (!confirm("Cancel this unpaid counter sale and release its reserved stock?")) return;
+    setSending(true);
+    const response = await fetch("/api/payments/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken: checkoutToken.current }) }).catch(() => null);
+    const data = await response?.json().catch(() => ({}));
+    if (response?.ok) resetSale("Pending sale cancelled and reserved stock released.");
+    else setMessage(data?.error || "Pending sale could not be cancelled.");
+    setSending(false);
+  }
+
+  function resetSale(nextMessage = "") {
+    setSale(null); setCart({}); setQuery(""); setCustomerName(""); setPhone(""); setEmail(""); setMessage(nextMessage);
+    checkoutToken.current = crypto.randomUUID(); pollCount.current = 0; router.refresh();
+  }
+
+  const tillPanel = payment.manualEnabled ? <div className="pos-till-panel"><div><span>M-Pesa Till</span><strong>{payment.tillNumber}</strong><small>{payment.accountName || "Healthfield Pharmacy"} · KES {(sale?.total ?? total).toLocaleString()}</small></div><button type="button" onClick={copyTill}><Clipboard />{copied ? "Copied" : "Copy till"}</button><p>Pay the exact amount. This sale completes automatically when M-Pesa confirms the till receipt.</p></div> : null;
+
+  if (sale?.state === "COMPLETE") return <main className="walkin-sale pos-payment-complete"><header><Link href={backHref}>← Workspace</Link><div><span>Sale complete</span><h1>{sale.orderNumber}</h1></div></header><section><CheckCircle2 /><h2>Payment complete</h2><p>{sale.message}</p><strong>KES {sale.total.toLocaleString()}</strong><div className="pos-pack-reminder"><b>Before the customer leaves</b><p>Ensure you pack every product in the sale and give the complete order to the customer.</p></div>{email || (payment.smsEnabled && phone) ? <small>{email ? `Receipt email queued for ${email}.` : ""}{email && payment.smsEnabled && phone ? " " : ""}{payment.smsEnabled && phone ? `SMS confirmation queued for ${phone}.` : ""}</small> : null}<button type="button" onClick={() => resetSale()}>Continue sales</button></section></main>;
+
+  if (sale) return <main className="walkin-sale pos-payment-wait"><header><Link href={backHref}>← Workspace</Link><div><span>Payment in progress</span><h1>{sale.orderNumber}</h1></div></header><section>{sale.state === "WAITING" ? <LoaderCircle className="spin" /> : <WalletCards />}<h2>{sale.state === "WAITING" ? "Waiting for M-Pesa confirmation" : "Payment was not completed"}</h2><p>{sale.message}</p><strong>KES {sale.total.toLocaleString()}</strong>{sale.state === "FAILED" && payment.mpesaEnabled ? <div className="pos-payment-retry"><label>Phone for the new prompt<input type="tel" inputMode="tel" value={phone} onChange={(event) => setPhone(event.target.value)} /></label><button type="button" disabled={sending || phone.trim().length < 9} onClick={retryPayment}><RefreshCw />{sending ? "Sending…" : "Retry M-Pesa"}</button></div> : null}{sale.state === "FAILED" && payment.manualEnabled ? <form onSubmit={submitFallback}><h3>Or use till payment</h3>{tillPanel}<button disabled={sending}>{sending ? "Switching…" : "Switch to till payment"}</button></form> : null}<button className="cancel-pending-sale" type="button" disabled={sending} onClick={cancelPending}>Cancel unpaid sale</button>{message ? <p className="form-message" role="alert">{message}</p> : null}</section></main>;
+
+  return <main className="walkin-sale"><header><Link href={backHref}>← Workspace</Link><div><span>Point of sale</span><h1>Walk-in sale</h1><p>Choose cash, M-Pesa Express or automatic till payment. Stock is deducted only after payment completes.</p></div></header><form onSubmit={submit}><section><label>Branch<select value={branchId} onChange={(event) => { setBranchId(Number(event.target.value)); setCart({}); }} >{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label><div className="walkin-customer"><label>Customer name<input value={customerName} onChange={(event) => setCustomerName(event.target.value)} placeholder="Walk-in customer" /></label><label>Phone<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Recommended for receipts and matching" required={method === "MPESA_EXPRESS"} /></label><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Receipt email (optional)" /></label></div><h2>Add products</h2><label className="walkin-search">Search by product name or SKU<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type to search products" /></label><div className="walkin-products">{query.trim() ? matches.length ? matches.map((product) => { const available = availableFor(product.id), selected = cart[product.id] || 0; return <button type="button" key={product.id} onClick={() => addProduct(product)} disabled={selected >= available}><span><strong>{product.name}</strong><small>{product.sku} · {available} available</small></span><b>KES {Number(product.discountPrice ?? product.price).toLocaleString()}</b><em>{selected ? `Add another (${selected})` : "Add"}</em></button>; }) : <p className="walkin-hint">No in-stock products match that search.</p> : <p className="walkin-hint">Search, then select a product to add one automatically. Repeat for every product in the sale.</p>}</div>{message ? <p className="form-message" role="status">{message}</p> : null}</section><aside><h2>Sale summary</h2>{rows.length ? rows.map((row) => <div className="pos-sale-line" key={row.id}><span><strong>{row.name}</strong><small>KES {Number(row.discountPrice ?? row.price).toLocaleString()} each</small></span><span className="pos-quantity"><button type="button" aria-label={`Remove one ${row.name}`} onClick={() => setQuantity(row.id, row.quantity - 1)}><Minus /></button><input aria-label={`Quantity for ${row.name}`} type="number" min="1" max={row.available} value={row.quantity} onChange={(event) => setQuantity(row.id, Number(event.target.value) || 1)} /><button type="button" aria-label={`Add one ${row.name}`} disabled={row.quantity >= row.available} onClick={() => setQuantity(row.id, row.quantity + 1)}><Plus /></button></span><b>KES {((row.discountPrice ?? row.price) * row.quantity).toLocaleString()}</b></div>) : <p>No products selected.</p>}<footer><span>Total</span><strong>KES {total.toLocaleString()}</strong></footer><div className="pos-payment-methods">{payment.cashEnabled ? <label><input type="radio" checked={method === "CASH"} onChange={() => setMethod("CASH")} /><span>Cash</span></label> : null}{payment.mpesaEnabled ? <label><input type="radio" checked={method === "MPESA_EXPRESS"} onChange={() => setMethod("MPESA_EXPRESS")} /><span><Smartphone />M-Pesa push</span></label> : null}{payment.manualEnabled ? <label><input type="radio" checked={method === "MANUAL_MPESA"} onChange={() => setMethod("MANUAL_MPESA")} /><span>Pay to till</span></label> : null}</div>{method === "MANUAL_MPESA" ? tillPanel : null}<button disabled={sending || !rows.length}>{sending ? "Starting payment…" : method === "CASH" ? "Complete cash sale" : method === "MPESA_EXPRESS" ? "Send M-Pesa prompt" : "Start till payment"}</button></aside></form></main>;
 }

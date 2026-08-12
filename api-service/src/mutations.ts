@@ -17,7 +17,9 @@ import { orderEmailHtml, sendBulkEmail, sendEmail } from "./email";
 import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, emailVerificationTiming } from "./email-verification";
 import { json, publicImageUrl, safeFilename } from "./http";
 import { extractMpesaReceipt, initiateStkPush, mpesaConfiguration } from "./mpesa";
+import { queuePaidOrderNotification } from "./order-notifications";
 import { replayStoredStkCallback } from "./payment-handlers";
+import { canGrantTeamRole, canManageTeamAccount } from "./staff-access-policy";
 import { secureHashEqual, twoFactorChallengeLifetimeMs, twoFactorCodeHash, twoFactorMaximumAttempts, twoFactorMaximumResends, twoFactorResendCooldownMs, twoFactorTiming } from "./two-factor";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
@@ -119,7 +121,7 @@ export async function handleAuth(request: Request, action: string) {
     const valid = user ? await bcrypt.compare(parsed.data.password, user.passwordHash) : await bcrypt.compare(parsed.data.password, "$2b$12$1BVjhn5Hc7qJCnn84gWmTOj3DdbFI4zmL.RXsnXC6CIscSwMPxYjC");
     if (!user || !valid || !user.isActive) return json({ error: "Incorrect email or password." }, { status: 401 });
     if (user.role === "CUSTOMER" && !user.emailVerifiedAt) return json({ error: "Verify your email before signing in.", code: "EMAIL_NOT_VERIFIED" }, { status: 403 });
-    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
+    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange, homeBranchId: user.homeBranchId };
     if (team.includes(user.role as typeof team[number])) {
       const [settings] = await db.select({ requireTeamTwoFactor: siteSettings.requireTeamTwoFactor }).from(siteSettings).limit(1);
       if (settings?.requireTeamTwoFactor) {
@@ -158,7 +160,7 @@ export async function handleAuth(request: Request, action: string) {
     // can both read the row, but exactly one can claim this code.
     const [claimed] = await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.id, challenge.id), eq(twoFactorChallenges.codeHash, expected), isNull(twoFactorChallenges.usedAt), eq(twoFactorChallenges.attemptCount, challenge.attemptCount), gte(twoFactorChallenges.expiresAtMs, now)));
     if (claimed.affectedRows !== 1) return json({ error: "This security code has already been used." }, { status: 401 });
-    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange };
+    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange, homeBranchId: user.homeBranchId };
     let token: string;
     try {
       token = await createSessionToken(session);
@@ -426,6 +428,7 @@ export async function handleOrders(request: Request, id?: number) {
           if (status !== "CANCELLED" && target.length) await tx.insert(orderItemFulfilments).values(target.map((row) => ({ ...row, quantityPacked: finalStatus ? row.quantityReserved : row.quantityPacked, status: finalStatus ? "READY" as const : row.status, handledBy: auth.session.userId })));
         }
         await tx.update(orders).set({ status, ...(editable ? details : {}) }).where(eq(orders.id, id));
+        await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_UPDATED", entityType: "order", entityId: String(id), metadata: { orderNumber: order.orderNumber, fromStatus: order.status, toStatus: status, fulfilmentBranches: target.map((row) => row.branchId), actorRole: auth.session.role } });
       });
     } catch(error) { return json({ error:error instanceof Error?error.message:"Order could not be updated." },{status:400}); }
     if(order.status===status)return json({ok:true,status});
@@ -538,6 +541,7 @@ export async function handleWalkInSales(request: Request) {
   if (duplicate) return json({ ok: true, id: duplicate.id, orderNumber: duplicate.orderNumber, total: Number(duplicate.total), paymentStatus: duplicate.paymentStatus, duplicate: true });
   const [branch] = await db.select({ id: branches.id }).from(branches).where(and(eq(branches.id, parsed.data.branchId), eq(branches.isActive, true))).limit(1);
   if (!branch) return json({ error: "Choose an active branch." }, { status: 400 });
+  if (auth.session.role === "STAFF" && auth.session.homeBranchId !== branch.id) return json({ error: "POS is limited to your assigned shop." }, { status: 403 });
   const grouped = new Map<number, number>();
   for (const item of parsed.data.items) grouped.set(item.productId, (grouped.get(item.productId) || 0) + item.quantity);
   const itemList = [...grouped].map(([productId, quantity]) => ({ productId, quantity }));
@@ -580,7 +584,11 @@ export async function handleWalkInSales(request: Request) {
       await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: paidCash ? "WALK_IN_SALE" : "WALK_IN_PAYMENT_STARTED", entityType: "order", entityId: String(created.insertId), metadata: { branchId: branch.id, total: subtotal, itemCount: itemList.length, paymentMethod: parsed.data.paymentMethod } });
       return { orderId: created.insertId, paymentId: payment.insertId };
     });
-    if (parsed.data.paymentMethod === "CASH") return json({ ok: true, paid: true, paymentStatus: "PAID", id: result.orderId, orderNumber, total: subtotal }, { status: 201 });
+    if (parsed.data.paymentMethod === "CASH") {
+      queuePaidOrderNotification(result.orderId);
+      return json({ ok: true, paid: true, paymentStatus: "PAID", id: result.orderId, orderNumber, total: subtotal }, { status: 201 });
+    }
+    let paymentStatus: "PENDING" | "FAILED" = "PENDING";
     let message = parsed.data.paymentMethod === "MANUAL_MPESA" ? "Checking the till payment." : "Check the customer's phone for the M-Pesa prompt.";
     if (parsed.data.paymentMethod === "MPESA_EXPRESS") {
       try {
@@ -589,12 +597,13 @@ export async function handleWalkInSales(request: Request) {
         await replayStoredStkCallback(stk.checkoutRequestId);
         message = stk.customerMessage;
       } catch (error) {
+        paymentStatus = "FAILED";
         message = error instanceof Error ? error.message : "M-Pesa Express could not start.";
         await db.update(paymentTransactions).set({ status: "FAILED", resultDescription: message }).where(eq(paymentTransactions.id, result.paymentId));
         await db.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, result.orderId));
       }
     }
-    return json({ ok: true, paid: false, paymentStatus: "PENDING", id: result.orderId, checkoutToken: parsed.data.checkoutToken, orderNumber, total: subtotal, message }, { status: 202 });
+    return json({ ok: true, paid: false, paymentStatus, id: result.orderId, checkoutToken: parsed.data.checkoutToken, orderNumber, total: subtotal, message }, { status: 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Walk-in sale could not be completed.";
     console.error("Walk-in sale failed", error);
@@ -1124,11 +1133,18 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
 }
 
 export async function handleInventory(request: Request, id: number) {
-  const auth = await requireSession(request, [...admins]);
+  const auth = await requireSession(request, [...team]);
   if ("response" in auth) return auth.response;
+  if (request.method !== "PATCH") return json({ error: "Method not allowed." }, { status: 405 });
   const parsed = z.object({ quantityAvailable: z.number().int().nonnegative(), quantityReserved: z.number().int().nonnegative(), reorderLevel: z.number().int().nonnegative() }).safeParse(await body(request));
   if (!Number.isInteger(id) || !parsed.success) return json({ error: "Enter valid non-negative stock quantities." }, { status: 400 });
-  await getDb().update(branchInventory).set({ ...parsed.data, updatedBy: auth.session.userId }).where(eq(branchInventory.id, id));
+  const [record] = await getDb().select({ id: branchInventory.id, branchId: branchInventory.branchId, productId: branchInventory.productId, quantityAvailable: branchInventory.quantityAvailable, quantityReserved: branchInventory.quantityReserved, reorderLevel: branchInventory.reorderLevel }).from(branchInventory).where(eq(branchInventory.id, id)).limit(1);
+  if (!record) return json({ error: "Inventory record not found." }, { status: 404 });
+  if (auth.session.role === "STAFF" && (!auth.session.homeBranchId || record.branchId !== auth.session.homeBranchId)) return json({ error: "You can update inventory only for your assigned shop." }, { status: 403 });
+  await getDb().transaction(async (tx)=>{
+    await tx.update(branchInventory).set({ ...parsed.data, updatedBy: auth.session.userId }).where(eq(branchInventory.id, id));
+    await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "INVENTORY_UPDATED", entityType: "branch_inventory", entityId: String(id), metadata: { branchId: record.branchId, productId: record.productId, before: { quantityAvailable: record.quantityAvailable, quantityReserved: record.quantityReserved, reorderLevel: record.reorderLevel }, after: parsed.data, actorRole: auth.session.role } });
+  });
   return json({ ok: true });
 }
 
@@ -1163,30 +1179,59 @@ export async function handleStaff(request: Request, id?: number) {
   if (request.method === "POST" && !id) {
     const parsed = z.object({ firstName: z.string().trim().min(2).max(100), lastName: z.string().trim().min(2).max(100), email: z.string().trim().email(), phone: z.string().trim().max(30).optional().default(""), role: z.enum(["STAFF", "ADMIN"]), homeBranchId: z.coerce.number().int().positive().nullable().optional(), password: z.string().min(8).regex(/[a-z]/).regex(/[A-Z]/).regex(/[0-9]/) }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Enter valid staff details and a strong password." }, { status: 400 });
-    try { const { password, ...values } = parsed.data; const [created] = await db.insert(users).values({ ...values, phone: values.phone || null, passwordHash: await hash(password, 12), isActive: true, forcePasswordChange: true }); return json({ id: created.insertId }, { status: 201 }); } catch { return json({ error: "That email address or phone is already registered." }, { status: 409 }); }
+    if (!canGrantTeamRole(auth.session.role, parsed.data.role)) return json({ error: "Only the pharmacy owner can create administrator accounts." }, { status: 403 });
+    if (parsed.data.role === "STAFF") {
+      if (!parsed.data.homeBranchId) return json({ error: "Assign this staff account to an active shop." }, { status: 400 });
+      const [branch] = await db.select({ id: branches.id }).from(branches).where(and(eq(branches.id, parsed.data.homeBranchId), eq(branches.isActive, true))).limit(1);
+      if (!branch) return json({ error: "The selected shop is inactive or unavailable." }, { status: 400 });
+    }
+    try {
+      const { password, ...values } = parsed.data;
+      const createdId = await db.transaction(async (tx) => {
+        const [created] = await tx.insert(users).values({ ...values, homeBranchId: values.role === "STAFF" ? values.homeBranchId : null, phone: values.phone || null, passwordHash: await hash(password, 12), isActive: true, forcePasswordChange: true });
+        await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "STAFF_ACCOUNT_CREATED", entityType: "USER", entityId: String(created.insertId), metadata: { actorRole: auth.session.role, targetRole: values.role, homeBranchId: values.role === "STAFF" ? values.homeBranchId : null } });
+        return created.insertId;
+      });
+      return json({ id: createdId }, { status: 201 });
+    } catch {
+      return json({ error: "That email address or phone is already registered." }, { status: 409 });
+    }
   }
   if (request.method === "PATCH" && id) {
     const parsed = z.object({ firstName: z.string().trim().min(2).max(100).optional(), lastName: z.string().trim().min(2).max(100).optional(), phone: z.string().trim().max(30).optional(), role: z.enum(["STAFF", "ADMIN"]).optional(), homeBranchId: z.coerce.number().int().positive().nullable().optional(), isActive: z.boolean().optional(), password: z.string().min(8).regex(/[a-z]/).regex(/[A-Z]/).regex(/[0-9]/).optional() }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Check the staff details." }, { status: 400 });
+    const [target] = await db.select({ id: users.id, role: users.role, homeBranchId: users.homeBranchId, isActive: users.isActive }).from(users).where(and(eq(users.id, id), isNull(users.deletedAt))).limit(1);
+    if (!target) return json({ error: "Staff account not found." }, { status: 404 });
+    if (!canManageTeamAccount(auth.session.role, target.role)) return json({ error: target.role === "SUPER_ADMIN" ? "The pharmacy owner account cannot be changed here." : "Only the pharmacy owner can manage administrator accounts." }, { status: 403 });
+    if (parsed.data.role && !canGrantTeamRole(auth.session.role, parsed.data.role)) return json({ error: "Only the pharmacy owner can grant administrator access." }, { status: 403 });
     const { password, ...values } = parsed.data;
     if (id === auth.session.userId && values.isActive === false) return json({ error: "You cannot suspend your own account." }, { status: 400 });
-    await db.update(users).set({ ...values, phone: values.phone === "" ? null : values.phone, ...(password ? { passwordHash: await hash(password, 12), forcePasswordChange: true } : {}) }).where(and(eq(users.id, id), isNull(users.deletedAt)));
-    if (values.isActive === false) {
-      await db.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, id));
+    const resultingRole = values.role ?? target.role;
+    const resultingBranchId = values.homeBranchId === undefined ? target.homeBranchId : values.homeBranchId;
+    if (resultingRole === "STAFF") {
+      if (!resultingBranchId) return json({ error: "Assign this staff account to an active shop." }, { status: 400 });
+      const [branch] = await db.select({ id: branches.id }).from(branches).where(and(eq(branches.id, resultingBranchId), eq(branches.isActive, true))).limit(1);
+      if (!branch) return json({ error: "The selected shop is inactive or unavailable." }, { status: 400 });
     }
-    if (values.isActive === false || password) await revokeUserSessions(id);
+    const sessionsMustBeRevoked = Boolean(password) || values.role !== undefined || values.homeBranchId !== undefined || values.isActive !== undefined;
+    await db.transaction(async (tx) => {
+      await tx.update(users).set({ ...values, homeBranchId: resultingRole === "STAFF" ? resultingBranchId : null, phone: values.phone === "" ? null : values.phone, ...(password ? { passwordHash: await hash(password, 12), forcePasswordChange: true } : {}) }).where(eq(users.id, id));
+      if (values.isActive === false) await tx.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, id));
+      if (sessionsMustBeRevoked) await tx.update(authSessions).set({ revokedAt: new Date() }).where(and(eq(authSessions.userId, id), isNull(authSessions.revokedAt)));
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "STAFF_ACCOUNT_UPDATED", entityType: "USER", entityId: String(id), metadata: { actorRole: auth.session.role, before: { role: target.role, homeBranchId: target.homeBranchId, isActive: target.isActive }, after: { role: resultingRole, homeBranchId: resultingRole === "STAFF" ? resultingBranchId : null, isActive: values.isActive ?? target.isActive }, passwordReset: Boolean(password), sessionsRevoked: sessionsMustBeRevoked } });
+    });
     return json({ ok: true });
   }
   if (request.method === "DELETE" && id) {
     if (id === auth.session.userId) return json({ error: "You cannot delete your own account." }, { status: 400 });
     const [target] = await db.select({ role: users.role }).from(users).where(and(eq(users.id, id), isNull(users.deletedAt))).limit(1);
     if (!target) return json({ error: "Staff account not found." }, { status: 404 });
-    if (target.role === "SUPER_ADMIN") return json({ error: "The pharmacy owner account cannot be deleted here." }, { status: 403 });
+    if (!canManageTeamAccount(auth.session.role, target.role)) return json({ error: target.role === "SUPER_ADMIN" ? "The pharmacy owner account cannot be deleted here." : "Only the pharmacy owner can delete administrator accounts." }, { status: 403 });
     await db.transaction(async tx => {
       await tx.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, id));
       await tx.update(authSessions).set({ revokedAt: new Date() }).where(and(eq(authSessions.userId, id), isNull(authSessions.revokedAt)));
       await tx.update(users).set({ isActive: false, twoFactorEnabled: false, deletedAt: new Date(), passwordHash: await hash(randomUUID() + randomUUID(), 12) }).where(eq(users.id, id));
-      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "STAFF_ACCOUNT_DELETED", entityType: "USER", entityId: String(id), metadata: { formerRole: target.role } });
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "STAFF_ACCOUNT_DELETED", entityType: "USER", entityId: String(id), metadata: { actorRole: auth.session.role, formerRole: target.role } });
     });
     return json({ ok: true });
   }

@@ -114,3 +114,27 @@
   background: linear-gradient(90deg, #db1d68, #ec346e) !important;
   color: #fff !important;
 }
+
+.approved-product-main > .approved-product-info .product-card-name {
+  display: block;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #18131b;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+.product-card-prices .product-card-price {
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1;
+}
+@media (max-width: 820px) {
+  .approved-product-main > .approved-product-info .product-card-name { font-size: 10.5px;line-height:1.25; }
+  .product-card-prices .product-card-price { font-size: 10.5px; }
+}
+@media (max-width: 600px) {
+  .approved-product-main > .approved-product-info .product-card-name { font-size: 9.5px;line-height:1.2; }
+  .product-card-prices .product-card-price { font-size: 9px; }
+}

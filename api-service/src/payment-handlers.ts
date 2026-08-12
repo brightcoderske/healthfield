@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
 import { activityLogs, branchInventory, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions, siteSettings } from "../../db/schema";
-import { requireSession } from "./auth";
+import { requestSession, requireSession } from "./auth";
 import { getDb } from "./db";
 import { json } from "./http";
-import { classifyStkQueryResult, extractMpesaReceipt, mpesaConfiguration, parseC2bPayment, parseStkCallback, queryStkPush } from "./mpesa";
+import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parseStkCallback, queryStkPush } from "./mpesa";
+import { queuePaidOrderNotification } from "./order-notifications";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -24,24 +26,30 @@ async function finalizePosInventory(tx: DatabaseTransaction, orderId: number, ac
 
 async function markPaymentPaid(transactionId: number, details: { receiptNumber: string | null; amount: number; phone?: string | null; providerPayload?: Record<string, unknown>; actorId?: number | null }) {
   const db = getDb();
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const [payment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1).for("update");
     if (!payment) throw new Error("Payment record not found.");
-    if (payment.status === "PAID") return payment.orderId;
+    if (payment.status === "PAID") return { orderId: payment.orderId, newlyPaid: false };
     if (Math.abs(Number(payment.amount) - details.amount) > 0.001) {
       await tx.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", resultDescription: "The paid amount does not match the order total.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
       throw new Error("The paid amount does not match the order total.");
     }
     const [order] = await tx.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1).for("update");
     if (!order) throw new Error("Order not found.");
-    if (payment.channel === "POS" && order.paymentStatus !== "PAID") await finalizePosInventory(tx, order.id, details.actorId ?? null);
+    if (order.paymentStatus === "PAID") {
+      await tx.update(paymentTransactions).set({ status: "CANCELLED", resultDescription: "Another payment attempt already completed this order." }).where(eq(paymentTransactions.id, payment.id));
+      return { orderId: order.id, newlyPaid: false };
+    }
+    if (payment.channel === "POS") await finalizePosInventory(tx, order.id, details.actorId ?? null);
     const paidAt = new Date();
     await tx.update(paymentTransactions).set({ status: "PAID", receiptNumber: details.receiptNumber, phone: details.phone || payment.phone, verifiedAt: paidAt, reviewedBy: details.actorId ?? payment.reviewedBy, reviewedAt: details.actorId ? paidAt : payment.reviewedAt, resultCode: "0", resultDescription: "Payment confirmed", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
     const paidOrderStatus = payment.channel === "POS" ? "COMPLETED" : ["NEW", "AWAITING_PAYMENT"].includes(order.status) ? "CONFIRMED" : order.status;
     await tx.update(orders).set({ paymentStatus: "PAID", paymentReference: details.receiptNumber, amountPaid: details.amount.toFixed(2), status: paidOrderStatus }).where(eq(orders.id, order.id));
     await tx.insert(activityLogs).values({ actorId: details.actorId ?? null, action: "PAYMENT_CONFIRMED", entityType: "order", entityId: String(order.id), metadata: { transactionId: payment.id, method: payment.method, receiptNumber: details.receiptNumber, amount: details.amount } });
-    return order.id;
+    return { orderId: order.id, newlyPaid: true };
   });
+  if (result.newlyPaid) queuePaidOrderNotification(result.orderId);
+  return result.orderId;
 }
 
 function paymentPhone(value: string | null | undefined) {
@@ -84,6 +92,74 @@ export async function handlePaymentStatus(request: Request) {
   if (!/^[0-9a-f-]{36}$/i.test(token)) return json({ error: "Payment request not found." }, { status: 404 });
   const status = await paymentStatus(token);
   return status ? json(status) : json({ error: "Payment request not found." }, { status: 404 });
+}
+
+class PaymentRetryError extends Error {
+  constructor(message: string, readonly status = 409) { super(message); }
+}
+
+export async function handlePaymentRetry(request: Request) {
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  const input = await request.json().catch(() => null) as { checkoutToken?: string; orderId?: number; billingPhone?: string } | null;
+  const checkoutToken = input?.checkoutToken || "";
+  const orderId = Number(input?.orderId);
+  if ((!/^[0-9a-f-]{36}$/i.test(checkoutToken)) && (!Number.isInteger(orderId) || orderId <= 0)) {
+    return json({ error: "Payment request not found." }, { status: 400 });
+  }
+
+  const db = getDb();
+  const session = await requestSession(request);
+  const [candidate] = Number.isInteger(orderId) && orderId > 0
+    ? await db.select().from(orders).where(eq(orders.id, orderId)).limit(1)
+    : await db.select().from(orders).where(eq(orders.checkoutToken, checkoutToken)).limit(1);
+  if (!candidate) return json({ error: "Order not found." }, { status: 404 });
+
+  const isPos = candidate.orderNumber.startsWith("POS-");
+  if (isPos) {
+    if (!session || !team.includes(session.role as typeof team[number])) return json({ error: "You are not authorised to retry this counter sale." }, { status: 403 });
+  } else if (Number.isInteger(orderId) && orderId > 0 && (!session || session.role !== "CUSTOMER" || candidate.customerId !== session.userId)) {
+    return json({ error: "Order not found." }, { status: 404 });
+  }
+
+  const [settings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, posMpesaEnabled: siteSettings.posMpesaEnabled }).from(siteSettings).limit(1);
+  if (!(isPos ? settings?.posMpesaEnabled : settings?.onlineMpesaEnabled) || !mpesaConfiguration()) {
+    return json({ error: "M-Pesa Express is currently unavailable." }, { status: 409 });
+  }
+
+  const nextToken = candidate.checkoutToken || randomUUID();
+  const phone = (input?.billingPhone || candidate.phone || "").trim();
+  let paymentId = 0;
+  try {
+    paymentId = await db.transaction(async (tx) => {
+      const [order] = await tx.select().from(orders).where(eq(orders.id, candidate.id)).limit(1).for("update");
+      if (!order) throw new PaymentRetryError("Order not found.", 404);
+      if (order.paymentStatus === "PAID") throw new PaymentRetryError("This order is already paid.");
+      if (order.status === "CANCELLED" || order.paymentStatus === "REFUNDED") throw new PaymentRetryError("This order cannot be paid again.");
+      if (order.paymentStatus !== "FAILED") throw new PaymentRetryError("A payment attempt is already active for this order.");
+      const [latest] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
+      if (latest && ["INITIATED", "PENDING", "REQUIRES_REVIEW"].includes(latest.status)) throw new PaymentRetryError("A payment attempt is already active for this order.");
+      const [created] = await tx.insert(paymentTransactions).values({ orderId: order.id, method: "MPESA_EXPRESS", channel: isPos ? "POS" : "ONLINE", status: "INITIATED", amount: order.total, phone });
+      await tx.update(orders).set({ checkoutToken: nextToken, paymentMethod: "MPESA_EXPRESS", paymentStatus: "PENDING", paymentReference: null }).where(eq(orders.id, order.id));
+      await tx.insert(activityLogs).values({ actorId: session?.userId ?? null, action: "PAYMENT_RETRIED", entityType: "order", entityId: String(order.id), metadata: { transactionId: created.insertId, channel: isPos ? "POS" : "ONLINE" } });
+      return created.insertId;
+    });
+  } catch (error) {
+    if (error instanceof PaymentRetryError) return json({ error: error.message }, { status: error.status });
+    throw error;
+  }
+
+  try {
+    const stk = await initiateStkPush({ orderNumber: candidate.orderNumber, phone, amount: Number(candidate.total) });
+    await db.update(paymentTransactions).set({ status: "PENDING", checkoutRequestId: stk.checkoutRequestId, merchantRequestId: stk.merchantRequestId, phone: stk.phone, resultDescription: stk.customerMessage, providerPayload: stk.providerPayload }).where(eq(paymentTransactions.id, paymentId));
+    await replayStoredStkCallback(stk.checkoutRequestId);
+    const status = await paymentStatus(nextToken);
+    return json({ ok: true, checkoutToken: nextToken, paymentStatus: status?.order.paymentStatus || "PENDING", message: stk.customerMessage, ...status }, { status: status?.order.paymentStatus === "PAID" ? 200 : 202 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "M-Pesa Express could not start.";
+    await db.update(paymentTransactions).set({ status: "FAILED", resultDescription: message }).where(eq(paymentTransactions.id, paymentId));
+    await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, candidate.id), eq(orders.paymentStatus, "PENDING")));
+    return json({ error: message, paymentStatus: "FAILED" }, { status: 409 });
+  }
 }
 
 export async function handleManualPayment(request: Request) {

@@ -10,6 +10,7 @@ export type Session = {
   firstName: string;
   role: Role;
   forcePasswordChange: boolean;
+  homeBranchId: number | null;
 };
 
 export async function getSession() {

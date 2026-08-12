@@ -204,8 +204,6 @@ export function Storefront({
   const breakAt = useMemo(() => new Map(breakPlan.map((entry) => [entry.position, entry.item])), [breakPlan]);
 
   const visibleConditions = initialConditions.slice(0, CONDITION_PREVIEW);
-  const hiddenConditionCount = Math.max(0, initialConditions.length - visibleConditions.length);
-
   // "View all" jumps to the header menu that already lists everything, rather than
   // stretching the landing page. Narrow viewports have no header menu, so they get
   // the standalone page instead.
@@ -213,6 +211,22 @@ export function Storefront({
     if (!headerMenuReachable(label)) return window.location.assign(fallbackUrl);
     window.scrollTo({ top: 0, behavior: "smooth" });
     setOpenMenu(label);
+  }
+  function showCategory(categoryId: number) {
+    setSelectedCategory(categoryId);
+    setSelectedCondition(null);
+    setQuery("");
+    setVisibleCount(PRODUCT_PAGE_SIZE);
+    setOpenMenu(null);
+    document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
+  }
+  function showCondition(conditionId: number) {
+    setSelectedCondition(conditionId);
+    setSelectedCategory(null);
+    setQuery("");
+    setVisibleCount(PRODUCT_PAGE_SIZE);
+    setOpenMenu(null);
+    document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
   }
   useEffect(() => {
     if (!openMenu) return;
@@ -343,7 +357,7 @@ export function Storefront({
           </Link>
         </div>
         <div className="desktop-brand-row">
-          <a href="/">
+          <Link href="/">
             <Image
               src="/healthfield-logo-clean.png"
               alt="Healthfield Pharmacy"
@@ -351,7 +365,7 @@ export function Storefront({
               height={90}
               priority
             />
-          </a>
+          </Link>
           <label>
             <input
               value={query}
@@ -382,30 +396,30 @@ export function Storefront({
           </a>
         </div>
         <nav className="desktop-store-nav">
-          <a className={!selectedCategory ? "active" : ""} href="/">Home</a>
+          <Link className={!selectedCategory ? "active" : ""} href="/">Home</Link>
           <a href="/prescriptions/upload">Upload prescription</a>
           <div className={`desktop-nav-dropdown${openMenu === "category" ? " is-open" : ""}`} data-nav-menu="category">
             <button type="button">Shop by category <ChevronDown/></button>
             <div className="desktop-nav-grid category-nav-grid">
-              {displayedCategories.map((category) => <a key={category.id} className={selectedCategory===category.id?"active":""} href={`/?category=${category.slug}#products`}>{category.name}</a>)}
+              {displayedCategories.map((category) => <a key={category.id} className={selectedCategory===category.id?"active":""} href="#products" onClick={(event)=>{event.preventDefault();showCategory(category.id)}}>{category.name}</a>)}
             </div>
           </div>
           <div className={`desktop-nav-dropdown${openMenu === "condition" ? " is-open" : ""}`} data-nav-menu="condition">
             <button type="button">Shop by condition <ChevronDown/></button>
             <div className="desktop-nav-grid condition-nav-grid">
-              {initialConditions.map((condition) => <a key={condition.id} className={selectedCondition===condition.id?"active":""} href={`/?condition=${condition.slug}#products`}>{condition.name}</a>)}
+              {initialConditions.map((condition) => <a key={condition.id} className={selectedCondition===condition.id?"active":""} href="#products" onClick={(event)=>{event.preventDefault();showCondition(condition.id)}}>{condition.name}</a>)}
               <a href="/conditions">View all conditions</a>
             </div>
           </div>
-          {prescriptionCategory&&<a href={`/?category=${prescriptionCategory.slug}#products`}>Prescription Medicines</a>}
+          {prescriptionCategory&&<a href="#products" onClick={(event)=>{event.preventDefault();showCategory(prescriptionCategory.id)}}>Prescription Medicines</a>}
           <div className="desktop-nav-dropdown services-nav-dropdown">
             <button type="button">Our services <ChevronDown/></button>
             <div className="desktop-nav-grid services-nav-grid">
               <a href="/contact">Pharmacist advice</a><a href="/prescriptions/upload">Prescription fulfilment</a><a href="/chat">Chat with our pharmacy</a><a href="/shipping-policy">Medicine delivery</a><a href="/account#orders">Track an order</a><a href="/conditions">Shop by health need</a>
             </div>
           </div>
-          <a href="/?offers=1#products">Offers</a>
-          <a href="/blog">Blogs</a>
+          <a href="/offers">Offers</a>
+          <Link href="/blog">Blogs</Link>
         </nav>
       </div>
       <header className="approved-topbar">
@@ -425,8 +439,8 @@ export function Storefront({
               placeholder="Search products"
             />
           </label>
-          <a href="/">Home</a>
-          <a href="/blog">Blogs &amp; health guide</a>
+          <Link href="/">Home</Link>
+          <Link href="/blog">Blogs &amp; health guide</Link>
           <details>
             <summary>
               <span>Shop by condition</span>
@@ -451,7 +465,8 @@ export function Storefront({
                 .map((condition) => (
                   <a
                     key={condition.id}
-                    href={`/?condition=${condition.slug}#products`}
+                    href="#products"
+                    onClick={(event)=>{event.preventDefault();showCondition(condition.id)}}
                   >
                     {condition.name}
                   </a>
@@ -483,15 +498,16 @@ export function Storefront({
                 .map((category) => (
                   <a
                     key={category.id}
-                    href={`/?category=${category.slug}#products`}
+                    href="#products"
+                    onClick={(event)=>{event.preventDefault();showCategory(category.id)}}
                   >
                     {category.name}
                   </a>
                 ))}
             </div>
           </details>
-          <a href="/?offers=1#products">Offers</a>
-          <a href="/?offers=1#products">Campaign offers</a>
+          <a href="/offers">Offers</a>
+          <a href="/offers">Campaign offers</a>
           {viewer ? (
             <>
               <div className="mobile-account-summary">
@@ -528,7 +544,7 @@ export function Storefront({
             <a href="/login">Log in / Sign up</a>
           )}
         </nav>
-        <a className="mobile-logo" href="/">
+        <Link className="mobile-logo" href="/">
           <Image
             src="/healthfield-logo-clean.png"
             alt="Healthfield Pharmacy"
@@ -536,7 +552,7 @@ export function Storefront({
             height={84}
             priority
           />
-        </a>
+        </Link>
         <div className="public-header-actions">
           <a
             href={
@@ -601,14 +617,13 @@ export function Storefront({
           <section>
             <div>
               <h1>
-                Your Health,
+                Healthfield Pharmacy
                 <br />
-                <em>Our Priority</em>
+                <em>in Kenya</em>
               </h1>
               <p>
-                Quality medicines and health products
-                <br />
-                delivered to your door.
+                Healthfield Pharmacy website for genuine medicines and pharmacist
+                support in Juja, Nairobi and across Kenya.
               </p>
               <a href="#products">Shop Now →</a>
             </div>
@@ -663,7 +678,7 @@ export function Storefront({
 
         {!query.trim() && <section className="approved-section" id="conditions">
           <div className="approved-title">
-            <h1>Shop by Condition</h1>
+            <h2>Shop by Condition</h2>
             <button className="title-action" type="button" aria-label="View all conditions" onClick={() => revealHeaderMenu("condition", "/conditions")}>
               <span className="title-action-label">View all</span>
               <ChevronRight />
@@ -740,16 +755,16 @@ export function Storefront({
       </main>
 
       <nav className="approved-nav">
-        <a className="active" href="/">
+        <Link className="active" href="/">
           <HeartPulse />
           <span>Home</span>
-        </a>
+        </Link>
         <Link
           prefetch={false}
           href={
             viewer?.role === "CUSTOMER"
               ? "/account#orders"
-              : "/login?next=/account#orders"
+              : "/login"
           }
         >
           <Package />
@@ -785,7 +800,7 @@ export function Storefront({
         popoverTarget="healthfield-services"
         aria-label="Open Healthfield services"
       >
-        <Image src="/healthfield-icon.png" alt="" width={54} height={46} />
+        <Image src="/healthfield-icon.png" alt="Healthfield Pharmacy services" width={54} height={46} />
       </button>
       <div
         className="approved-services-overlay"
@@ -871,6 +886,7 @@ export function Storefront({
                 aria-label="Facebook"
               >
                 <SocialIcon brand="facebook" />
+                <span className="visually-hidden">Facebook</span>
               </a>
             )}
             {contact.instagramUrl && (
@@ -881,6 +897,7 @@ export function Storefront({
                 aria-label="Instagram"
               >
                 <SocialIcon brand="instagram" />
+                <span className="visually-hidden">Instagram</span>
               </a>
             )}
             {contact.xUrl && (
@@ -901,30 +918,32 @@ export function Storefront({
                 aria-label="TikTok"
               >
                 <SocialIcon brand="tiktok" />
+                <span className="visually-hidden">TikTok</span>
               </a>
             )}
             {contact.whatsapp && (
               <a href={`https://wa.me/${contact.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" aria-label="WhatsApp">
                 <SocialIcon brand="whatsapp" />
+                <span className="visually-hidden">WhatsApp</span>
               </a>
             )}
           </div>
         </div>
         <nav>
           <strong>Shop & services</strong>
-          <a href="/#products">Shop products</a>
+          <Link href="/#products">Shop products</Link>
           <a href="/prescriptions/upload">Upload prescription</a>
           <a href="/conditions">Shop by condition</a>
-          <a href={viewer ? "/chat" : "/login?next=/chat"}>Chat with us</a>
+          <a href={viewer ? "/chat" : "/login"}>Chat with us</a>
           <a href="/account#orders">Track an order</a>
         </nav>
         <nav>
           <strong>Help & information</strong>
-          <a href="/blog">Blogs & health guide</a>
+          <Link href="/blog">Blogs & health guide</Link>
           <a href="/about">About Healthfield</a>
           <a href="/faq">Frequently asked questions</a>
           <a href="/contact">Contact us</a>
-          <a href="/pharmacy/juja">Pharmacy service areas</a>
+          <Link href="/pharmacy/juja">Pharmacy service areas</Link>
           <a href="/shipping-policy">Shipping & delivery</a>
           <a href="/returns-policy">Returns & refunds</a>
         </nav>

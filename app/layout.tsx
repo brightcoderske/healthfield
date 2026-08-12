@@ -26,12 +26,12 @@ const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.APP_URL ?? "http://localhost:3000"),
   title: {
-    default: "Healthfield Pharmacy",
+    default: "Healthfield Pharmacy Website | Pharmacy in Kenya",
     template: "%s | Healthfield Pharmacy",
   },
-  description:"Healthfield Pharmacy serves Juja, Nairobi, Kahawa West and Thika Road with genuine medicines, pharmacist support, prescription fulfilment and wellness products.",
-  keywords:["pharmacy in Juja","pharmacy in Nairobi CBD","pharmacy in Nairobi","pharmacy in Thika","pharmacy in Kahawa West","pharmacy on Thika Road","pharmacy near me","chemist around me","pharmacist near me","online pharmacy Kenya","medicine delivery Kenya"],
-  openGraph:{type:"website",siteName:"Healthfield Pharmacy",title:"Healthfield Pharmacy",description:"Shop medicines, skincare, wellness and personal-care products online.",images:["/healthfield-hero-pharmacist.png"]},
+  description:"Shop genuine medicines and wellness products on the Healthfield Pharmacy website, with pharmacist support in Juja, Nairobi and across Kenya.",
+  keywords:["Healthfield Pharmacy website","pharmacy in Kenya","pharmacy in Juja","pharmacy in Nairobi CBD","pharmacy in Nairobi","best pharmacy in Kenya","where can I get a pharmacist in Kenya","where can I get a pharmacist in Nairobi","pharmacy in Thika","pharmacy in Kahawa West","pharmacy on Thika Road","pharmacy near me","chemist around me","pharmacist near me","online pharmacy Kenya","medicine delivery Kenya"],
+  openGraph:{type:"website",siteName:"Healthfield Pharmacy",title:"Healthfield Pharmacy Website | Pharmacy in Kenya",description:"Shop genuine medicines and wellness products with pharmacist support in Juja, Nairobi and across Kenya.",images:["/healthfield-hero-pharmacist.png"]},
   manifest: "/manifest.webmanifest",
   icons: {
     icon: "/healthfield-icon.png",

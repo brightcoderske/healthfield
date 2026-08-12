@@ -45,6 +45,21 @@ export async function DELETE() {
   return response;
 }
 
+export async function PUT(request: Request) {
+  const parsed = await request.json().catch(() => null) as { items?: Array<{ productId?: unknown; quantity?: unknown }> } | null;
+  if (!Array.isArray(parsed?.items)) return NextResponse.json({ error: "Choose order items to restore." }, { status: 400 });
+  const cart: Record<number, number> = {};
+  for (const item of parsed.items.slice(0, 100)) {
+    const productId = Number(item.productId);
+    const quantity = Math.min(99, Math.max(1, Number(item.quantity)));
+    if (Number.isInteger(productId) && productId > 0 && Number.isInteger(quantity)) cart[productId] = Math.min(99, (cart[productId] || 0) + quantity);
+  }
+  if (!Object.keys(cart).length) return NextResponse.json({ error: "None of this order's products can be restored to the cart." }, { status: 409 });
+  const response = NextResponse.json({ ok: true, cart, offers: {} });
+  response.cookies.set(CART_COOKIE, serializeCart(cart, {}), { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 30, path: "/" });
+  return response;
+}
+
 export async function PATCH(request: Request) {
   const parsed = await request.json().catch(() => null) as { productIds?: unknown } | null;
   const productIds = Array.isArray(parsed?.productIds)

@@ -33,7 +33,7 @@ function OfferSlide({ offer, index }: { offer: OfferTeaser; index: number }) {
         {saving > 0 && <span className="offer-slide-badge"><small>You save</small>{money(saving)}</span>}
       </div>
       <span className="offer-slide-image" aria-hidden="true">
-        {offer.imageUrl ? <img src={offer.imageUrl} alt="" loading="lazy" decoding="async"/> : <Percent/>}
+        {offer.imageUrl ? <img src={offer.imageUrl} alt={`${offer.title} offer`} loading="lazy" decoding="async"/> : <Percent/>}
       </span>
       <span className="offer-slide-footer">
         <OfferCountdown endsAt={offer.endsAt}/>
@@ -46,7 +46,7 @@ function OfferSlide({ offer, index }: { offer: OfferTeaser; index: number }) {
 function GuideSlide({ guide }: { guide: Guide }) {
   return <article className={`guide-slide${guide.imageUrl ? "" : " no-art"}`}>
     <Link prefetch={false} className="guide-slide-image" href={`/blog/${guide.slug}`} aria-label={`Read ${guide.title}`}>
-      {guide.imageUrl ? <img src={guide.imageUrl} alt="" loading="lazy" decoding="async"/> : <BookOpen/>}
+      {guide.imageUrl ? <img src={guide.imageUrl} alt={`${guide.title} health guide`} loading="lazy" decoding="async"/> : <BookOpen/>}
       <div className="guide-slide-copy">
         <span><BookOpen/> Health guide</span>
         <strong>{guide.title}</strong>

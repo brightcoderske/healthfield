@@ -40,6 +40,8 @@ export function Dashboard({
   stats,
   analytics = [],
   recentOrders = [],
+  variant = "admin",
+  branchName,
 }: {
   name: string;
   stats: {
@@ -51,7 +53,11 @@ export function Dashboard({
   };
   analytics?: Row[];
   recentOrders?: Order[];
+  variant?: "admin" | "staff";
+  branchName?: string;
 }) {
+  const staff = variant === "staff";
+  const base = staff ? "/staff" : "/admin";
   const [range, setRange] = useState<7 | 30 | 90>(7);
   const data = useMemo(() => {
     const now = new Date(),
@@ -117,7 +123,7 @@ export function Dashboard({
     <main className={`dashboard-page ${styles.root}`}>
       <header className="dashboard-top">
         <div>
-          <span>Healthfield administration</span>
+          <span>{staff ? `${branchName || "Assigned shop"} operations` : "Healthfield administration"}</span>
           <h1>Dashboard</h1>
         </div>
         <div className="dashboard-ranges">
@@ -158,16 +164,16 @@ export function Dashboard({
           note="Based on order items"
         />
         <Metric
-          icon={<Users />}
-          label="Customers"
-          value={`${stats.customers}`}
-          note="Registered accounts"
+          icon={staff ? <Pill /> : <Users />}
+          label={staff ? "Shop products" : "Customers"}
+          value={`${staff ? stats.activeProducts : stats.customers}`}
+          note={staff ? "Active inventory records" : "Registered accounts"}
         />
         <Metric
           icon={<TriangleAlert />}
           label="Low stock"
           value={`${stats.lowStock}`}
-          note="Branch records"
+          note={staff ? branchName || "Assigned shop" : "Branch records"}
         />
       </section>
       <section className="dashboard-grid main">
@@ -205,10 +211,10 @@ export function Dashboard({
       </section>
       <section className="dashboard-grid bottom">
         <article className="dashboard-card">
-          <Card title="Recent orders" text="Latest customer activity" />
+          <Card title="Recent orders" text={staff ? "Shared order queue across all shops" : "Latest customer activity"} />
           <div className="dashboard-orders">
             {recentOrders.map((o) => (
-              <Link href={`/admin/orders/${o.id}`} key={o.id}>
+              <Link href={`${base}/orders/${o.id}`} key={o.id}>
                 <span>
                   <b>{o.orderNumber}</b>
                   <small>{o.customerName}</small>
@@ -221,25 +227,25 @@ export function Dashboard({
         </article>
         <article className="dashboard-card dashboard-alerts">
           <Card title="Action centre" text="Operational queue" />
-          <Link href="/admin/orders">
+          <Link href={`${base}/orders`}>
             <ClipboardList />
             <span>
               <b>{stats.newOrders} new orders</b>
               <small>Review and assign stock</small>
             </span>
           </Link>
-          <Link href="/admin/prescriptions">
+          <Link href={`${base}/prescriptions`}>
             <ShieldCheck />
             <span>
               <b>{stats.pendingPrescriptions} prescriptions</b>
               <small>Awaiting pharmacist review</small>
             </span>
           </Link>
-          <Link href="/admin/products">
-            <Pill />
+          <Link href={staff ? "/staff/inventory" : "/admin/products"}>
+            {staff ? <TriangleAlert /> : <Pill />}
             <span>
-              <b>{stats.activeProducts} active products</b>
-              <small>Manage catalogue and pricing</small>
+              <b>{staff ? `${stats.lowStock} low-stock records` : `${stats.activeProducts} active products`}</b>
+              <small>{staff ? `Manage stock at ${branchName || "your shop"}` : "Manage catalogue and pricing"}</small>
             </span>
           </Link>
         </article>

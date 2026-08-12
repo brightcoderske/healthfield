@@ -1,14 +1,22 @@
-import { Boxes, ClipboardCheck, PackageCheck, ShieldCheck } from "lucide-react";
-import Image from "next/image";
+import { Dashboard } from "@/app/admin/dashboard";
 import { backendJson } from "@/lib/backend-api";
 import { requireRole } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-type DashboardData = { newOrders:number; pending:number; lowStock:number; queue:Array<{id:number;orderNumber:string;customerName:string;status:string;fulfilmentMethod:string;deliveryArea:string|null}> };
+type Data = {
+  newOrders: number;
+  pendingPrescriptions: number;
+  activeProducts: number;
+  lowStock: number;
+  customers: number;
+  branch: { id: number; name: string };
+  recentOrders?: Array<{ id:number; orderNumber:string; customerName:string; status:string; total:string; createdAt:string }>;
+  analytics?: Array<{ orderId:number; createdAt:string; status:string; total:string; branch:string|null; productName:string; quantity:number; lineTotal:string; category:string|null }>;
+};
 
 export default async function StaffDashboard() {
   const session = await requireRole(["STAFF", "ADMIN", "SUPER_ADMIN"]);
-  const data = await backendJson<DashboardData>("/v1/views/staff/dashboard");
-  return <main className="role-dashboard"><header><Image src="/healthfield-logo.png" alt="Healthfield Pharmacy" width={210} height={75}/><div><small>Staff workspace</small><strong>{session.firstName}</strong><form action="/api/auth/logout" method="post"><button>Sign out</button></form></div></header><section className="role-heading"><span>All-branch fulfilment</span><h1>Orders requiring attention</h1><p>Reserve, pack and complete items from the best available branch.</p><a href="/staff/sales">Start walk-in sale</a></section><div className="role-metrics"><article><ClipboardCheck/><span><strong>{data.newOrders}</strong><small>New orders</small></span></article><article><ShieldCheck/><span><strong>{data.pending}</strong><small>Prescriptions</small></span></article><article><Boxes/><span><strong>{data.lowStock}</strong><small>Low stock</small></span></article></div><section className="staff-queue"><div><h2>Live order queue</h2></div>{data.queue.length===0?<div className="database-empty"><PackageCheck/><strong>No active orders</strong><span>New customer orders will appear here.</span></div>:data.queue.map(order=><article key={order.id}><PackageCheck/><span><strong>{order.orderNumber} · {order.customerName}</strong><small>{order.status.replaceAll("_", " ")} · {order.fulfilmentMethod}</small></span><em>{order.deliveryArea||"No area"}</em><button>Open</button></article>)}</section></main>;
+  const data = await backendJson<Data>("/v1/views/staff/dashboard");
+  return <Dashboard name={session.firstName} stats={data} analytics={data.analytics ?? []} recentOrders={data.recentOrders ?? []} variant="staff" branchName={data.branch.name}/>;
 }

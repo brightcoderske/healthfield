@@ -2,10 +2,11 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { BackendError, backendJson } from "@/lib/backend-api";
 import { requireRole } from "@/lib/auth";
+import { OrderRecoveryActions } from "../order-recovery-actions";
 
 export const dynamic = "force-dynamic";
 
-type OrderData = { order:{orderNumber:string;status:string;createdAt:string;fulfilmentMethod:string;paymentStatus:string;paymentMethod:string;paymentReference:string|null;amountPaid:string;deliveryArea:string|null;deliveryAddress:string|null;total:string};items:Array<{id:number;productName:string;quantity:number;unitPrice:string;lineTotal:string}> };
+type OrderData = { order:{id:number;orderNumber:string;status:string;createdAt:string;fulfilmentMethod:string;paymentStatus:string;paymentMethod:string;paymentReference:string|null;amountPaid:string;phone:string;deliveryArea:string|null;deliveryAddress:string|null;total:string};items:Array<{id:number;productId:number|null;productName:string;quantity:number;unitPrice:string;lineTotal:string}>;payment:{mpesaEnabled:boolean} };
 
 export default async function CustomerOrderPage({ params }: { params: Promise<{ id: string }> }) {
   await requireRole(["CUSTOMER"]);
@@ -27,6 +28,7 @@ export default async function CustomerOrderPage({ params }: { params: Promise<{ 
         {items.map((item) => <article key={item.id}><span><strong>{item.productName}</strong><small>KES {Number(item.unitPrice).toLocaleString()} each</small></span><b>{item.quantity}</b><b>KES {Number(item.lineTotal).toLocaleString()}</b></article>)}
       </div>
       <footer><span>Total</span><strong>KES {Number(order.total).toLocaleString()}</strong></footer>
+      {order.paymentStatus === "FAILED" && order.status !== "CANCELLED" ? <OrderRecoveryActions orderId={order.id} phone={order.phone} items={items.map((item) => ({ productId: item.productId, quantity: item.quantity }))} mpesaEnabled={data.payment.mpesaEnabled} /> : null}
     </section>
   </main>;
 }

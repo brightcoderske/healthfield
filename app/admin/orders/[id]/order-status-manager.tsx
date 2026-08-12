@@ -26,7 +26,7 @@ function automaticAssignments(items: Item[], fulfilments: Fulfilment[], stock: S
   }));
 }
 
-export function OrderStatusManager({ order, items, stores = [], fulfilments = [], stock = [], payments = [] }: { order: Order; items: Item[]; stores?: Store[]; fulfilments?: Fulfilment[]; stock?: Stock[]; payments?: Payment[] }) {
+export function OrderStatusManager({ order, items, stores = [], fulfilments = [], stock = [], payments = [], ordersBasePath = "/admin/orders" }: { order: Order; items: Item[]; stores?: Store[]; fulfilments?: Fulfilment[]; stock?: Stock[]; payments?: Payment[]; ordersBasePath?:string }) {
   const [status, setStatus] = useState(order.status);
   const [saved, setSaved] = useState(order.status);
   const [message, setMessage] = useState("");
@@ -62,7 +62,7 @@ export function OrderStatusManager({ order, items, stores = [], fulfilments = []
   }
 
   return <main className="order-detail admin-order-detail">
-    <header><Link href="/admin/orders">← All orders</Link><a href={`tel:${order.phone}`}>Call customer</a></header>
+    <header><Link href={ordersBasePath}>← All orders</Link><a href={`tel:${order.phone}`}>Call customer</a></header>
     <section>
       <span className="order-status">{status.replaceAll("_", " ")}</span><h1>{order.orderNumber}</h1>
       <div className="order-progress">{steps.map((step, index) => <span className={index <= position ? "done" : ""} key={step}><i>{index < position ? "✓" : index + 1}</i><small>{step === "READY_FOR_DISPATCH" ? "PACKAGED" : step.replaceAll("_", " ")}</small></span>)}</div>

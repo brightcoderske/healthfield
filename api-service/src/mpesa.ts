@@ -111,7 +111,11 @@ export function extractMpesaReceipt(message: string) {
 async function mpesaJson(url: string, init: RequestInit) {
   const response = await fetch(url, { ...init, signal: AbortSignal.timeout(20_000) });
   const data = await response.json().catch(() => ({})) as JsonRecord;
-  if (!response.ok) throw new Error(String(data.errorMessage || data.ResponseDescription || `M-Pesa returned HTTP ${response.status}.`));
+  if (!response.ok) {
+    const message = String(data.errorMessage || data.ResponseDescription || `M-Pesa returned HTTP ${response.status}.`);
+    console.warn("M-Pesa API request rejected", { endpoint: new URL(url).pathname, status: response.status, errorCode: String(data.errorCode || ""), message });
+    throw new Error(message);
+  }
   return data;
 }
 
@@ -131,6 +135,7 @@ export async function initiateStkPush(input: { orderNumber: string; phone: strin
   if (!Number.isFinite(input.amount) || input.amount <= 0 || !Number.isInteger(input.amount)) throw new Error("M-Pesa Express requires a whole Kenya-shilling amount.");
   const phone = normalizeKenyanPhone(input.phone);
   const timestamp = mpesaTimestamp();
+  console.info("Submitting M-Pesa STK request", { orderNumber: input.orderNumber, amount: input.amount, transactionType: config.transactionType, shortcodeSuffix: config.shortcode.slice(-4), partyBSuffix: config.partyB.slice(-4), phoneSuffix: phone.slice(-3) });
   const token = await accessToken(config);
   const data = await mpesaJson(`${config.baseUrl}/mpesa/stkpush/v1/processrequest`, {
     method: "POST",
@@ -138,8 +143,14 @@ export async function initiateStkPush(input: { orderNumber: string; phone: strin
     body: JSON.stringify(buildStkPushPayload(config, { ...input, phone }, timestamp)),
   });
   const checkoutRequestId = String(data.CheckoutRequestID || "");
-  if (!checkoutRequestId || String(data.ResponseCode || "") !== "0") throw new Error(String(data.ResponseDescription || data.CustomerMessage || "M-Pesa could not start the payment request."));
-  return { checkoutRequestId, merchantRequestId: String(data.MerchantRequestID || ""), customerMessage: String(data.CustomerMessage || "Check your phone to complete payment."), phone, providerPayload: data };
+  const merchantRequestId = String(data.MerchantRequestID || "");
+  const responseCode = String(data.ResponseCode || "");
+  if (!checkoutRequestId || responseCode !== "0") {
+    console.warn("M-Pesa STK request was not accepted", { orderNumber: input.orderNumber, responseCode, responseDescription: String(data.ResponseDescription || "") });
+    throw new Error(String(data.ResponseDescription || data.CustomerMessage || "M-Pesa could not start the payment request."));
+  }
+  console.info("M-Pesa STK request accepted", { orderNumber: input.orderNumber, responseCode, merchantRequestId, checkoutRequestId });
+  return { checkoutRequestId, merchantRequestId, customerMessage: String(data.CustomerMessage || "Check your phone to complete payment."), phone, providerPayload: data };
 }
 
 export async function queryStkPush(checkoutRequestId: string) {

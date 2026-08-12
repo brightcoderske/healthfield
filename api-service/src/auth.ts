@@ -5,7 +5,7 @@ import { authSessions, users } from "../../db/schema";
 import { getDb } from "./db";
 
 export type Role = "CUSTOMER" | "STAFF" | "ADMIN" | "SUPER_ADMIN";
-export type Session = { userId: number; email: string; firstName: string; role: Role; forcePasswordChange: boolean };
+export type Session = { userId: number; email: string; firstName: string; role: Role; forcePasswordChange: boolean; homeBranchId: number | null };
 export type ResetPayload = { userId: number; email: string; purpose: "password-reset" };
 
 function secret() {
@@ -82,6 +82,7 @@ export async function requestSession(request: Request, allowUploadToken = false)
         firstName: users.firstName,
         role: users.role,
         forcePasswordChange: users.forcePasswordChange,
+        homeBranchId: users.homeBranchId,
         revokedAt: authSessions.revokedAt,
         deletedAt: users.deletedAt,
       }).from(authSessions).innerJoin(users, eq(authSessions.userId, users.id)).where(and(
@@ -106,7 +107,7 @@ export async function requestSession(request: Request, allowUploadToken = false)
       audience: "healthfield-upload",
       clockTolerance: 60,
     });
-    if (typeof payload.userId !== "number" || typeof payload.email !== "string" || typeof payload.firstName !== "string" || !["CUSTOMER", "STAFF", "ADMIN", "SUPER_ADMIN"].includes(String(payload.role)) || typeof payload.forcePasswordChange !== "boolean") return null;
+    if (typeof payload.userId !== "number" || typeof payload.email !== "string" || typeof payload.firstName !== "string" || !["CUSTOMER", "STAFF", "ADMIN", "SUPER_ADMIN"].includes(String(payload.role)) || typeof payload.forcePasswordChange !== "boolean" || !(payload.homeBranchId === null || typeof payload.homeBranchId === "number")) return null;
     return payload as unknown as Session;
   } catch {
     return null;

@@ -9,7 +9,7 @@ import { getDb, closeDb } from "./db";
 import { json } from "./http";
 import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
-import { handleC2bConfirmation, handleC2bVerification, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentReview, handlePaymentStatus, handleStkNotification } from "./payment-handlers";
+import { handleC2bConfirmation, handleC2bVerification, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handleStkNotification } from "./payment-handlers";
 import {
   handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
@@ -100,6 +100,7 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/payments/status") return responseOf(handlePaymentStatus(request));
   if (url.pathname === "/v1/payments/manual") return responseOf(handleManualPayment(request));
   if (url.pathname === "/v1/payments/reconcile") return responseOf(handlePaymentReconcile(request));
+  if (url.pathname === "/v1/payments/retry") return responseOf(handlePaymentRetry(request));
   if (url.pathname === "/v1/payments/cancel") return responseOf(handlePaymentCancel(request));
   const paymentReviewMatch = url.pathname.match(/^\/v1\/payments\/(\d+)\/review$/);
   if (paymentReviewMatch) return responseOf(handlePaymentReview(request, Number(paymentReviewMatch[1])));
