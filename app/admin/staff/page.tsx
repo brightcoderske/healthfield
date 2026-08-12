@@ -1,6 +1,7 @@
 import { backendJson } from "@/lib/backend-api";
 import { requireRole } from "@/lib/auth";
 import { StaffManager } from "./staff-manager";
+import type { StaffPermission } from "@/lib/staff-permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ type Staff = {
   homeBranchId: number | null;
   isActive: boolean;
   twoFactorEnabled: boolean;
+  permissions: StaffPermission[];
 };
 
 type Store = { id: number; name: string };

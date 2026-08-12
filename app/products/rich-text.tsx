@@ -1,21 +1,10 @@
-import { Fragment, ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 
 /**
- * Renderer for the lightweight article/description markup.
- *
- * Content is stored as plain text, never HTML, so nothing an author types can
- * inject markup. Everything below is opt-in and validated:
- *
- *   **bold**   *italic*   ++underline++   ==highlight==
- *   [label](https://example.com)          {#c2185b|coloured text}
- *   {lg|larger text}   {sm|smaller text}   {xl|headline-sized text}
- *   ## Heading
- *   - bullet item
- *   1. numbered item
+ * Safe renderer for the lightweight rich-text format stored by the admin editor.
+ * Authors edit visually; these tokens are an internal storage detail only.
  */
 
-// Only navigable, non-scripting destinations. Anything else renders as plain text,
-// which keeps `javascript:` and `data:` URLs out of the page entirely.
 function safeHref(value: string) {
   const url = value.trim();
   if (/^https?:\/\//i.test(url) || /^mailto:/i.test(url) || /^tel:/i.test(url)) return url;
@@ -23,44 +12,119 @@ function safeHref(value: string) {
   return null;
 }
 
-// A colour must be a plain hex value; no arbitrary CSS may reach the style attribute.
 function safeColour(value: string) {
   return /^#[0-9a-f]{3}([0-9a-f]{3}([0-9a-f]{2})?)?$/i.test(value.trim()) ? value.trim() : null;
 }
 
-// Sizes are a fixed set of class names, never free-form CSS.
 const SIZES: Record<string, string> = { sm: "rt-sm", lg: "rt-lg", xl: "rt-xl" };
-const INLINE = /(\*\*[^*]+\*\*|\+\+[^+]+\+\+|==[^=]+==|\*[^*]+\*|\[[^\]]+\]\([^)\s]+\)|\{#[0-9a-fA-F]{3,8}\|[^}]+\}|\{(?:sm|lg|xl)\|[^}]+\})/g;
+
+function closingBrace(value: string, start: number) {
+  let depth = 0;
+  for (let index = start; index < value.length; index += 1) {
+    if (value[index] === "{") depth += 1;
+    if (value[index] === "}") depth -= 1;
+    if (depth === 0) return index;
+  }
+  return -1;
+}
+
+function topLevelDivider(value: string) {
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === "{") depth += 1;
+    else if (value[index] === "}") depth -= 1;
+    else if (value[index] === "|" && depth === 0) return index;
+  }
+  return -1;
+}
+
+function tokenStart(value: string, index: number) {
+  return value.startsWith("**", index) || value.startsWith("++", index) || value.startsWith("==", index) || value[index] === "*" || value[index] === "[" || value[index] === "{";
+}
 
 function inline(value: string, keyPrefix = ""): ReactNode[] {
   const parts: ReactNode[] = [];
-  let last = 0;
-  for (const match of value.matchAll(INLINE)) {
-    const index = match.index ?? 0;
-    if (index > last) parts.push(value.slice(last, index));
-    const token = match[0];
+  let index = 0;
+
+  while (index < value.length) {
     const key = `${keyPrefix}${index}`;
-    if (token.startsWith("**")) parts.push(<strong key={key}>{token.slice(2, -2)}</strong>);
-    else if (token.startsWith("++")) parts.push(<u key={key}>{token.slice(2, -2)}</u>);
-    else if (token.startsWith("==")) parts.push(<mark key={key}>{token.slice(2, -2)}</mark>);
-    else if (token.startsWith("[")) {
-      const label = token.slice(1, token.indexOf("]"));
-      const href = safeHref(token.slice(token.indexOf("(") + 1, -1));
-      parts.push(href
-        ? <a key={key} href={href} {...(href.startsWith("http") ? { target: "_blank", rel: "noreferrer noopener" } : {})}>{label}</a>
-        : label);
-    } else if (/^\{(sm|lg|xl)\|/.test(token)) {
-      const divider = token.indexOf("|");
-      parts.push(<span key={key} className={SIZES[token.slice(1, divider)]}>{token.slice(divider + 1, -1)}</span>);
-    } else if (token.startsWith("{#")) {
-      const divider = token.indexOf("|");
-      const colour = safeColour(token.slice(1, divider));
-      const text = token.slice(divider + 1, -1);
-      parts.push(colour ? <span key={key} style={{ color: colour }}>{text}</span> : text);
-    } else parts.push(<em key={key}>{token.slice(1, -1)}</em>);
-    last = index + token.length;
+
+    if (value.startsWith("**", index)) {
+      const end = value.indexOf("**", index + 2);
+      if (end > index + 2) {
+        parts.push(<strong key={key}>{inline(value.slice(index + 2, end), `${key}-`)}</strong>);
+        index = end + 2;
+        continue;
+      }
+    }
+    if (value.startsWith("++", index)) {
+      const end = value.indexOf("++", index + 2);
+      if (end > index + 2) {
+        parts.push(<u key={key}>{inline(value.slice(index + 2, end), `${key}-`)}</u>);
+        index = end + 2;
+        continue;
+      }
+    }
+    if (value.startsWith("==", index)) {
+      const end = value.indexOf("==", index + 2);
+      if (end > index + 2) {
+        parts.push(<mark key={key}>{inline(value.slice(index + 2, end), `${key}-`)}</mark>);
+        index = end + 2;
+        continue;
+      }
+    }
+    if (value[index] === "*") {
+      const end = value.indexOf("*", index + 1);
+      if (end > index + 1) {
+        parts.push(<em key={key}>{inline(value.slice(index + 1, end), `${key}-`)}</em>);
+        index = end + 1;
+        continue;
+      }
+    }
+    if (value[index] === "[") {
+      const labelEnd = value.indexOf("](", index + 1);
+      if (labelEnd > index && value[labelEnd + 2] !== undefined) {
+        const hrefEnd = value.indexOf(")", labelEnd + 2);
+        if (hrefEnd > labelEnd + 2) {
+          const label = value.slice(index + 1, labelEnd);
+          const href = safeHref(value.slice(labelEnd + 2, hrefEnd));
+          parts.push(href
+            ? <a key={key} href={href} {...(href.startsWith("http") ? { target: "_blank", rel: "noreferrer noopener" } : {})}>{inline(label, `${key}-`)}</a>
+            : label);
+          index = hrefEnd + 1;
+          continue;
+        }
+      }
+    }
+    if (value[index] === "{") {
+      const end = closingBrace(value, index);
+      if (end > index + 2) {
+        const token = value.slice(index + 1, end);
+        const divider = topLevelDivider(token);
+        if (divider > 0) {
+          const style = token.slice(0, divider);
+          const content = inline(token.slice(divider + 1), `${key}-`);
+          const colour = safeColour(style.startsWith("color:") ? style.slice(6) : style.startsWith("#") ? style : "");
+          const size = style.startsWith("size:") ? style.slice(5) : SIZES[style] ? style : "";
+          if (style === "b") parts.push(<strong key={key}>{content}</strong>);
+          else if (style === "i") parts.push(<em key={key}>{content}</em>);
+          else if (style === "u") parts.push(<u key={key}>{content}</u>);
+          else if (style === "mark") parts.push(<mark key={key}>{content}</mark>);
+          else if (colour) parts.push(<span key={key} style={{ color: colour }}>{content}</span>);
+          else if (SIZES[size]) parts.push(<span key={key} className={SIZES[size]}>{content}</span>);
+          else parts.push(value.slice(index, end + 1));
+          index = end + 1;
+          continue;
+        }
+      }
+    }
+
+    let end = index + 1;
+    while (end < value.length && !tokenStart(value, end)) end += 1;
+    parts.push(value.slice(index, end));
+    index = end;
   }
-  if (last < value.length) parts.push(value.slice(last));
+
   return parts;
 }
 

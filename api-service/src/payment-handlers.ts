@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
 import { activityLogs, branchInventory, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions, siteSettings } from "../../db/schema";
 import { requestSession, requireSession } from "./auth";
+import { requireTeamPermission } from "./staff-permissions";
 import { getDb } from "./db";
 import { json } from "./http";
 import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parseStkCallback, queryStkPush } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
 
-const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
 type DatabaseTransaction = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
 
@@ -238,7 +238,7 @@ export async function handlePaymentReconcile(request: Request) {
 }
 
 export async function handlePaymentReview(request: Request, transactionId: number) {
-  const auth = await requireSession(request, [...admins]);
+  const auth = await requireTeamPermission(request, "PAYMENTS_REVIEW");
   if ("response" in auth) return auth.response;
   if (request.method !== "PATCH") return json({ error: "Method not allowed." }, { status: 405 });
   const input = await request.json().catch(() => null) as { decision?: "APPROVE" | "REJECT"; note?: string } | null;
@@ -252,6 +252,7 @@ export async function handlePaymentReview(request: Request, transactionId: numbe
   } else {
     await db.update(paymentTransactions).set({ status: "FAILED", reviewedBy: auth.session.userId, reviewedAt: new Date(), resultDescription: input.note?.trim() || "Payment proof rejected by administrator." }).where(eq(paymentTransactions.id, payment.id));
     await db.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, payment.orderId));
+    await db.insert(activityLogs).values({ actorId:auth.session.userId, action:"PAYMENT_REJECTED", entityType:"order", entityId:String(payment.orderId), metadata:{ transactionId:payment.id, amount:payment.amount, actorRole:auth.session.role } });
   }
   return json({ ok: true });
 }

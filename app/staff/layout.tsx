@@ -5,5 +5,5 @@ import { StaffNavigation } from "./staff-navigation";
 export default async function StaffLayout({ children }: { children: React.ReactNode }) {
   const session=await requireRole(["STAFF", "ADMIN", "SUPER_ADMIN"]);
   const data=await backendJson<{newOrders:number;pendingPrescriptions:number;branch:{id:number;name:string}}>("/v1/views/staff/navigation");
-  return <div className="admin-shell"><StaffNavigation firstName={session.firstName} branchName={data.branch.name} counts={data}/><div className="admin-layout-content">{children}</div><AdminBackToTop/></div>;
+  return <div className="admin-shell"><StaffNavigation firstName={session.firstName} branchName={data.branch.name} counts={data} role={session.role} permissions={session.permissions}/><div className="admin-layout-content">{children}</div><AdminBackToTop/></div>;
 }

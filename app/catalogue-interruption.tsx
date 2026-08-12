@@ -7,10 +7,12 @@ import { OfferCountdown } from "./offer-countdown";
 
 export type Guide = { id:number; slug:string; title:string; excerpt:string; imageUrl:string|null };
 export type OfferTeaser = { id:number; title:string; description:string|null; total:number; normalTotal:number; isBundle:boolean; itemCount:number; imageUrl:string|null; endsAt:string|null };
+export type Promotion = { id:number; title:string; imageUrl:string; productId:number; productName:string };
 
 export type Interruption =
   | { kind:"guide"; guide:Guide; guides?:Guide[] }
-  | { kind:"offer"; offer:OfferTeaser; offers?:OfferTeaser[] };
+  | { kind:"offer"; offer:OfferTeaser; offers?:OfferTeaser[] }
+  | { kind:"promotion"; promotion:Promotion; promotions?:Promotion[] };
 
 const money = (value: number) => `KES ${Math.round(value).toLocaleString("en-KE")}`;
 
@@ -100,6 +102,22 @@ function GuideRail({ guides }: { guides: Guide[] }) {
   </aside>;
 }
 
+function PromotionRail({ promotions }: { promotions: Promotion[] }) {
+  return <aside className={`catalogue-break catalogue-break-promotion${promotions.length === 1 ? " is-single" : ""}`} aria-label="Product promotions">
+    <div className={`promotion-slider${promotions.length === 1 ? " is-single" : ""}`}>
+      {promotions.map((promotion) => <Link
+        prefetch={false}
+        className="promotion-slide"
+        href={`/products/${promotion.productId}`}
+        aria-label={`Shop ${promotion.productName}`}
+        key={promotion.id}
+      >
+        <img src={promotion.imageUrl} alt={promotion.title} loading="lazy" decoding="async"/>
+      </Link>)}
+    </div>
+  </aside>;
+}
+
 // A full-width break in the catalogue grid. It reads as editorial rather than as a
 // product tile so the scroll has a change of rhythm instead of more of the same.
 export function CatalogueInterruption({ item }: { item: Interruption }) {
@@ -119,6 +137,11 @@ export function CatalogueInterruption({ item }: { item: Interruption }) {
         {list.map((offer, index) => <OfferSlide key={offer.id} offer={offer} index={index}/>)}
       </div>
     </aside>;
+  }
+
+  if (item.kind === "promotion") {
+    const list = item.promotions && item.promotions.length ? item.promotions : [item.promotion];
+    return <PromotionRail promotions={list}/>;
   }
 
   return null;

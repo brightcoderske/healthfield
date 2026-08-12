@@ -10,7 +10,8 @@ const blank: Offer = { id: 0, title: "", description: "", bundlePrice: null, end
 const money = (value: string | number | null) => value === null || value === "" ? "" : Number(value).toString();
 const localDate = (value: string | null) => value ? new Date(value).toISOString().slice(0, 10) : "";
 
-export function OfferManager({ initial, products }: { initial: Offer[]; products: OfferProduct[] }) {
+export function OfferManager({ initial, products, backHref="/admin" }: { initial: Offer[]; products: OfferProduct[]; backHref?:string }) {
+  const [renderedAt] = useState(Date.now);
   const [editing, setEditing] = useState<Offer | null>(null);
   const [items, setItems] = useState<OfferItem[]>([]);
   const [bundlePrice, setBundlePrice] = useState("");
@@ -67,7 +68,7 @@ export function OfferManager({ initial, products }: { initial: Offer[]; products
   }
 
   return <main className="data-page offers-admin">
-    <header><a href="/admin">← Dashboard</a><h1>Offers</h1><button type="button" onClick={() => open(blank)}><Plus/> New offer</button></header>
+    <header><a href={backHref}>← Dashboard</a><h1>Offers</h1><button type="button" onClick={() => open(blank)}><Plus/> New offer</button></header>
 
     {initial.length ? <div className="offers-table-scroller">
       <table className="offers-table">
@@ -78,7 +79,7 @@ export function OfferManager({ initial, products }: { initial: Offer[]; products
         </thead>
         <tbody>
           {initial.map((offer) => {
-            const expired = offer.endsAt ? new Date(offer.endsAt).getTime() <= Date.now() : false;
+            const expired = offer.endsAt ? new Date(offer.endsAt).getTime() <= renderedAt : false;
             const live = offer.isActive && !expired;
             const group = offer.items.length > 1;
             const normal = offer.items.reduce((sum, item) => {

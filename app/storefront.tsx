@@ -26,7 +26,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { ProductCard } from "./product-card";
-import { CatalogueInterruption, type Guide, type OfferTeaser } from "./catalogue-interruption";
+import { CatalogueInterruption, type Guide, type OfferTeaser, type Promotion } from "./catalogue-interruption";
 import { planBreaks } from "@/lib/catalogue-breaks";
 
 type CatalogProduct = {
@@ -102,6 +102,7 @@ export function Storefront({
   initialWishlist,
   guides = [],
   offers = [],
+  promotions = [],
   layoutSeed = 1,
 }: {
   initialProducts: CatalogProduct[];
@@ -130,6 +131,7 @@ export function Storefront({
   initialWishlist: number[];
   guides?: Guide[];
   offers?: OfferTeaser[];
+  promotions?: Promotion[];
   layoutSeed?: number;
 }) {
   const [query, setQuery] = useState("");
@@ -197,10 +199,11 @@ export function Storefront({
     })),
     offers,
     guides,
+    promotions,
     seed: layoutSeed,
     // A shopper mid-search or mid-filter is working towards something specific.
     focused: Boolean(query.trim() || selectedCategory || selectedCondition || offersOnly),
-  }), [filtered, visibleCount, offers, guides, layoutSeed, query, selectedCategory, selectedCondition, offersOnly]);
+  }), [filtered, visibleCount, offers, guides, promotions, layoutSeed, query, selectedCategory, selectedCondition, offersOnly]);
   const breakAt = useMemo(() => new Map(breakPlan.map((entry) => [entry.position, entry.item])), [breakPlan]);
 
   const visibleConditions = initialConditions.slice(0, CONDITION_PREVIEW);

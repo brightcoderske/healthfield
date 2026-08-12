@@ -7,7 +7,12 @@ import mysql from "mysql2/promise";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const applicationRoot = resolve(repositoryRoot, "api-service");
-const environmentFile = resolve(applicationRoot, ".env");
+// Production keeps its API environment beside the service, while local split
+// development uses the repository-level .env.local. Allow callers to select
+// that file without copying credentials into another location.
+const environmentFile = process.env.API_ENV_FILE
+  ? resolve(repositoryRoot, process.env.API_ENV_FILE)
+  : resolve(applicationRoot, ".env");
 
 if (!existsSync(environmentFile)) {
   throw new Error(`Missing API environment file: ${environmentFile}`);

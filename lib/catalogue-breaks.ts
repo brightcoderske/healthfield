@@ -18,12 +18,14 @@ export type BreakOffer = {
   isBundle: boolean; itemCount: number; imageUrl: string | null; endsAt: string | null;
 };
 export type BreakGuide = { id: number; slug: string; title: string; excerpt: string; imageUrl: string | null };
+export type BreakPromotion = { id: number; title: string; imageUrl: string; productId: number; productName: string };
 
 export type BreakItem =
   // Each collection carries its lead item first plus the rest, so a wide screen can
   // slide through several rather than stretching one card across the whole row.
   | { kind: "offer"; offer: BreakOffer; offers: BreakOffer[] }
-  | { kind: "guide"; guide: BreakGuide; guides: BreakGuide[] };
+  | { kind: "guide"; guide: BreakGuide; guides: BreakGuide[] }
+  | { kind: "promotion"; promotion: BreakPromotion; promotions: BreakPromotion[] };
 
 export const INTERRUPTION_EVERY = 10;
 export const MIN_PRODUCTS_BEFORE_BREAK = 3;
@@ -116,11 +118,12 @@ export function planBreaks(input: {
   products: BreakProduct[];
   offers: BreakOffer[];
   guides: BreakGuide[];
+  promotions?: BreakPromotion[];
   seed: number;
   focused?: boolean;
   now?: number;
 }) {
-  const { products, offers, guides, seed, focused = false, now = Date.now() } = input;
+  const { products, offers, guides, promotions = [], seed, focused = false, now = Date.now() } = input;
   const random = seededRandom(seed);
   const positions = breakPositions(products.length, { focused, random });
   if (!positions.length) return [] as Array<{ position: number; item: BreakItem }>;
@@ -128,11 +131,13 @@ export function planBreaks(input: {
   const context = products.slice(0, 12).flatMap((product) => product.name.toLowerCase().split(/\s+/));
   const rankedOffers = rankOffers(offers, random, now);
   const rankedGuides = rankGuides(guides, context, random);
+  const rankedPromotions = shuffled(promotions, random);
 
-  const kinds: Array<"offer" | "guide"> = [];
+  const kinds: Array<"offer" | "guide" | "promotion"> = [];
   if (rankedOffers.length) kinds.push("offer");
   if (rankedGuides.length) kinds.push("guide");
-  // No live offer or published guide means no interruption. This explicit guard
+  if (rankedPromotions.length) kinds.push("promotion");
+  // No live offer, published guide, or active promotion means no interruption. This explicit guard
   // keeps the seeded rotation from indexing an empty list and prevents any fallback
   // to the removed product-recommendation card.
   if (!kinds.length) return [] as Array<{ position: number; item: BreakItem }>;
@@ -144,6 +149,7 @@ export function planBreaks(input: {
   // the best-ranked offer or guide is only shown first by coincidence.
   let offerCursor = 0;
   let guideCursor = 0;
+  let promotionCursor = 0;
   positions.forEach((position, index) => {
     const kind = kinds[(start + index) % kinds.length];
     if (kind === "offer") {
@@ -162,6 +168,10 @@ export function planBreaks(input: {
       guideCursor += 1;
       return;
     }
+    const promotionStart = promotionCursor % rankedPromotions.length;
+    const rotated = [...rankedPromotions.slice(promotionStart), ...rankedPromotions.slice(0, promotionStart)];
+    plan.push({ position, item: { kind: "promotion", promotion: rotated[0], promotions: rotated } });
+    promotionCursor += 1;
   });
   return plan;
 }

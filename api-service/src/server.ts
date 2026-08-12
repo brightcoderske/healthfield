@@ -11,7 +11,7 @@ import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
 import { handleC2bConfirmation, handleC2bVerification, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handleStkNotification } from "./payment-handlers";
 import {
-  handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptions, handleTaxonomy,
+  handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
 } from "./mutations";
 
@@ -81,7 +81,7 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (imageMatch && request.method === "GET") return serveProductImage(imageMatch[1]);
   const expectedKey = process.env.API_SHARED_SECRET || "";
   const suppliedKey = request.headers.get("x-healthfield-key") || "";
-  const directUpload = request.method === "POST" && (url.pathname === "/v1/products/image" || url.pathname === "/v1/prescriptions") && Boolean(origin);
+  const directUpload = request.method === "POST" && (url.pathname === "/v1/products/image" || url.pathname === "/v1/promotional-banners/image" || url.pathname === "/v1/prescriptions") && Boolean(origin);
   if (!directUpload && (!expectedKey || !safeEqual(suppliedKey, expectedKey))) return json({ error: "API access denied." }, { status: 401 });
   const trustedClientIp = request.headers.get("x-healthfield-client-ip")?.slice(0, 64) || ip;
   if (url.pathname.startsWith("/v1/auth/") && url.pathname !== "/v1/auth/session") {
@@ -110,7 +110,10 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/campaigns") return responseOf(handleCampaigns(request));
   if (url.pathname === "/v1/blogs") return responseOf(handleBlogs(request));
   const blogMatch=url.pathname.match(/^\/v1\/blogs\/(\d+)$/);if(blogMatch)return responseOf(handleBlogs(request,Number(blogMatch[1])));
+  if (url.pathname === "/v1/promotional-banners") return responseOf(handlePromotionalBanners(request));
+  const promotionalBannerMatch=url.pathname.match(/^\/v1\/promotional-banners\/(\d+)$/);if(promotionalBannerMatch)return responseOf(handlePromotionalBanners(request,Number(promotionalBannerMatch[1])));
   if (url.pathname === "/v1/settings") return responseOf(handleSettings(request));
+  if (url.pathname === "/v1/promotional-banners/image") return responseOf(handlePromotionalImage(request));
   if (url.pathname === "/v1/products/image") return responseOf(handleProductImage(request));
   if (url.pathname === "/v1/products") return responseOf(handleProducts(request));
   if (url.pathname === "/v1/categories") return responseOf(handleTaxonomy(request, "categories"));
@@ -133,6 +136,8 @@ async function route(request: Request, ip: string): Promise<Response> {
   const inventoryMatch = url.pathname.match(/^\/v1\/inventory\/(\d+)$/);
   if (inventoryMatch) return responseOf(handleInventory(request, Number(inventoryMatch[1])));
   if (url.pathname === "/v1/staff") return responseOf(handleStaff(request));
+  const staffPermissionsMatch = url.pathname.match(/^\/v1\/staff\/(\d+)\/permissions$/);
+  if (staffPermissionsMatch) return responseOf(handleStaffPermissions(request, Number(staffPermissionsMatch[1])));
   const staffMatch = url.pathname.match(/^\/v1\/staff\/(\d+)$/);
   if (staffMatch) return responseOf(handleStaff(request, Number(staffMatch[1])));
   if (url.pathname === "/v1/stores") return responseOf(handleStores(request));

@@ -1,42 +1,107 @@
 "use client";
 
-import { Heart, Minus, Plus, Share2, ShoppingBag, ShoppingCart } from "lucide-react";
+import { Check, Heart, Minus, Plus, Share2, ShoppingBag, ShoppingCart } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { CART_UPDATED_EVENT } from "./product-cart-link";
 
-export function ProductActions({ productId, productName, productUrl }: { productId:number; productName:string; productUrl:string }) {
-  const [quantity, setQuantity] = useState(1);
+export function ProductActions({ productId, productName, productUrl, initialQuantity=0, initialCartCount=0 }: { productId:number; productName:string; productUrl:string;initialQuantity?:number;initialCartCount?:number }) {
+  const [quantity, setQuantity] = useState(()=>Math.max(1,initialQuantity));
+  const [cartCount,setCartCount]=useState(initialCartCount);
+  const [cartState,setCartState]=useState<"idle"|"saving"|"added"|"error">("idle");
+  const [quantitySaving,setQuantitySaving]=useState(false);
   const [shareOpen,setShareOpen]=useState(false);
   const [copied,setCopied]=useState(false);
   const [nativeShare,setNativeShare]=useState(false);
   const shareMenu=useRef<HTMLDivElement>(null);
+  const addedTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
   const encodedUrl=encodeURIComponent(productUrl),encodedText=encodeURIComponent(`${productName} — ${productUrl}`);
 
   useEffect(()=>{
-    setNativeShare(typeof navigator.share==="function");
     const close=(event:PointerEvent)=>{if(!shareMenu.current?.contains(event.target as Node))setShareOpen(false)};
     const escape=(event:KeyboardEvent)=>{if(event.key==="Escape")setShareOpen(false)};
     document.addEventListener("pointerdown",close);
     document.addEventListener("keydown",escape);
-    return()=>{document.removeEventListener("pointerdown",close);document.removeEventListener("keydown",escape)};
+    return()=>{document.removeEventListener("pointerdown",close);document.removeEventListener("keydown",escape);if(addedTimer.current)clearTimeout(addedTimer.current)};
   },[]);
+
+  function applyCart(cart:Record<number,number>){
+    const productQuantity=Number(cart[productId])||0;
+    const nextCount=Object.values(cart).reduce((total,value)=>total+Number(value),0);
+    setQuantity(Math.max(1,productQuantity));
+    setCartCount(nextCount);
+    window.dispatchEvent(new CustomEvent(CART_UPDATED_EVENT,{detail:{count:nextCount}}));
+  }
+
+  function showFeedback(state:"added"|"error",duration:number){
+    setCartState(state);
+    if(addedTimer.current)clearTimeout(addedTimer.current);
+    addedTimer.current=setTimeout(()=>setCartState("idle"),duration);
+  }
+
+  async function sendCart(form:FormData){
+    const response=await fetch("/api/cart",{method:"POST",headers:{Accept:"application/json"},body:form});
+    const data=await response.json().catch(()=>null) as {cart?:Record<number,number>;error?:string}|null;
+    if(!response.ok||!data?.cart)throw new Error(data?.error||"Cart could not be updated.");
+    applyCart(data.cart);
+  }
+
+  async function addToCart(formElement:HTMLFormElement){
+    if(cartState==="saving"||quantitySaving)return;
+    if(addedTimer.current)clearTimeout(addedTimer.current);
+    setCartState("saving");
+    try{
+      await sendCart(new FormData(formElement));
+      showFeedback("added",1600);
+    }catch{
+      showFeedback("error",2200);
+    }
+  }
+
+  async function setCartQuantity(nextQuantity:number){
+    if(cartState==="saving"||quantitySaving)return;
+    const previousQuantity=quantity;
+    const next=Math.max(1,Math.min(99,nextQuantity));
+    setQuantity(next);
+    setQuantitySaving(true);
+    const form=new FormData();
+    form.set("productId",String(productId));
+    form.set("action","set");
+    form.set("quantity",String(next));
+    try{
+      await sendCart(form);
+    }catch{
+      setQuantity(previousQuantity);
+      showFeedback("error",2200);
+    }finally{
+      setQuantitySaving(false);
+    }
+  }
 
   async function copyLink(){await navigator.clipboard.writeText(productUrl);setCopied(true);setTimeout(()=>setCopied(false),1600)}
   async function shareMore(){try{await navigator.share({title:productName,text:productName,url:productUrl});setShareOpen(false)}catch{} }
 
   return <div className="product-actions compact-product-actions">
-    <form action="/api/cart" method="post">
-      <input type="hidden" name="productId" value={productId}/><input type="hidden" name="return" value={`/products/${productId}`}/>
-      <span className="quantity-stepper">
-        <button type="button" onClick={() => setQuantity(value => Math.max(1, value - 1))} aria-label="Decrease quantity"><Minus/></button>
-        <input name="quantity" type="number" min="1" max="99" inputMode="numeric" value={quantity} onChange={event => setQuantity(Math.max(1, Math.min(99, Number(event.target.value) || 1)))} aria-label="Quantity"/>
-        <button type="button" onClick={() => setQuantity(value => Math.min(99, value + 1))} aria-label="Increase quantity"><Plus/></button>
-      </span>
-      <button className="primary-cart-action" type="submit"><ShoppingCart/><span>Add to cart</span></button>
-    </form>
-    <a className="icon-product-action view-cart-action" href="/cart" aria-label="View cart" title="View cart"><ShoppingBag/></a>
+    <div className="product-cart-controls">
+      <div className="quantity-stepper">
+        <form action="/api/cart" method="post" onSubmit={(event)=>{event.preventDefault();void setCartQuantity(quantity-1)}}>
+          <input type="hidden" name="productId" value={productId}/><input type="hidden" name="action" value="set"/><input type="hidden" name="quantity" value={quantity-1}/><input type="hidden" name="return" value={`/products/${productId}`}/>
+          <button type="submit" disabled={quantity<=1||cartState==="saving"||quantitySaving} aria-label="Decrease cart quantity"><Minus/></button>
+        </form>
+        <input type="number" min="1" max="99" inputMode="numeric" value={quantity} readOnly aria-label="Quantity in cart" aria-live="polite"/>
+        <form action="/api/cart" method="post" onSubmit={(event)=>{event.preventDefault();void setCartQuantity(quantity+1)}}>
+          <input type="hidden" name="productId" value={productId}/><input type="hidden" name="action" value="set"/><input type="hidden" name="quantity" value={quantity+1}/><input type="hidden" name="return" value={`/products/${productId}`}/>
+          <button type="submit" disabled={quantity>=99||cartState==="saving"||quantitySaving} aria-label="Increase cart quantity"><Plus/></button>
+        </form>
+      </div>
+      <form className="product-add-form" action="/api/cart" method="post" onSubmit={(event)=>{event.preventDefault();void addToCart(event.currentTarget)}}>
+        <input type="hidden" name="productId" value={productId}/><input type="hidden" name="action" value="add"/><input type="hidden" name="quantity" value="1"/><input type="hidden" name="return" value={`/products/${productId}`}/>
+        <button className={`primary-cart-action ${cartState==="added"?"is-added":""}`} type="submit" disabled={cartState==="saving"||quantitySaving} aria-live="polite">{cartState==="added"?<Check/>:<ShoppingCart/>}<span>{cartState==="saving"?"Adding…":cartState==="added"?"Added to cart":cartState==="error"?"Try again":"Add to cart"}</span>{cartCount>0?<b className="cart-action-badge" aria-label={`${cartCount} items in cart`}>{cartCount>99?"99+":cartCount}</b>:null}</button>
+      </form>
+    </div>
+    <a className="icon-product-action view-cart-action" href="/cart" aria-label={`View cart with ${cartCount} items`} title="View cart"><ShoppingBag/>{cartCount>0?<b className="cart-action-badge" aria-hidden="true">{cartCount>99?"99+":cartCount}</b>:null}</a>
     <form className="icon-action-form" action="/api/wishlist" method="post"><input type="hidden" name="productId" value={productId}/><input type="hidden" name="return" value={`/products/${productId}`}/><button className="icon-product-action wishlist-product-action" type="submit" aria-label="Add to wishlist" title="Wishlist"><Heart/></button></form>
     <div className="product-share-menu" ref={shareMenu}>
-      <button className="icon-product-action share-product-action" type="button" onClick={()=>setShareOpen(open=>!open)} aria-label={`Share ${productName}`} aria-expanded={shareOpen} title="Share"><Share2/></button>
+      <button className="icon-product-action share-product-action" type="button" onClick={()=>{setNativeShare(typeof navigator.share==="function");setShareOpen(open=>!open)}} aria-label={`Share ${productName}`} aria-expanded={shareOpen} title="Share"><Share2/></button>
       {shareOpen&&<div className="product-share-popover" role="menu">
         <button type="button" onClick={copyLink}>{copied?"Link copied":"Copy link"}</button>
         <a href={`https://wa.me/?text=${encodedText}`} target="_blank" rel="noreferrer">WhatsApp</a>

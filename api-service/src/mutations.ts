@@ -7,8 +7,9 @@ import sharp from "sharp";
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions,
-  activityLogs, authSessions, blogPostProducts, blogPosts, categories, offerItems, offers, emailVerificationTokens, healthConditions, prescriptionRequestItems, prescriptions, productHealthConditions, productReviews, products, siteSettings, twoFactorChallenges, users,
+  activityLogs, authSessions, blogPostProducts, blogPosts, categories, offerItems, offers, emailVerificationTokens, healthConditions, prescriptionRequestItems, prescriptions, productHealthConditions, productReviews, products, promotionalBanners, siteSettings, staffPermissions, twoFactorChallenges, users,
 } from "../../db/schema";
+import { DEFAULT_STAFF_PERMISSIONS, normalizeStaffPermissions } from "../../lib/staff-permissions";
 import { canApplyPrescriptionAction, prescriptionReviewActions, type PrescriptionReviewAction, type PrescriptionStatus } from "../../lib/prescription-workflow";
 import { createPasswordResetToken, createSessionToken, createUploadToken, hasStoredTimestamp, requireSession, requestSession, revokeSession, revokeUserSessions, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
@@ -21,6 +22,7 @@ import { queuePaidOrderNotification } from "./order-notifications";
 import { replayStoredStkCallback } from "./payment-handlers";
 import { canGrantTeamRole, canManageTeamAccount } from "./staff-access-policy";
 import { secureHashEqual, twoFactorChallengeLifetimeMs, twoFactorCodeHash, twoFactorMaximumAttempts, twoFactorMaximumResends, twoFactorResendCooldownMs, twoFactorTiming } from "./two-factor";
+import { requireTeamPermission, sessionHasPermission } from "./staff-permissions";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -121,7 +123,7 @@ export async function handleAuth(request: Request, action: string) {
     const valid = user ? await bcrypt.compare(parsed.data.password, user.passwordHash) : await bcrypt.compare(parsed.data.password, "$2b$12$1BVjhn5Hc7qJCnn84gWmTOj3DdbFI4zmL.RXsnXC6CIscSwMPxYjC");
     if (!user || !valid || !user.isActive) return json({ error: "Incorrect email or password." }, { status: 401 });
     if (user.role === "CUSTOMER" && !user.emailVerifiedAt) return json({ error: "Verify your email before signing in.", code: "EMAIL_NOT_VERIFIED" }, { status: 403 });
-    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange, homeBranchId: user.homeBranchId };
+    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange, homeBranchId: user.homeBranchId, permissions: [] };
     if (team.includes(user.role as typeof team[number])) {
       const [settings] = await db.select({ requireTeamTwoFactor: siteSettings.requireTeamTwoFactor }).from(siteSettings).limit(1);
       if (settings?.requireTeamTwoFactor) {
@@ -160,7 +162,7 @@ export async function handleAuth(request: Request, action: string) {
     // can both read the row, but exactly one can claim this code.
     const [claimed] = await db.update(twoFactorChallenges).set({ usedAt: new Date() }).where(and(eq(twoFactorChallenges.id, challenge.id), eq(twoFactorChallenges.codeHash, expected), isNull(twoFactorChallenges.usedAt), eq(twoFactorChallenges.attemptCount, challenge.attemptCount), gte(twoFactorChallenges.expiresAtMs, now)));
     if (claimed.affectedRows !== 1) return json({ error: "This security code has already been used." }, { status: 401 });
-    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange, homeBranchId: user.homeBranchId };
+    const session = { userId: user.id, email: user.email, firstName: user.firstName, role: user.role, forcePasswordChange: user.forcePasswordChange, homeBranchId: user.homeBranchId, permissions: [] };
     let token: string;
     try {
       token = await createSessionToken(session);
@@ -371,7 +373,7 @@ export async function handleOrders(request: Request, id?: number) {
     return json({ ok: true, message: `Order ${order.orderNumber} was deleted.` });
   }
   if (request.method === "PATCH" && id) {
-    const auth = await requireSession(request, [...team]);
+    const auth = await requireTeamPermission(request, "ORDERS_PROCESS");
     if ("response" in auth) return auth.response;
     const parsed = z.object({ status:z.enum(orderStatuses),customerName:z.string().trim().max(200).optional(),phone:z.string().trim().max(30).optional(),email:z.string().trim().max(190).nullable().optional(),deliveryAddress:z.string().trim().max(1000).nullable().optional(),deliveryArea:z.string().trim().max(160).nullable().optional(),fulfilments:z.array(z.object({orderItemId:z.number().int().positive(),branchId:z.number().int().positive(),quantityReserved:z.number().int().nonnegative(),quantityPacked:z.number().int().nonnegative(),status:z.enum(["UNASSIGNED","RESERVED","PARTIALLY_RESERVED","PACKED","READY","UNAVAILABLE","REPLACED"])})).optional() }).safeParse(await body(request));
     if (!Number.isInteger(id) || !parsed.success) return json({ error: "Check the order details and status." }, { status: 400 });
@@ -525,7 +527,7 @@ export async function handleOrders(request: Request, id?: number) {
 }
 
 export async function handleWalkInSales(request: Request) {
-  const auth = await requireSession(request, [...team]);
+  const auth = await requireTeamPermission(request, "POS_USE");
   if ("response" in auth) return auth.response;
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
   const parsed = z.object({
@@ -683,12 +685,13 @@ export async function handleReviews(request: Request, productId: number) {
 }
 
 export async function handleOffers(request: Request, id?: number) {
-  const auth = await requireSession(request, [...admins]);
+  const auth = await requireTeamPermission(request, "OFFERS_MANAGE");
   if ("response" in auth) return auth.response;
   const db = getDb();
   if (request.method === "DELETE" && id) {
     await db.delete(offerItems).where(eq(offerItems.offerId, id));
     await db.delete(offers).where(eq(offers.id, id));
+    await db.insert(activityLogs).values({ actorId:auth.session.userId, action:"OFFER_DELETED", entityType:"offer", entityId:String(id), metadata:{ actorRole:auth.session.role } });
     return json({ ok: true });
   }
   if (request.method !== "POST" && request.method !== "PATCH") return json({ error: "Method not allowed." }, { status: 405 });
@@ -731,6 +734,7 @@ export async function handleOffers(request: Request, id?: number) {
     offerId, productId: item.productId, quantity: item.quantity ?? 1, displayOrder: index,
     offerPrice: isGroup ? null : String(item.offerPrice),
   })));
+  await db.insert(activityLogs).values({ actorId:auth.session.userId, action:request.method === "POST" ? "OFFER_CREATED" : "OFFER_UPDATED", entityType:"offer", entityId:String(offerId), metadata:{ title:fields.title, productIds:items.map((item)=>item.productId), isActive:fields.isActive, actorRole:auth.session.role } });
   return json({ ok: true, id: offerId }, { status: request.method === "POST" ? 201 : 200 });
 }
 
@@ -750,10 +754,57 @@ async function setBlogProducts(postId: number, productIds: number[]) {
 export async function handleBlogs(request: Request, id?: number) {
   const db=getDb();
   if(request.method==="GET"&&!id)return json({posts:await db.select().from(blogPosts).where(eq(blogPosts.isPublished,true)).orderBy(desc(blogPosts.publishedAt))});
-  const auth=await requireSession(request,[...admins]);if("response" in auth)return auth.response;
-  if(request.method==="POST"&&!id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(50000),imageUrl:z.string().trim().max(500).optional().default(""),metaTitle:z.string().trim().max(220).optional().default(""),metaDescription:z.string().trim().max(500).optional().default(""),isPublished:z.boolean().default(false),category:z.string().trim().max(60).optional().default(""),productIds:z.array(z.number().int().positive()).max(blogProductLimit).optional().default([])}).safeParse(await body(request));if(!parsed.success)return json({error:"Complete the blog title, excerpt and article."},{status:400});const {productIds,...rest}=parsed.data;const fields={...rest,category:rest.category||null};const slug=`${fields.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")}-${Date.now().toString(36)}`,[created]=await db.insert(blogPosts).values({...fields,slug,imageUrl:fields.imageUrl||null,metaTitle:fields.metaTitle||null,metaDescription:fields.metaDescription||null,publishedAt:fields.isPublished?new Date():null,authorId:auth.session.userId});await setBlogProducts(created.insertId,productIds);return json({id:created.insertId,slug},{status:201})}
-  if(request.method==="PATCH"&&id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(50000),imageUrl:z.string().trim().max(500).nullable(),metaTitle:z.string().trim().max(220).nullable(),metaDescription:z.string().trim().max(500).nullable(),isPublished:z.boolean(),category:z.string().trim().max(60).optional(),productIds:z.array(z.number().int().positive()).max(blogProductLimit).optional()}).safeParse(await body(request));if(!parsed.success)return json({error:"Complete the blog title, excerpt and article."},{status:400});const {productIds,...rest}=parsed.data;const fields={...rest,...(rest.category===undefined?{}:{category:rest.category||null})};await db.update(blogPosts).set({...fields,publishedAt:fields.isPublished?new Date():null}).where(eq(blogPosts.id,id));if(productIds!==undefined)await setBlogProducts(id,productIds);return json({ok:true})}
-  if(request.method==="DELETE"&&id){await db.delete(blogPostProducts).where(eq(blogPostProducts.postId,id));await db.delete(blogPosts).where(eq(blogPosts.id,id));return json({ok:true})}return json({error:"Method not allowed."},{status:405});
+  const auth=await requireTeamPermission(request,"BLOGS_MANAGE");if("response" in auth)return auth.response;
+  if(request.method==="POST"&&!id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(50000),imageUrl:z.string().trim().max(500).optional().default(""),metaTitle:z.string().trim().max(220).optional().default(""),metaDescription:z.string().trim().max(500).optional().default(""),isPublished:z.boolean().default(false),category:z.string().trim().max(60).optional().default(""),productIds:z.array(z.number().int().positive()).max(blogProductLimit).optional().default([])}).safeParse(await body(request));if(!parsed.success)return json({error:"Complete the blog title, excerpt and article."},{status:400});const {productIds,...rest}=parsed.data;const fields={...rest,category:rest.category||null};const slug=`${fields.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")}-${Date.now().toString(36)}`,[created]=await db.insert(blogPosts).values({...fields,slug,imageUrl:fields.imageUrl||null,metaTitle:fields.metaTitle||null,metaDescription:fields.metaDescription||null,publishedAt:fields.isPublished?new Date():null,authorId:auth.session.userId});await setBlogProducts(created.insertId,productIds);await db.insert(activityLogs).values({actorId:auth.session.userId,action:"BLOG_CREATED",entityType:"blog",entityId:String(created.insertId),metadata:{title:fields.title,isPublished:fields.isPublished,actorRole:auth.session.role}});return json({id:created.insertId,slug},{status:201})}
+  if(request.method==="PATCH"&&id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(50000),imageUrl:z.string().trim().max(500).nullable(),metaTitle:z.string().trim().max(220).nullable(),metaDescription:z.string().trim().max(500).nullable(),isPublished:z.boolean(),category:z.string().trim().max(60).optional(),productIds:z.array(z.number().int().positive()).max(blogProductLimit).optional()}).safeParse(await body(request));if(!parsed.success)return json({error:"Complete the blog title, excerpt and article."},{status:400});const {productIds,...rest}=parsed.data;const fields={...rest,...(rest.category===undefined?{}:{category:rest.category||null})};await db.update(blogPosts).set({...fields,publishedAt:fields.isPublished?new Date():null}).where(eq(blogPosts.id,id));if(productIds!==undefined)await setBlogProducts(id,productIds);await db.insert(activityLogs).values({actorId:auth.session.userId,action:"BLOG_UPDATED",entityType:"blog",entityId:String(id),metadata:{title:fields.title,isPublished:fields.isPublished,actorRole:auth.session.role}});return json({ok:true})}
+  if(request.method==="DELETE"&&id){await db.delete(blogPostProducts).where(eq(blogPostProducts.postId,id));await db.delete(blogPosts).where(eq(blogPosts.id,id));await db.insert(activityLogs).values({actorId:auth.session.userId,action:"BLOG_DELETED",entityType:"blog",entityId:String(id),metadata:{actorRole:auth.session.role}});return json({ok:true})}return json({error:"Method not allowed."},{status:405});
+}
+
+export async function handlePromotionalBanners(request: Request, id?: number) {
+  const auth = await requireSession(request, [...admins]);
+  if ("response" in auth) return auth.response;
+  const db = getDb();
+
+  if (request.method === "DELETE" && id) {
+    const [existing] = await db.select({ id: promotionalBanners.id, title: promotionalBanners.title }).from(promotionalBanners).where(eq(promotionalBanners.id, id)).limit(1);
+    if (!existing) return json({ error: "Promotional banner not found." }, { status: 404 });
+    await db.transaction(async (tx) => {
+      await tx.delete(promotionalBanners).where(eq(promotionalBanners.id, id));
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PROMOTIONAL_BANNER_DELETED", entityType: "promotional_banner", entityId: String(id), metadata: { title: existing.title, actorRole: auth.session.role } });
+    });
+    return json({ ok: true });
+  }
+
+  if (request.method !== "POST" && request.method !== "PATCH") return json({ error: "Method not allowed." }, { status: 405 });
+  if (request.method === "PATCH" && !id) return json({ error: "Promotional banner not found." }, { status: 404 });
+  const parsed = z.object({
+    title: z.string().trim().min(2).max(180),
+    imageUrl: z.string().trim().min(1).max(500),
+    productId: z.number().int().positive(),
+    isActive: z.boolean().default(true),
+    displayOrder: z.number().int().min(0).max(10000).optional().default(0),
+  }).safeParse(await body(request));
+  if (!parsed.success) return json({ error: "Add an advert image and choose the product it should open." }, { status: 400 });
+  const [product] = await db.select({ id: products.id }).from(products).where(and(eq(products.id, parsed.data.productId), eq(products.isActive, true))).limit(1);
+  if (!product) return json({ error: "Choose an active product for this advert." }, { status: 409 });
+  const values = { ...parsed.data, imageUrl: normalizeStoredImageUrl(parsed.data.imageUrl) ?? parsed.data.imageUrl };
+
+  if (request.method === "POST") {
+    const [created] = await db.transaction(async (tx) => {
+      const result = await tx.insert(promotionalBanners).values({ ...values, createdBy: auth.session.userId });
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PROMOTIONAL_BANNER_CREATED", entityType: "promotional_banner", entityId: String(result[0].insertId), metadata: { title: values.title, productId: values.productId, isActive: values.isActive, actorRole: auth.session.role } });
+      return result;
+    });
+    return json({ ok: true, id: created.insertId }, { status: 201 });
+  }
+
+  const [existing] = await db.select({ id: promotionalBanners.id }).from(promotionalBanners).where(eq(promotionalBanners.id, id!)).limit(1);
+  if (!existing) return json({ error: "Promotional banner not found." }, { status: 404 });
+  await db.transaction(async (tx) => {
+    await tx.update(promotionalBanners).set(values).where(eq(promotionalBanners.id, id!));
+    await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PROMOTIONAL_BANNER_UPDATED", entityType: "promotional_banner", entityId: String(id), metadata: { title: values.title, productId: values.productId, isActive: values.isActive, actorRole: auth.session.role } });
+  });
+  return json({ ok: true });
 }
 
 export const featuredCategoryLimit = 6;
@@ -819,16 +870,17 @@ async function optimizeProductImage(bytes: Buffer<ArrayBufferLike>, type: string
   }
 }
 
-export async function handleProductImage(request: Request) {
-  const auth = await requireSession(request, [...admins], true);
+async function handleImageUpload(request: Request, kind: "product" | "promotion") {
+  const auth = kind === "product" ? await requireTeamPermission(request, "BLOGS_MANAGE") : await requireSession(request, [...admins], true);
   if ("response" in auth) return auth.response;
   const form = await request.formData();
   const image = form.get("image");
-  if (!(image instanceof File)) return json({ error: "Choose a product image." }, { status: 400 });
+  if (!(image instanceof File)) return json({ error: kind === "promotion" ? "Choose a promotional banner image." : "Choose a product image." }, { status: 400 });
   const types = new Map([["image/jpeg", "jpg"], ["image/png", "png"], ["image/webp", "webp"], ["image/gif", "gif"], ["image/avif", "avif"], ["image/bmp", "bmp"], ["image/tiff", "tiff"]]);
   const extension = types.get(image.type.toLowerCase());
   if (!extension) return json({ error: "Use JPEG, PNG, WebP, GIF, AVIF, BMP or TIFF." }, { status: 415 });
-  if (image.size <= 0 || image.size > 2 * 1024 * 1024) return json({ error: "Product images must be 2 MB or smaller." }, { status: 413 });
+  if (kind === "promotion" && !new Set(["image/jpeg", "image/png", "image/webp"]).has(image.type.toLowerCase())) return json({ error: "Promotional banners must be JPEG, PNG or WebP." }, { status: 415 });
+  if (image.size <= 0 || image.size > 2 * 1024 * 1024) return json({ error: `${kind === "promotion" ? "Promotional banner" : "Product"} images must be 2 MB or smaller.` }, { status: 413 });
   let bytes: Buffer<ArrayBufferLike> = Buffer.from(await image.arrayBuffer());
   const ascii = (start: number, end: number) => String.fromCharCode(...bytes.slice(start, end));
   const validSignature = image.type === "image/jpeg" ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
@@ -845,6 +897,29 @@ export async function handleProductImage(request: Request) {
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, filename), bytes, { flag: "wx" });
   return json({ imageUrl: publicImageUrl(`/uploads/products/${filename}`) }, { status: 201 });
+}
+
+async function optimizePrescriptionImage(bytes: Buffer<ArrayBufferLike>, type: string): Promise<Buffer<ArrayBufferLike>> {
+  try {
+    const image = sharp(bytes, { limitInputPixels: 40_000_000 }).rotate();
+    const optimized = type === "image/png" ? await image.png({ compressionLevel:9, adaptiveFiltering:true }).toBuffer()
+      : type === "image/webp" ? await image.webp({ quality:86, effort:4 }).toBuffer()
+      : type === "image/avif" ? await image.avif({ quality:65, effort:4 }).toBuffer()
+      : type === "image/tiff" ? await image.tiff({ quality:85, compression:"lzw" }).toBuffer()
+      : await image.jpeg({ quality:86, progressive:true, mozjpeg:true }).toBuffer();
+    return optimized.length < bytes.length ? optimized : bytes;
+  } catch (error) {
+    console.warn("Prescription image optimization skipped", { name:error instanceof Error ? error.name : undefined });
+    return bytes;
+  }
+}
+
+export async function handleProductImage(request: Request) {
+  return handleImageUpload(request, "product");
+}
+
+export async function handlePromotionalImage(request: Request) {
+  return handleImageUpload(request, "promotion");
 }
 
 export async function serveProductImage(filename: string) {
@@ -875,6 +950,10 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   if (downloadId) {
     const auth = await requireSession(request, [...team, "CUSTOMER"]);
     if ("response" in auth) return auth.response;
+    if (auth.session.role === "STAFF") {
+      const permission = request.method === "GET" ? "PRESCRIPTIONS_VIEW" : "PRESCRIPTIONS_PROCESS";
+      if (!sessionHasPermission(auth.session, permission)) return json({ error:"You do not have permission to perform this prescription action." }, { status:403 });
+    }
     const db=getDb();
     if(request.method==="DELETE"){
       if(!admins.includes(auth.session.role as typeof admins[number]))return json({error:"Only an administrator can delete a prescription request."},{status:403});
@@ -1019,13 +1098,20 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   catch { return json({ error: "The linked prescription medicines are invalid." }, { status: 400 }); }
   const uploadItems = z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).max(50).safeParse(submittedItems);
   if (!uploadItems.success || new Set(uploadItems.data.map((item) => item.productId)).size !== uploadItems.data.length) return json({ error: "The linked prescription medicines are invalid." }, { status: 400 });
-  const allowed = new Map([["application/pdf", ".pdf"], ["image/png", ".png"], ["image/jpeg", ".jpg"]]);
+  const allowed = new Map([["application/pdf", ".pdf"], ["image/png", ".png"], ["image/jpeg", ".jpg"], ["image/webp", ".webp"], ["image/avif", ".avif"], ["image/tiff", ".tiff"]]);
   const extension = allowed.get(file.type);
-  if (!extension) return json({ error: "Only PDF, PNG, JPG and JPEG files are supported." }, { status: 415 });
-  if (file.size <= 0 || file.size > 2 * 1024 * 1024) return json({ error: "The file must be 2 MB or smaller." }, { status: 413 });
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const valid = file.type === "application/pdf" ? bytes.slice(0, 4).toString() === "37,80,68,70" : file.type === "image/png" ? bytes.slice(0, 8).toString() === "137,80,78,71,13,10,26,10" : bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (!extension) return json({ error: "Supported files are PDF, JPG, JPEG, PNG, WebP, AVIF and TIFF." }, { status: 415 });
+  if (file.size <= 0 || file.size > 10 * 1024 * 1024) return json({ error: "The file must be 10 MB or smaller." }, { status: 413 });
+  let bytes: Buffer<ArrayBufferLike> = Buffer.from(await file.arrayBuffer());
+  const ascii = (start:number,end:number) => String.fromCharCode(...bytes.slice(start,end));
+  const valid = file.type === "application/pdf" ? ascii(0,4) === "%PDF"
+    : file.type === "image/png" ? ascii(1,4) === "PNG"
+    : file.type === "image/jpeg" ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    : file.type === "image/webp" ? ascii(0,4) === "RIFF" && ascii(8,12) === "WEBP"
+    : file.type === "image/avif" ? ascii(4,8) === "ftyp" && ["avif","avis"].includes(ascii(8,12))
+    : ascii(0,4) === "II*\0" || ascii(0,4) === "MM\0*";
   if (!valid) return json({ error: "The file content does not match its format." }, { status: 400 });
+  if (file.type !== "application/pdf") bytes = await optimizePrescriptionImage(bytes, file.type);
   const db = getDb();
   const linkedProducts = uploadItems.data.length ? await db.select({ id: products.id, name: products.name, prescriptionRequired: products.prescriptionRequired, isActive: products.isActive }).from(products).where(inArray(products.id, uploadItems.data.map((item) => item.productId))) : [];
   if (linkedProducts.length !== uploadItems.data.length || linkedProducts.some((product) => !product.isActive || !product.prescriptionRequired)) return json({ error: "Only active prescription medicines can be linked from the cart." }, { status: 409 });
@@ -1039,7 +1125,7 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
     const senderName = `${sender?.firstName || auth.session.firstName} ${sender?.lastName || ""}`.trim().slice(0, 200);
     const displayName = `Prescription - ${senderName} - ${new Date().toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}${extension}`;
     const created = await db.transaction(async (tx) => {
-      const [requestRow] = await tx.insert(prescriptions).values({ customerId: auth.session.userId, senderName, storageKey: storedName, originalFilename: displayName, mimeType: file.type, sizeBytes: file.size, status: "UNDER_REVIEW" });
+      const [requestRow] = await tx.insert(prescriptions).values({ customerId: auth.session.userId, senderName, storageKey: storedName, originalFilename: displayName, mimeType: file.type, sizeBytes: bytes.length, status: "UNDER_REVIEW" });
       if (linkedProducts.length) await tx.insert(prescriptionRequestItems).values(linkedProducts.map((product) => ({ prescriptionId: requestRow.insertId, productId: product.id, productName: product.name, requestedQuantity: uploadItems.data.find((item) => item.productId === product.id)!.quantity, availability: "PENDING" as const, source: "CUSTOMER_CART" as const })));
       await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_REQUEST_CREATED", entityType: "prescription", entityId: String(requestRow.insertId), metadata: { linkedProductIds: linkedProducts.map((product) => product.id) } });
       return requestRow;
@@ -1133,7 +1219,7 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
 }
 
 export async function handleInventory(request: Request, id: number) {
-  const auth = await requireSession(request, [...team]);
+  const auth = await requireTeamPermission(request, "INVENTORY_UPDATE");
   if ("response" in auth) return auth.response;
   if (request.method !== "PATCH") return json({ error: "Method not allowed." }, { status: 405 });
   const parsed = z.object({ quantityAvailable: z.number().int().nonnegative(), quantityReserved: z.number().int().nonnegative(), reorderLevel: z.number().int().nonnegative() }).safeParse(await body(request));
@@ -1189,6 +1275,7 @@ export async function handleStaff(request: Request, id?: number) {
       const { password, ...values } = parsed.data;
       const createdId = await db.transaction(async (tx) => {
         const [created] = await tx.insert(users).values({ ...values, homeBranchId: values.role === "STAFF" ? values.homeBranchId : null, phone: values.phone || null, passwordHash: await hash(password, 12), isActive: true, forcePasswordChange: true });
+        if (values.role === "STAFF") await tx.insert(staffPermissions).values(DEFAULT_STAFF_PERMISSIONS.map((permission) => ({ userId: created.insertId, permission, grantedBy: auth.session.userId })));
         await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "STAFF_ACCOUNT_CREATED", entityType: "USER", entityId: String(created.insertId), metadata: { actorRole: auth.session.role, targetRole: values.role, homeBranchId: values.role === "STAFF" ? values.homeBranchId : null } });
         return created.insertId;
       });
@@ -1216,6 +1303,10 @@ export async function handleStaff(request: Request, id?: number) {
     const sessionsMustBeRevoked = Boolean(password) || values.role !== undefined || values.homeBranchId !== undefined || values.isActive !== undefined;
     await db.transaction(async (tx) => {
       await tx.update(users).set({ ...values, homeBranchId: resultingRole === "STAFF" ? resultingBranchId : null, phone: values.phone === "" ? null : values.phone, ...(password ? { passwordHash: await hash(password, 12), forcePasswordChange: true } : {}) }).where(eq(users.id, id));
+      if (target.role !== resultingRole) {
+        await tx.delete(staffPermissions).where(eq(staffPermissions.userId, id));
+        if (resultingRole === "STAFF") await tx.insert(staffPermissions).values(DEFAULT_STAFF_PERMISSIONS.map((permission) => ({ userId: id, permission, grantedBy: auth.session.userId })));
+      }
       if (values.isActive === false) await tx.delete(twoFactorChallenges).where(eq(twoFactorChallenges.userId, id));
       if (sessionsMustBeRevoked) await tx.update(authSessions).set({ revokedAt: new Date() }).where(and(eq(authSessions.userId, id), isNull(authSessions.revokedAt)));
       await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "STAFF_ACCOUNT_UPDATED", entityType: "USER", entityId: String(id), metadata: { actorRole: auth.session.role, before: { role: target.role, homeBranchId: target.homeBranchId, isActive: target.isActive }, after: { role: resultingRole, homeBranchId: resultingRole === "STAFF" ? resultingBranchId : null, isActive: values.isActive ?? target.isActive }, passwordReset: Boolean(password), sessionsRevoked: sessionsMustBeRevoked } });
@@ -1236,6 +1327,29 @@ export async function handleStaff(request: Request, id?: number) {
     return json({ ok: true });
   }
   return json({ error: "Method not allowed." }, { status: 405 });
+}
+
+export async function handleStaffPermissions(request: Request, id: number) {
+  const auth = await requireSession(request, [...admins]);
+  if ("response" in auth) return auth.response;
+  if (request.method !== "PATCH") return json({ error: "Method not allowed." }, { status: 405 });
+  const parsed = z.object({ permissions: z.array(z.string()).max(DEFAULT_STAFF_PERMISSIONS.length) }).safeParse(await body(request));
+  if (!parsed.success) return json({ error: "Choose valid staff permissions." }, { status: 400 });
+  const requested = normalizeStaffPermissions(parsed.data.permissions);
+  if (requested.length !== new Set(parsed.data.permissions).size) return json({ error: "One or more permissions are invalid or duplicated." }, { status: 400 });
+  const db = getDb();
+  const [target] = await db.select({ id: users.id, role: users.role, firstName: users.firstName, lastName: users.lastName }).from(users).where(and(eq(users.id, id), isNull(users.deletedAt))).limit(1);
+  if (!target) return json({ error: "Staff account not found." }, { status: 404 });
+  if (target.role !== "STAFF") return json({ error: "Granular permissions apply to staff accounts. Administrators already have full access." }, { status: 409 });
+  if (!canManageTeamAccount(auth.session.role, target.role)) return json({ error: "You cannot manage permissions for this account." }, { status: 403 });
+  const before = normalizeStaffPermissions((await db.select({ permission: staffPermissions.permission }).from(staffPermissions).where(eq(staffPermissions.userId, id))).map((row) => row.permission));
+  await db.transaction(async (tx) => {
+    await tx.delete(staffPermissions).where(eq(staffPermissions.userId, id));
+    if (requested.length) await tx.insert(staffPermissions).values(requested.map((permission) => ({ userId: id, permission, grantedBy: auth.session.userId })));
+    await tx.update(authSessions).set({ revokedAt: new Date() }).where(and(eq(authSessions.userId, id), isNull(authSessions.revokedAt)));
+    await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "STAFF_PERMISSIONS_UPDATED", entityType: "USER", entityId: String(id), metadata: { actorRole: auth.session.role, staffName: `${target.firstName} ${target.lastName}`, before, after: requested, sessionsRevoked: true } });
+  });
+  return json({ ok: true, permissions: requested, message: "Permissions saved. The staff member must sign in again." });
 }
 
 export async function handleStores(request: Request, id?: number) {

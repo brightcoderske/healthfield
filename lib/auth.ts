@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { firstStaffPath, hasStaffPermission, type StaffPermission } from "./staff-permissions";
 
 export const SESSION_COOKIE = "healthfield_session";
 export type Role = "CUSTOMER" | "STAFF" | "ADMIN" | "SUPER_ADMIN";
@@ -11,6 +12,7 @@ export type Session = {
   role: Role;
   forcePasswordChange: boolean;
   homeBranchId: number | null;
+  permissions: StaffPermission[];
 };
 
 export async function getSession() {
@@ -37,8 +39,16 @@ export async function requireRole(allowed: Role[]) {
   return session;
 }
 
+export async function requireStaffPermission(permission: StaffPermission) {
+  const session = await requireRole(["STAFF", "ADMIN", "SUPER_ADMIN"]);
+  if (!hasStaffPermission(session.role, session.permissions, permission)) redirect("/unauthorized");
+  return session;
+}
+
 export function roleHome(role: Role) {
   if (role === "SUPER_ADMIN" || role === "ADMIN") return "/admin";
   if (role === "STAFF") return "/staff";
   return "/account";
 }
+
+export { firstStaffPath };

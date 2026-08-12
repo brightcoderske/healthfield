@@ -197,6 +197,20 @@
       "when": 1786684800000,
       "tag": "0027_prescription_request_workflow",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "5",
+      "when": 1786771200000,
+      "tag": "0028_promotional_banners",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "5",
+      "when": 1786857600000,
+      "tag": "0029_staff_permissions",
+      "breakpoints": true
     }
   ]
 }

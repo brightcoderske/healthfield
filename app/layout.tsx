@@ -8,6 +8,7 @@ import "./licence-admin.css";
 import "./product-actions-compact.css";
 import "./product-card-layout-fix.css";
 import "./blog-admin-polish.css";
+import "./promotional-banners-admin.css";
 import "./call-menu.css";
 import "./condition-matrix.css";
 import "./footer-licence.css";

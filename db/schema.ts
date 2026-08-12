@@ -262,6 +262,14 @@ export const prescriptionRequestItems = mysqlTable("prescription_request_items",
   index("prescription_request_items_request_idx").on(table.prescriptionId, table.id),
 ]);
 
+export const staffPermissions = mysqlTable("staff_permissions", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  permission: varchar("permission", { length: 80 }).notNull(),
+  grantedBy: int("granted_by").references(() => users.id, { onDelete: "set null" }),
+  grantedAt: timestamp("granted_at").defaultNow().notNull(),
+}, (table) => [uniqueIndex("staff_permission_unique").on(table.userId, table.permission), index("staff_permissions_user_idx").on(table.userId)]);
+
 export const activityLogs = mysqlTable("activity_logs", {
   id: int("id").autoincrement().primaryKey(),
   actorId: int("actor_id").references(() => users.id),
@@ -451,6 +459,19 @@ export const blogPostProducts = mysqlTable("blog_post_products", {
   displayOrder: int("display_order").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [uniqueIndex("blog_post_product_unique").on(table.postId, table.productId), index("blog_post_products_post_idx").on(table.postId)]);
+
+// Image-only storefront adverts. The public card deliberately contains no copy or
+// controls: the uploaded artwork is the complete creative and links to one product.
+export const promotionalBanners = mysqlTable("promotional_banners", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 180 }).notNull(),
+  imageUrl: varchar("image_url", { length: 500 }).notNull(),
+  productId: int("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  isActive: boolean("is_active").default(true).notNull(),
+  displayOrder: int("display_order").default(0).notNull(),
+  createdBy: int("created_by").references(() => users.id, { onDelete: "set null" }),
+  ...timestamps,
+}, (table) => [index("promotional_banners_active_idx").on(table.isActive, table.displayOrder), index("promotional_banners_product_idx").on(table.productId)]);
 
 export const campaigns = mysqlTable("campaigns", {
   id: int("id").autoincrement().primaryKey(),

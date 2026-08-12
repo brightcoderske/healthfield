@@ -14,6 +14,10 @@
   overflow: visible;
   background: #faf7fb;
 }
+.compact-product-actions .product-cart-controls { display:flex;align-items:center;gap:7px; }
+.compact-product-actions .quantity-stepper form { display:contents; }
+.compact-product-actions .product-add-form { display:flex; }
+.compact-product-actions .product-add-form .primary-cart-action { min-height:42px;padding:0 14px;border:1px solid #792587;color:#fff;background:#792587;display:flex;align-items:center;gap:6px;font-weight:700; }
 .compact-product-actions .quantity-stepper button {
   width: 30px !important;
   height: 30px !important;
@@ -91,7 +95,7 @@
   .product-price-row .availability-pill { padding:4px 7px !important; }
   .contact-pharmacy { margin-top:7px !important;font-size:9px; }
   .compact-product-actions { flex-wrap:wrap !important; }
-  .compact-product-actions > form:first-child { width:100%; }
+  .compact-product-actions > .product-cart-controls { width:100%; }
   .compact-product-actions .primary-cart-action { flex:1; }
   .compact-product-actions .view-cart-action,.compact-product-actions .wishlist-product-action { border:1px solid #ddd3e0 !important;background:#fff !important; }
   .product-reviews .review-grid { grid-template-columns:1fr; }
@@ -102,3 +106,5 @@
   .product-detail > .product-reviews,.product-information,.product-detail > .recommendation-section { margin-top:7px !important;margin-bottom:7px !important; }
   .recommendation-section header p { display:none; }
 }
+
+.compact-product-actions .primary-cart-action,.compact-product-actions .view-cart-action{position:relative}.compact-product-actions .primary-cart-action.is-added{border-color:#218849!important;background:#218849!important;box-shadow:0 4px 12px #2188492b!important}.compact-product-actions .primary-cart-action:disabled{cursor:wait;opacity:.78}.cart-action-badge{position:absolute;z-index:2;top:-8px;right:-7px;min-width:17px;height:17px;padding:0 4px;border:2px solid #fff;border-radius:999px;color:#fff!important;background:#d72e7d!important;display:grid!important;place-items:center;font-size:8px!important;font-weight:900!important;line-height:1}.primary-cart-action .cart-action-badge{top:-9px;right:-8px}

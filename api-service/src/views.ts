@@ -1,14 +1,16 @@
 import { and, asc, count, desc, eq, gte, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
 import {
-  blogPostProducts, blogPosts, branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
-  offerItems, offers, orderItemFulfilments, orderItems, orders, paymentTransactions, prescriptionRequestItems, prescriptions, productHealthConditions, productReviews, products,
-  siteSettings, users,
+  activityLogs, blogPostProducts, blogPosts, branchInventory, branches, campaigns, categories, chatConversations, chatMessages, healthConditions,
+  offerItems, offers, orderItemFulfilments, orderItems, orders, paymentTransactions, prescriptionRequestItems, prescriptions, productHealthConditions, productReviews, products, promotionalBanners,
+  siteSettings, staffPermissions, users,
 } from "../../db/schema";
 import { requireSession, type Session } from "./auth";
 import { getDb } from "./db";
 import { json, publicImageUrl } from "./http";
 import { isBundle, loadLiveOffers, normalTotal, offerPriceMap, offerTotal, type ResolvedOffer } from "./offers";
 import { paymentConfigurationSummary } from "./payment-handlers";
+import { requireTeamPermission, sessionHasPermission } from "./staff-permissions";
+import type { StaffPermission } from "../../lib/staff-permissions";
 
 const adminRoles = ["ADMIN", "SUPER_ADMIN"] as const;
 const teamRoles = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -73,7 +75,7 @@ function offerPayload(offer: ResolvedOffer) {
 
 async function home() {
   const db = getDb();
-  const [rows, mappings, settingsRows, categoryRows, conditionRows, guideRows] = await Promise.all([
+  const [rows, mappings, settingsRows, categoryRows, conditionRows, guideRows, promotionalRows] = await Promise.all([
     db.select({
       id: products.id, name: products.name, price: products.price, imageUrl: products.imageUrl,
       packSize: products.packSize, brand: products.brand, categoryId: products.categoryId,
@@ -92,6 +94,10 @@ async function home() {
     // Recent guides, used to break up the catalogue scroll with reading material.
     db.select({ id: blogPosts.id, slug: blogPosts.slug, title: blogPosts.title, excerpt: blogPosts.excerpt, imageUrl: blogPosts.imageUrl })
       .from(blogPosts).where(eq(blogPosts.isPublished, true)).orderBy(desc(blogPosts.publishedAt)).limit(4),
+    db.select({ id: promotionalBanners.id, title: promotionalBanners.title, imageUrl: promotionalBanners.imageUrl, productId: promotionalBanners.productId, productName: products.name })
+      .from(promotionalBanners).innerJoin(products, eq(products.id, promotionalBanners.productId))
+      .where(and(eq(promotionalBanners.isActive, true), eq(products.isActive, true)))
+      .orderBy(asc(promotionalBanners.displayOrder), desc(promotionalBanners.createdAt)),
   ]);
   const live = await loadLiveOffers();
   const overrides = offerPriceMap(live);
@@ -119,7 +125,7 @@ async function home() {
     facebookUrl: settings.facebookUrl ?? "", instagramUrl: settings.instagramUrl ?? "",
     xUrl: settings.xUrl ?? "", tiktokUrl: settings.tiktokUrl ?? "", licenceTitle:settings.licenceTitle??"",licenceNumber:settings.licenceNumber??"",licenceImageUrl:publicImageUrl(settings.licenceImageUrl),
   } : { phone: "", whatsapp: "", supportEmail: "", address: "", openingHours: "", deliveryMessage: "Fast Delivery Across Kenya", facebookUrl: "", instagramUrl: "", xUrl: "", tiktokUrl: "",licenceTitle:"",licenceNumber:"",licenceImageUrl:null };
-  return { offers: live.map(offerPayload), catalog, contact, categories: categoryRows, conditions: conditionRows, guides: guideRows.map((guide) => ({ ...guide, imageUrl: publicImageUrl(guide.imageUrl) })) };
+  return { offers: live.map(offerPayload), catalog, contact, categories: categoryRows, conditions: conditionRows, guides: guideRows.map((guide) => ({ ...guide, imageUrl: publicImageUrl(guide.imageUrl) })), promotions: promotionalRows.map((promotion) => ({ ...promotion, imageUrl: publicImageUrl(promotion.imageUrl) })) };
 }
 
 async function productDetail(id: number) {
@@ -171,8 +177,8 @@ async function requireAdmin(request: Request) {
   return requireSession(request, [...adminRoles]);
 }
 
-async function requireTeamBranch(request: Request):Promise<{response:Response}|{session:Session;branch:{id:number;name:string}}> {
-  const auth = await requireSession(request, [...teamRoles]);
+async function requireTeamBranch(request: Request, permission?: StaffPermission):Promise<{response:Response}|{session:Session;branch:{id:number;name:string}}> {
+  const auth = permission ? await requireTeamPermission(request, permission) : await requireSession(request, [...teamRoles]);
   if ("response" in auth) return { response: auth.response! };
   if (!auth.session.homeBranchId) return { response: json({ error: "This staff account is not assigned to a shop. Ask an administrator to assign one." }, { status: 409 }) } as const;
   const [branch] = await getDb().select({ id: branches.id, name: branches.name }).from(branches).where(and(eq(branches.id, auth.session.homeBranchId), eq(branches.isActive, true))).limit(1);
@@ -192,6 +198,26 @@ async function teamOrder(id: number) {
     db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, id)).orderBy(desc(paymentTransactions.createdAt)),
   ]);
   return { order, items, fulfilments, stores, stock, payments };
+}
+
+async function contentOfferView() {
+  const db=getDb();
+  const [offerRows,memberRows,catalogue]=await Promise.all([
+    db.select().from(offers).orderBy(asc(offers.displayOrder),desc(offers.id)),
+    db.select().from(offerItems).orderBy(asc(offerItems.displayOrder),asc(offerItems.id)),
+    db.select({id:products.id,name:products.name,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice}).from(products).where(eq(products.isActive,true)).orderBy(asc(products.name)),
+  ]);
+  return {offers:offerRows.map((offer)=>({...offer,items:memberRows.filter((member)=>member.offerId===offer.id).map((member)=>({productId:member.productId,offerPrice:member.offerPrice,quantity:member.quantity}))})),products:catalogue.map((row)=>({...row,imageUrl:publicImageUrl(row.imageUrl) }))};
+}
+
+async function contentBlogView() {
+  const db=getDb();
+  const [posts,links,catalogue]=await Promise.all([
+    db.select().from(blogPosts).orderBy(desc(blogPosts.createdAt)),
+    db.select({postId:blogPostProducts.postId,productId:blogPostProducts.productId}).from(blogPostProducts).orderBy(asc(blogPostProducts.displayOrder)),
+    db.select({id:products.id,name:products.name,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice}).from(products).where(eq(products.isActive,true)).orderBy(asc(products.name)),
+  ]);
+  return {posts:posts.map((post)=>({...post,productIds:links.filter((link)=>link.postId===post.id).map((link)=>link.productId)})),products:catalogue.map((row)=>({...row,imageUrl:publicImageUrl(row.imageUrl)}))};
 }
 
 export async function handleView(request: Request, path: string) {
@@ -387,11 +413,18 @@ export async function handleView(request: Request, path: string) {
     if (view === "campaigns") return json({ campaigns: await db.select().from(campaigns).orderBy(desc(campaigns.createdAt)).limit(30) });
     if (view === "stores") return json({ stores: await db.select().from(branches).orderBy(desc(branches.createdAt)) });
     if (view === "staff") {
-      const [staff, stores] = await Promise.all([
+      const [staff, stores, permissionRows] = await Promise.all([
         db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, phone: users.phone, role: users.role, homeBranchId: users.homeBranchId, isActive: users.isActive, twoFactorEnabled: users.twoFactorEnabled }).from(users).where(and(ne(users.role, "CUSTOMER"), isNull(users.deletedAt))).orderBy(desc(users.createdAt)),
         db.select({ id: branches.id, name: branches.name }).from(branches),
+        db.select({ userId: staffPermissions.userId, permission: staffPermissions.permission }).from(staffPermissions).orderBy(staffPermissions.permission),
       ]);
-      return json({ staff, stores });
+      return json({ staff: staff.map((member) => ({ ...member, permissions: permissionRows.filter((row) => row.userId === member.id).map((row) => row.permission) })), stores });
+    }
+    if (view === "activity") {
+      const logs = await db.select().from(activityLogs).orderBy(desc(activityLogs.createdAt)).limit(500);
+      const actorIds = [...new Set(logs.flatMap((entry) => entry.actorId === null ? [] : [entry.actorId]))];
+      const actors = actorIds.length ? await db.select({ id:users.id, firstName:users.firstName, lastName:users.lastName, email:users.email }).from(users).where(inArray(users.id, actorIds)) : [];
+      return json({ activities: logs.map((entry) => ({ ...entry, actor: actors.find((actor) => actor.id === entry.actorId) || null })) });
     }
     if (view === "settings") return json({ settings: (await db.select().from(siteSettings).limit(1))[0] ?? null, paymentRuntime: paymentConfigurationSummary() });
     if(view==="offers"){
@@ -414,6 +447,16 @@ export async function handleView(request: Request, path: string) {
       ]);
       return json({
         posts:posts.map((post)=>({...post,productIds:links.filter((link)=>link.postId===post.id).map((link)=>link.productId)})),
+        products:catalogue.map((row)=>({...row,imageUrl:publicImageUrl(row.imageUrl)})),
+      });
+    }
+    if(view==="promotional-banners"){
+      const [banners,catalogue]=await Promise.all([
+        db.select().from(promotionalBanners).orderBy(asc(promotionalBanners.displayOrder),desc(promotionalBanners.createdAt)),
+        db.select({id:products.id,name:products.name,imageUrl:products.imageUrl,price:products.price,discountPrice:products.discountPrice}).from(products).where(eq(products.isActive,true)).orderBy(asc(products.name)),
+      ]);
+      return json({
+        banners:banners.map((banner)=>({...banner,imageUrl:publicImageUrl(banner.imageUrl)})),
         products:catalogue.map((row)=>({...row,imageUrl:publicImageUrl(row.imageUrl)})),
       });
     }
@@ -444,14 +487,16 @@ export async function handleView(request: Request, path: string) {
   if (path === "staff/navigation") {
     const auth = await requireTeamBranch(request);
     if ("response" in auth) return auth.response;
+    const canViewOrders = sessionHasPermission(auth.session, "ORDERS_VIEW");
+    const canViewPrescriptions = sessionHasPermission(auth.session, "PRESCRIPTIONS_VIEW");
     const [[{ newOrders }], [{ pendingPrescriptions }]] = await Promise.all([
-      getDb().select({ newOrders: count() }).from(orders).where(eq(orders.status, "NEW")),
-      getDb().select({ pendingPrescriptions: count() }).from(prescriptions).where(inArray(prescriptions.status, ["RECEIVED","UNDER_REVIEW","MORE_INFORMATION_REQUIRED"])),
+      canViewOrders ? getDb().select({ newOrders: count() }).from(orders).where(eq(orders.status, "NEW")) : Promise.resolve([{ newOrders:0 }]),
+      canViewPrescriptions ? getDb().select({ pendingPrescriptions: count() }).from(prescriptions).where(inArray(prescriptions.status, ["RECEIVED","UNDER_REVIEW","MORE_INFORMATION_REQUIRED"])) : Promise.resolve([{ pendingPrescriptions:0 }]),
     ]);
-    return json({ newOrders: Number(newOrders), pendingPrescriptions: Number(pendingPrescriptions), branch: auth.branch });
+    return json({ newOrders: Number(newOrders), pendingPrescriptions: Number(pendingPrescriptions), branch: auth.branch, permissions: auth.session.permissions });
   }
   if (path === "staff/dashboard") {
-    const auth = await requireTeamBranch(request);
+    const auth = await requireTeamBranch(request, "DASHBOARD_VIEW");
     if ("response" in auth) return auth.response;
     const db = getDb(), branchId = auth.branch.id;
     const since = new Date(Date.now() - 92 * 24 * 60 * 60 * 1000);
@@ -473,19 +518,33 @@ export async function handleView(request: Request, path: string) {
     return json({ newOrders: Number(newOrders), pendingPrescriptions: Number(pendingPrescriptions), activeProducts: Number(activeProducts), lowStock: Number(lowStock), customers: 0, recentOrders, analytics, branch: auth.branch });
   }
   if (path === "staff/orders") {
-    const auth = await requireSession(request, [...teamRoles]);
+    const auth = await requireTeamPermission(request, "ORDERS_VIEW");
     if ("response" in auth) return auth.response;
     return json({ orders: await getDb().select().from(orders).orderBy(sql`case when ${orders.status}='NEW' then 0 when ${orders.status} in ('CONFIRMED','UNDER_REVIEW') then 1 else 2 end`, desc(orders.createdAt)) });
   }
+  if (path === "staff/past-orders") {
+    const auth = await requireTeamPermission(request, "PAST_ORDERS_VIEW");
+    if ("response" in auth) return auth.response;
+    return json({ orders: await getDb().select().from(orders).orderBy(desc(orders.createdAt)) });
+  }
   const staffOrderMatch = path.match(/^staff\/orders\/(\d+)$/);
   if (staffOrderMatch) {
-    const auth = await requireSession(request, [...teamRoles]);
+    const auth = await requireTeamPermission(request, "ORDERS_VIEW");
     if ("response" in auth) return auth.response;
     const data = await teamOrder(Number(staffOrderMatch[1]));
     return data ? json(data) : json({ error: "Order not found." }, { status: 404 });
   }
+  const staffReceiptMatch = path.match(/^staff\/receipts\/orders\/(\d+)$/);
+  if (staffReceiptMatch) {
+    const auth = await requireTeamPermission(request, "RECEIPTS_VIEW");
+    if ("response" in auth) return auth.response;
+    const data = await teamOrder(Number(staffReceiptMatch[1]));
+    if (!data) return json({ error:"Order not found." }, { status:404 });
+    await getDb().insert(activityLogs).values({ actorId:auth.session.userId, action:"RECEIPT_VIEWED", entityType:"order", entityId:String(data.order.id), metadata:{ orderNumber:data.order.orderNumber, actorRole:auth.session.role } });
+    return json(data);
+  }
   if (path === "staff/inventory") {
-    const auth = await requireTeamBranch(request);
+    const auth = await requireTeamBranch(request, "INVENTORY_VIEW");
     if ("response" in auth) return auth.response;
     const db = getDb(), branchId = auth.branch.id;
     const [catalog, stock, sales] = await Promise.all([
@@ -496,12 +555,12 @@ export async function handleView(request: Request, path: string) {
     return json({ branch: auth.branch, products: images(catalog).map((product) => ({ ...product, stores: stock.filter((row) => row.productId === product.id), sold: Number(sales.find((row) => row.productId === product.id)?.sold || 0) })) });
   }
   if (path === "staff/prescriptions") {
-    const auth = await requireSession(request, [...teamRoles]);
+    const auth = await requireTeamPermission(request, "PRESCRIPTIONS_VIEW");
     if ("response" in auth) return auth.response;
     return json(await prescriptionQueue());
   }
   if (path === "walk-in-sale") {
-    const auth = await requireSession(request, [...teamRoles]);
+    const auth = await requireTeamPermission(request, "POS_USE");
     if ("response" in auth) return auth.response;
     if (auth.session.role === "STAFF" && !auth.session.homeBranchId) return json({ error: "This staff account is not assigned to a shop. Ask an administrator to assign one before using POS." }, { status: 409 });
     const branchFilter = auth.session.role === "STAFF" ? eq(branches.id, auth.session.homeBranchId!) : undefined;
@@ -513,6 +572,22 @@ export async function handleView(request: Request, path: string) {
       getDb().select({ posCashEnabled: siteSettings.posCashEnabled, posMpesaEnabled: siteSettings.posMpesaEnabled, posManualEnabled: siteSettings.posManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber, mpesaAccountName: siteSettings.mpesaAccountName, bulkSmsApiUrl: siteSettings.bulkSmsApiUrl, bulkSmsApiKey: siteSettings.bulkSmsApiKey, bulkSmsSenderId: siteSettings.bulkSmsSenderId }).from(siteSettings).limit(1),
     ]);
     return json({ branches: branchRows, products: productRows.map((product) => ({ ...product, price: Number(product.price), discountPrice: product.discountPrice === null ? null : Number(product.discountPrice) })), stock: stockRows, payment: { cashEnabled: paymentRows[0]?.posCashEnabled ?? true, mpesaEnabled: Boolean(paymentRows[0]?.posMpesaEnabled && paymentConfigurationSummary().mpesaConfigured), manualEnabled: Boolean(paymentRows[0]?.posManualEnabled && paymentRows[0]?.mpesaTillNumber), smsEnabled: Boolean(paymentRows[0]?.bulkSmsApiUrl && paymentRows[0]?.bulkSmsApiKey && paymentRows[0]?.bulkSmsSenderId), tillNumber: paymentRows[0]?.mpesaTillNumber || null, accountName: paymentRows[0]?.mpesaAccountName || null } });
+  }
+  if (path === "staff/offers") {
+    const auth=await requireTeamPermission(request,"OFFERS_MANAGE");
+    if ("response" in auth) return auth.response;
+    return json(await contentOfferView());
+  }
+  if (path === "staff/blogs") {
+    const auth=await requireTeamPermission(request,"BLOGS_MANAGE");
+    if ("response" in auth) return auth.response;
+    return json(await contentBlogView());
+  }
+  if (path === "staff/products") {
+    const auth = await requireTeamPermission(request, "PRODUCTS_VIEW");
+    if ("response" in auth) return auth.response;
+    const rows = await getDb().select({ id:products.id, name:products.name, sku:products.sku, brand:products.brand, packSize:products.packSize, imageUrl:products.imageUrl, price:products.price, discountPrice:products.discountPrice, prescriptionRequired:products.prescriptionRequired, isActive:products.isActive }).from(products).where(eq(products.isActive,true)).orderBy(asc(products.name));
+    return json({ products: images(rows).map((product) => ({ ...product, price:Number(product.price), discountPrice:product.discountPrice === null ? null : Number(product.discountPrice) })) });
   }
   return json({ error: "View not found." }, { status: 404 });
 }

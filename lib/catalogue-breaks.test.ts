@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { breakPositions, planBreaks, seededRandom, MIN_PRODUCTS_BEFORE_BREAK, type BreakGuide, type BreakOffer, type BreakProduct } from "./catalogue-breaks.ts";
+import { breakPositions, planBreaks, seededRandom, MIN_PRODUCTS_BEFORE_BREAK, type BreakGuide, type BreakOffer, type BreakProduct, type BreakPromotion } from "./catalogue-breaks.ts";
 
 const product = (id: number, name = `Product ${id}`): BreakProduct => ({ id, name });
 const products = (count: number) => Array.from({ length: count }, (_, index) => product(index + 1));
@@ -8,6 +8,7 @@ const offer = (id: number, endsAt: string | null = null): BreakOffer => ({
   id, title: `Offer ${id}`, description: null, total: 100, normalTotal: 200, isBundle: false, itemCount: 1, imageUrl: null, endsAt,
 });
 const guide = (id: number, title = `Guide ${id}`, excerpt = ""): BreakGuide => ({ id, slug: `g${id}`, title, excerpt, imageUrl: null });
+const promotion = (id: number): BreakPromotion => ({ id, title: `Promotion ${id}`, imageUrl: `/promotion-${id}.jpg`, productId: id, productName: `Product ${id}` });
 
 test("a catalogue too short to interrupt is left alone", () => {
   for (const count of [0, 1, 3, MIN_PRODUCTS_BEFORE_BREAK * 2 - 1]) {
@@ -53,24 +54,43 @@ test("a searching shopper is interrupted at most once", () => {
   assert.ok(plan.length <= 1, `focused browsing should not be peppered with cards, got ${plan.length}`);
 });
 
-test("no offer or blog content means no interruption", () => {
+test("no offer, blog, or promotional content means no interruption", () => {
   const plan = planBreaks({ products: products(40), offers: [], guides: [], seed: 3 });
   assert.deepEqual(plan, []);
 });
 
-test("the randomizer only emits offer and blog interruptions", () => {
+test("the randomizer emits every available storefront interruption type", () => {
   const scenarios = [
     { label: "offers only", offers: [offer(1), offer(2)], guides: [] },
     { label: "blogs only", offers: [], guides: [guide(1), guide(2)] },
     { label: "offers and blogs", offers: [offer(1), offer(2)], guides: [guide(1), guide(2)] },
+    { label: "promotions only", offers: [], guides: [], promotions: [promotion(1), promotion(2)] },
+    { label: "all types", offers: [offer(1)], guides: [guide(1)], promotions: [promotion(1)] },
   ];
   for (const scenario of scenarios) {
     for (let seed = 1; seed <= 100; seed += 1) {
-      const plan = planBreaks({ products: products(60), offers: scenario.offers, guides: scenario.guides, seed });
+      const plan = planBreaks({ products: products(60), offers: scenario.offers, guides: scenario.guides, promotions: scenario.promotions || [], seed });
       assert.ok(plan.length > 0, `${scenario.label}, seed ${seed} should produce interruptions`);
-      assert.ok(plan.every((entry) => entry.item.kind === "offer" || entry.item.kind === "guide"), `${scenario.label}, seed ${seed} emitted an unsupported kind`);
+      const expected = new Set([scenario.offers.length ? "offer" : "", scenario.guides.length ? "guide" : "", scenario.promotions?.length ? "promotion" : ""].filter(Boolean));
+      assert.ok(plan.every((entry) => expected.has(entry.item.kind)), `${scenario.label}, seed ${seed} emitted a kind without content`);
     }
   }
+});
+
+test("every promotional interruption carries all adverts and rotates its lead", () => {
+  const adverts = [promotion(1), promotion(2), promotion(3)];
+  const plan = planBreaks({ products: products(80), offers: [], guides: [], promotions: adverts, seed: 23 });
+  const promotionBreaks = plan.filter((entry) => entry.item.kind === "promotion");
+  assert.ok(promotionBreaks.length > 1);
+  for (const entry of promotionBreaks) {
+    if (entry.item.kind !== "promotion") continue;
+    assert.equal(entry.item.promotions.length, adverts.length);
+    assert.equal(new Set(entry.item.promotions.map((item) => item.id)).size, adverts.length);
+    assert.equal(entry.item.promotion.id, entry.item.promotions[0]?.id);
+  }
+  const first = promotionBreaks[0]?.item;
+  const second = promotionBreaks[1]?.item;
+  assert.ok(first?.kind === "promotion" && second?.kind === "promotion" && first.promotion.id !== second.promotion.id);
 });
 
 test("offers closest to expiry are shown first", () => {

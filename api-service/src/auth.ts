@@ -1,11 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 import { jwtVerify, SignJWT } from "jose";
 import { and, eq, gt, isNull, lt } from "drizzle-orm";
-import { authSessions, users } from "../../db/schema";
+import { authSessions, staffPermissions, users } from "../../db/schema";
+import { normalizeStaffPermissions, type StaffPermission } from "../../lib/staff-permissions";
 import { getDb } from "./db";
 
 export type Role = "CUSTOMER" | "STAFF" | "ADMIN" | "SUPER_ADMIN";
-export type Session = { userId: number; email: string; firstName: string; role: Role; forcePasswordChange: boolean; homeBranchId: number | null };
+export type Session = { userId: number; email: string; firstName: string; role: Role; forcePasswordChange: boolean; homeBranchId: number | null; permissions: StaffPermission[] };
 export type ResetPayload = { userId: number; email: string; purpose: "password-reset" };
 
 function secret() {
@@ -94,7 +95,8 @@ export async function requestSession(request: Request, allowUploadToken = false)
         console.error("[auth.session] rejected", { reason: "opaque_session_invalid" });
         return null;
       }
-      return session as Session;
+      const permissionRows = session.role === "STAFF" ? await getDb().select({ permission: staffPermissions.permission }).from(staffPermissions).where(eq(staffPermissions.userId, session.userId)) : [];
+      return { ...session, permissions: normalizeStaffPermissions(permissionRows.map((row) => row.permission)) } as Session;
     } catch (error) {
       console.error("[auth.session] rejected", { reason: "opaque_session_database_error", code: error && typeof error === "object" && "code" in error ? String(error.code) : undefined, name: error instanceof Error ? error.name : undefined });
       return null;
@@ -108,7 +110,7 @@ export async function requestSession(request: Request, allowUploadToken = false)
       clockTolerance: 60,
     });
     if (typeof payload.userId !== "number" || typeof payload.email !== "string" || typeof payload.firstName !== "string" || !["CUSTOMER", "STAFF", "ADMIN", "SUPER_ADMIN"].includes(String(payload.role)) || typeof payload.forcePasswordChange !== "boolean" || !(payload.homeBranchId === null || typeof payload.homeBranchId === "number")) return null;
-    return payload as unknown as Session;
+    return { ...(payload as unknown as Omit<Session, "permissions">), permissions: normalizeStaffPermissions(Array.isArray(payload.permissions) ? payload.permissions.filter((value): value is string => typeof value === "string") : []) };
   } catch {
     return null;
   }
