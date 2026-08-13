@@ -11,9 +11,9 @@ function active(path: string, href: string) {
   return href === "/admin" ? path === href : path.startsWith(href);
 }
 
-export function AdminNavigation({ firstName, role, counts }: { firstName: string; role: string; counts: { newOrders: number; newChats: number } }) {
+export function AdminNavigation({ firstName, role, counts }: { firstName: string; role: string; counts: { newOrders: number; newChats: number; unmatchedPayments?: number } }) {
   const path = usePathname();
-  const badge = (href: string) => href === "/admin/orders" ? counts.newOrders : href === "/admin/chats" ? counts.newChats : 0;
+  const badge = (href: string) => href === "/admin/orders" ? counts.newOrders : href === "/admin/chats" ? counts.newChats : href === "/admin/unmatched-payments" ? counts.unmatchedPayments || 0 : 0;
   return <>
     <aside className="admin-sidebar">
       <Link prefetch={false} className="admin-brand" href="/admin"><Image src="/healthfield-logo-clean.png" alt="Healthfield Pharmacy" width={230} height={90}/></Link>

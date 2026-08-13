@@ -1,0 +1,10 @@
+.backdrop{position:fixed;inset:0;z-index:3000;background:transparent}
+.dialog{position:fixed;max-height:min(360px,calc(100dvh - 20px));padding:9px;border:1px solid #bd8fc7;border-radius:12px;background:#f0dff2;box-shadow:0 12px 34px rgba(28,12,34,.25);overflow:auto}
+.close{position:absolute;top:6px;right:6px;width:24px;height:24px;min-height:0;padding:0;border:0;border-radius:7px;color:#655b68;background:#f5f1f6;display:grid;place-items:center}
+.close svg{width:13px}
+.message{margin:0;padding-right:25px;color:#443748;font-size:12px;line-height:1.35}
+.actions{margin-top:8px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.actions>a,.actions>button{width:100%;min-width:0;min-height:30px;padding:3px 5px;border:1px solid #c51d38;border-radius:8px;color:#fff;background:#c51d38;display:flex;align-items:center;justify-content:center;gap:4px;text-align:center;white-space:nowrap;font-size:10.5px;font-weight:800}
+.actions>a:hover,.actions>button:hover{background:#a91830}
+.actions svg{width:14px}
+@media(max-width:380px){.dialog{padding:8px}.message{font-size:11.5px}.actions>a,.actions>button{font-size:9.5px;padding:3px}}

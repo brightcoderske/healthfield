@@ -64,6 +64,19 @@ export function buildStkNotificationUrl(baseUrl: string, secret: string) {
   return `${baseUrl.replace(/\/$/, "")}/v1/payments/mobile-money/stk/notification/${encodeURIComponent(secret)}`;
 }
 
+export function buildC2bCallbackUrls(baseUrl: string, secret: string) {
+  const root = `${baseUrl.replace(/\/$/, "")}/v1/payments/mobile-money/c2b`;
+  const encodedSecret = encodeURIComponent(secret);
+  return {
+    confirmationUrl: `${root}/confirmation/${encodedSecret}`,
+    validationUrl: `${root}/verification/${encodedSecret}`,
+  };
+}
+
+export function normalizePaymentReference(value: string | null | undefined) {
+  return (value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
 export function classifyStkQueryResult(payload: JsonRecord): StkQueryOutcome {
   const resultCode = String(payload.ResultCode ?? "").trim();
   const resultDescription = String(payload.ResultDesc || payload.errorMessage || payload.ResponseDescription || "").trim();
@@ -165,6 +178,27 @@ export async function queryStkPush(checkoutRequestId: string) {
   });
 }
 
+export async function registerC2bUrls() {
+  const config = mpesaConfiguration();
+  if (!config) throw new Error("M-Pesa is not configured.");
+  const token = await accessToken(config);
+  const urls = buildC2bCallbackUrls(config.callbackBaseUrl, config.callbackSecret);
+  const data = await mpesaJson(`${config.baseUrl}/mpesa/c2b/v2/registerurl`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ShortCode: Number(config.shortcode),
+      ResponseType: "Completed",
+      ConfirmationURL: urls.confirmationUrl,
+      ValidationURL: urls.validationUrl,
+    }),
+  });
+  return {
+    responseCode: String(data.ResponseCode ?? data.responseCode ?? ""),
+    responseDescription: String(data.ResponseDescription || data.ResponseDesc || "C2B callback URLs registered."),
+  };
+}
+
 export function parseStkCallback(payload: JsonRecord) {
   const body = payload.Body as JsonRecord | undefined;
   const callback = body?.stkCallback as JsonRecord | undefined;
@@ -186,5 +220,6 @@ export function parseC2bPayment(payload: JsonRecord) {
   const receiptNumber = String(payload.TransID || payload.TransactionID || "").trim().toUpperCase();
   const amount = Number(payload.TransAmount ?? payload.Amount);
   if (!receiptNumber || !Number.isFinite(amount) || amount <= 0) throw new Error("Invalid M-Pesa C2B confirmation payload.");
-  return { receiptNumber, amount, phone: String(payload.MSISDN || payload.PhoneNumber || "") || null, accountReference: String(payload.BillRefNumber || payload.AccountReference || "") || null, transactionTime: String(payload.TransTime || payload.TransactionTime || "") || null };
+  const payerName = [payload.FirstName, payload.MiddleName, payload.LastName].map((value) => String(value || "").trim()).filter(Boolean).join(" ") || String(payload.PayerName || "").trim() || null;
+  return { receiptNumber, amount, phone: String(payload.MSISDN || payload.PhoneNumber || "") || null, payerName, accountReference: String(payload.BillRefNumber || payload.AccountReference || "") || null, transactionTime: String(payload.TransTime || payload.TransactionTime || "") || null };
 }

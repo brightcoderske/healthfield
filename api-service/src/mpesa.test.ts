@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildStkNotificationUrl, buildStkPushPayload, classifyStkQueryResult, extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, parseC2bPayment, parseStkCallback, type MpesaConfiguration } from "./mpesa.ts";
+import { buildC2bCallbackUrls, buildStkNotificationUrl, buildStkPushPayload, classifyStkQueryResult, extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parseStkCallback, type MpesaConfiguration } from "./mpesa.ts";
 
 test("normalizes supported Kenyan mobile number formats", () => {
   assert.equal(normalizeKenyanPhone("0712 345 678"), "254712345678");
@@ -19,6 +19,15 @@ test("builds the neutral public STK notification URL", () => {
     buildStkNotificationUrl("https://api.healthfieldpharmacy.co.ke/", "secret/value"),
     "https://api.healthfieldpharmacy.co.ke/v1/payments/mobile-money/stk/notification/secret%2Fvalue",
   );
+});
+
+test("builds secret-protected C2B callback URLs and normalizes order references", () => {
+  assert.deepEqual(buildC2bCallbackUrls("https://api.healthfieldpharmacy.co.ke/", "secret/value"), {
+    confirmationUrl: "https://api.healthfieldpharmacy.co.ke/v1/payments/mobile-money/c2b/confirmation/secret%2Fvalue",
+    validationUrl: "https://api.healthfieldpharmacy.co.ke/v1/payments/mobile-money/c2b/verification/secret%2Fvalue",
+  });
+  assert.equal(normalizePaymentReference("POS-ME8K-12ab"), "POSME8K12AB");
+  assert.equal(normalizePaymentReference(" pos me8k 12ab "), "POSME8K12AB");
 });
 
 test("builds the documented Buy Goods STK request shape", () => {
@@ -67,5 +76,5 @@ test("extracts receipts and parses successful callbacks", () => {
 });
 
 test("parses C2B till confirmations", () => {
-  assert.deepEqual(parseC2bPayment({ TransID: "TGH7K2AB91", TransAmount: "1250.00", MSISDN: "254712345678", BillRefNumber: "HF-123" }), { receiptNumber: "TGH7K2AB91", amount: 1250, phone: "254712345678", accountReference: "HF-123", transactionTime: null });
+  assert.deepEqual(parseC2bPayment({ TransID: "TGH7K2AB91", TransAmount: "1250.00", MSISDN: "254712345678", FirstName:"Jane", MiddleName:"W", LastName:"Njeri", BillRefNumber: "HF-123" }), { receiptNumber: "TGH7K2AB91", amount: 1250, phone: "254712345678", payerName:"Jane W Njeri", accountReference: "HF-123", transactionTime: null });
 });

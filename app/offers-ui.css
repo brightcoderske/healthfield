@@ -13,6 +13,7 @@
 .offer-card-flag{display:inline-flex;align-items:center;gap:6px;font-size:9px;font-weight:850;letter-spacing:.06em;text-transform:uppercase}
 .offer-card-flag svg{width:13px}
 .offer-card>header small{font-size:9px;font-weight:700;opacity:.92}
+.offer-card-header-actions{display:flex;align-items:center;gap:8px}.offer-share{width:30px;height:30px;padding:0;border:1px solid rgba(255,255,255,.38);border-radius:8px;color:#fff;background:rgba(255,255,255,.12);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}.offer-share svg{width:14px;height:14px}.offer-share:hover,.offer-share:focus-visible{background:rgba(255,255,255,.25);outline:none}.offer-share.labelled{width:auto;min-height:38px;padding:0 14px;border-color:#d9c7de;color:#70227e;background:#fff;gap:7px;font-size:10px;font-weight:800}.offer-share.labelled:hover,.offer-share.labelled:focus-visible{border-color:#70227e;background:#faf4fb}
 .offer-card h2{margin:12px 14px 4px;font-size:16px}
 .offer-card>p{margin:0 14px 8px;color:#6b636f;font-size:11px;line-height:1.45}
 .offer-card-items{list-style:none;margin:0;padding:0 14px;display:flex;flex-direction:column;gap:7px}
@@ -36,6 +37,8 @@
 .offers-empty span{color:#7c7480;font-size:11px}
 .offers-empty a{margin-top:8px;padding:0 15px;min-height:36px;display:inline-flex;align-items:center;border-radius:9px;background:#70227e;color:#fff;font-size:11px;font-weight:750;text-decoration:none}
 .catalogue-break-ends{color:#8f8794;font-size:9.5px}
+.shared-offer-page{max-width:760px}.shared-offer-intro{padding:18px 0;text-align:center}.shared-offer-intro>span{color:#70227e;font-size:9px;font-weight:850;letter-spacing:.08em;text-transform:uppercase}.shared-offer-intro h1{margin:6px 0 4px;font-size:30px}.shared-offer-intro p{margin:0;color:#6b636f;font-size:11px}.shared-offer-card{max-width:620px;margin:0 auto;box-shadow:0 18px 50px rgba(66,29,75,.12)}.shared-offer-artwork{height:min(330px,52vw);min-height:220px;padding:18px;background:linear-gradient(135deg,#fbf5fc,#f3e8f5);display:grid;place-items:center}.shared-offer-artwork img{width:100%;height:100%;object-fit:contain}.shared-offer-share{padding:0 14px 14px;display:flex;justify-content:flex-end}
+@media(max-width:600px){.offer-card-header-actions{gap:5px}.offer-card>header small{max-width:115px;text-align:right}.shared-offer-page{padding:0 9px 30px}.shared-offer-page>header img{width:150px;height:auto}.shared-offer-intro{padding:12px 5px}.shared-offer-intro h1{font-size:23px}.shared-offer-artwork{height:62vw;min-height:190px}}
 
 /* Admin offers ------------------------------------------------------------ */
 .offers-admin>header{display:flex;align-items:center;gap:12px;flex-wrap:wrap}

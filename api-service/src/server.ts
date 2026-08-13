@@ -9,7 +9,7 @@ import { getDb, closeDb } from "./db";
 import { json } from "./http";
 import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
-import { handleC2bConfirmation, handleC2bVerification, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handleStkNotification } from "./payment-handlers";
+import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bRegistration, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handleStkNotification } from "./payment-handlers";
 import {
   handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
@@ -102,6 +102,11 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/payments/reconcile") return responseOf(handlePaymentReconcile(request));
   if (url.pathname === "/v1/payments/retry") return responseOf(handlePaymentRetry(request));
   if (url.pathname === "/v1/payments/cancel") return responseOf(handlePaymentCancel(request));
+  if (url.pathname === "/v1/payments/mobile-money/c2b/register") return responseOf(handleC2bRegistration(request));
+  const incomingPaymentMatch = url.pathname.match(/^\/v1\/payments\/incoming\/(\d+)\/match$/);
+  if (incomingPaymentMatch) return responseOf(handleIncomingPaymentMatch(request, Number(incomingPaymentMatch[1])));
+  const posIncomingPaymentConfirmation = url.pathname.match(/^\/v1\/payments\/incoming\/(\d+)\/confirm-pos$/);
+  if (posIncomingPaymentConfirmation) return responseOf(handlePosIncomingPaymentConfirm(request, Number(posIncomingPaymentConfirmation[1])));
   const paymentReviewMatch = url.pathname.match(/^\/v1\/payments\/(\d+)\/review$/);
   if (paymentReviewMatch) return responseOf(handlePaymentReview(request, Number(paymentReviewMatch[1])));
   if (url.pathname === "/v1/walk-in-sales") return responseOf(handleWalkInSales(request));
@@ -179,11 +184,14 @@ app.all("/{*path}", async (nodeRequest, nodeResponse) => {
 const port = Number(process.env.PORT || 3001);
 if (process.env.RUN_MIGRATIONS !== "false") await migrate(getDb(), { migrationsFolder: resolve(process.cwd(), "drizzle") });
 const server = app.listen(port, "0.0.0.0", () => console.log(`Healthfield API listening on ${port}`));
+const paymentMaintenance = setInterval(() => void finalizeExpiredPaymentCancellations().catch((error) => console.error("Payment cancellation maintenance failed", error)), 30_000);
+paymentMaintenance.unref();
 
 let shuttingDown = false;
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
+  clearInterval(paymentMaintenance);
   console.log(`Healthfield API received ${signal}; closing server and database pool.`);
   const forceExit = setTimeout(() => process.exit(0), 5_000);
   forceExit.unref();

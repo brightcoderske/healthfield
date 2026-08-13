@@ -1,35 +1,48 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
 import { activityLogs, branchInventory, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions, siteSettings } from "../../db/schema";
 import { requestSession, requireSession } from "./auth";
 import { requireTeamPermission } from "./staff-permissions";
 import { getDb } from "./db";
 import { json } from "./http";
-import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parseStkCallback, queryStkPush } from "./mpesa";
+import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, normalizePaymentReference, parseC2bPayment, parseStkCallback, queryStkPush, registerC2bUrls } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
+const admins = ["ADMIN", "SUPER_ADMIN"] as const;
+const cancellationGraceMs = 2 * 60_000;
 type DatabaseTransaction = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
 
 async function finalizePosInventory(tx: DatabaseTransaction, orderId: number, actorId: number | null) {
   const items = await tx.select({ id: orderItems.id, productId: orderItems.productId, productName: orderItems.productName, quantity: orderItems.quantity }).from(orderItems).where(eq(orderItems.orderId, orderId));
   const relevant = items.length ? await tx.select().from(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map((item) => item.id))) : [];
+  const plans: Array<{ item: typeof items[number]; fulfilment: typeof relevant[number]; stock: typeof branchInventory.$inferSelect; reserved: boolean }> = [];
   for (const item of items) {
     const fulfilment = relevant.find((row) => row.orderItemId === item.id);
-    if (!fulfilment || item.productId === null) throw new Error(`Stock allocation is missing for ${item.productName}.`);
+    if (!fulfilment || item.productId === null) return false;
     const [stock] = await tx.select().from(branchInventory).where(and(eq(branchInventory.branchId, fulfilment.branchId), eq(branchInventory.productId, item.productId))).limit(1).for("update");
-    if (!stock || stock.quantityAvailable < item.quantity || stock.quantityReserved < item.quantity) throw new Error(`Reserved stock is unavailable for ${item.productName}.`);
-    await tx.update(branchInventory).set({ quantityAvailable: stock.quantityAvailable - item.quantity, quantityReserved: stock.quantityReserved - item.quantity, updatedBy: actorId }).where(eq(branchInventory.id, stock.id));
-    await tx.update(orderItemFulfilments).set({ quantityPacked: item.quantity, status: "READY" }).where(eq(orderItemFulfilments.id, fulfilment.id));
+    if (!stock) return false;
+    const reserved = fulfilment.quantityReserved >= item.quantity && stock.quantityReserved >= item.quantity;
+    if (!reserved && stock.quantityAvailable - stock.quantityReserved < item.quantity) return false;
+    plans.push({ item, fulfilment, stock, reserved });
   }
+  for (const plan of plans) {
+    await tx.update(branchInventory).set({
+      quantityAvailable: plan.stock.quantityAvailable - plan.item.quantity,
+      quantityReserved: plan.reserved ? plan.stock.quantityReserved - plan.item.quantity : plan.stock.quantityReserved,
+      updatedBy: actorId,
+    }).where(eq(branchInventory.id, plan.stock.id));
+    await tx.update(orderItemFulfilments).set({ quantityReserved: 0, quantityPacked: plan.item.quantity, status: "READY" }).where(eq(orderItemFulfilments.id, plan.fulfilment.id));
+  }
+  return true;
 }
 
-async function markPaymentPaid(transactionId: number, details: { receiptNumber: string | null; amount: number; phone?: string | null; providerPayload?: Record<string, unknown>; actorId?: number | null }) {
+async function markPaymentPaid(transactionId: number, details: { receiptNumber: string | null; amount: number; phone?: string | null; providerPayload?: Record<string, unknown>; actorId?: number | null; incomingPaymentId?: number }) {
   const db = getDb();
   const result = await db.transaction(async (tx) => {
     const [payment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1).for("update");
     if (!payment) throw new Error("Payment record not found.");
-    if (payment.status === "PAID") return { orderId: payment.orderId, newlyPaid: false };
+    if (payment.status === "PAID") return { orderId: payment.orderId, newlyPaid: false, inventoryFinalized: true };
     if (Math.abs(Number(payment.amount) - details.amount) > 0.001) {
       await tx.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", resultDescription: "The paid amount does not match the order total.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
       throw new Error("The paid amount does not match the order total.");
@@ -37,19 +50,20 @@ async function markPaymentPaid(transactionId: number, details: { receiptNumber: 
     const [order] = await tx.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1).for("update");
     if (!order) throw new Error("Order not found.");
     if (order.paymentStatus === "PAID") {
-      await tx.update(paymentTransactions).set({ status: "CANCELLED", resultDescription: "Another payment attempt already completed this order." }).where(eq(paymentTransactions.id, payment.id));
-      return { orderId: order.id, newlyPaid: false };
+      await tx.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", receiptNumber: details.receiptNumber, resultDescription: "A second payment was received for an order that was already paid.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
+      return { orderId: order.id, newlyPaid: false, inventoryFinalized: true };
     }
-    if (payment.channel === "POS") await finalizePosInventory(tx, order.id, details.actorId ?? null);
+    const inventoryFinalized = payment.channel !== "POS" || await finalizePosInventory(tx, order.id, details.actorId ?? null);
     const paidAt = new Date();
-    await tx.update(paymentTransactions).set({ status: "PAID", receiptNumber: details.receiptNumber, phone: details.phone || payment.phone, verifiedAt: paidAt, reviewedBy: details.actorId ?? payment.reviewedBy, reviewedAt: details.actorId ? paidAt : payment.reviewedAt, resultCode: "0", resultDescription: "Payment confirmed", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
-    const paidOrderStatus = payment.channel === "POS" ? "COMPLETED" : ["NEW", "AWAITING_PAYMENT"].includes(order.status) ? "CONFIRMED" : order.status;
+    await tx.update(paymentTransactions).set({ status: "PAID", receiptNumber: details.receiptNumber, phone: details.phone || payment.phone, verifiedAt: paidAt, reviewedBy: details.actorId ?? payment.reviewedBy, reviewedAt: details.actorId ? paidAt : payment.reviewedAt, resultCode: "0", resultDescription: inventoryFinalized ? "Payment confirmed" : "Payment confirmed after stock was released; fulfilment requires review.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
+    if (details.incomingPaymentId) await tx.update(mpesaIncomingPayments).set({ matchedTransactionId: payment.id }).where(and(eq(mpesaIncomingPayments.id, details.incomingPaymentId), isNull(mpesaIncomingPayments.matchedTransactionId)));
+    const paidOrderStatus = payment.channel === "POS" ? inventoryFinalized ? "COMPLETED" : "UNDER_REVIEW" : ["NEW", "AWAITING_PAYMENT", "CANCELLED"].includes(order.status) ? "CONFIRMED" : order.status;
     await tx.update(orders).set({ paymentStatus: "PAID", paymentReference: details.receiptNumber, amountPaid: details.amount.toFixed(2), status: paidOrderStatus }).where(eq(orders.id, order.id));
-    await tx.insert(activityLogs).values({ actorId: details.actorId ?? null, action: "PAYMENT_CONFIRMED", entityType: "order", entityId: String(order.id), metadata: { transactionId: payment.id, method: payment.method, receiptNumber: details.receiptNumber, amount: details.amount } });
-    return { orderId: order.id, newlyPaid: true };
+    await tx.insert(activityLogs).values({ actorId: details.actorId ?? null, action: inventoryFinalized ? "PAYMENT_CONFIRMED" : "PAYMENT_CONFIRMED_STOCK_REVIEW", entityType: "order", entityId: String(order.id), metadata: { transactionId: payment.id, method: payment.method, receiptNumber: details.receiptNumber, amount: details.amount } });
+    return { orderId: order.id, newlyPaid: true, inventoryFinalized };
   });
   if (result.newlyPaid) queuePaidOrderNotification(result.orderId);
-  return result.orderId;
+  return result;
 }
 
 function paymentPhone(value: string | null | undefined) {
@@ -60,29 +74,48 @@ function paymentPhone(value: string | null | undefined) {
   return digits;
 }
 
-async function matchIncomingPayment(transactionId: number) {
-  const db = getDb();
-  const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1);
-  if (!payment || payment.method !== "MANUAL_MPESA" || payment.status !== "PENDING") return false;
-  const [order] = await db.select({ orderNumber: orders.orderNumber }).from(orders).where(eq(orders.id, payment.orderId)).limit(1);
-  const recent = await db.select().from(mpesaIncomingPayments).where(and(isNull(mpesaIncomingPayments.matchedTransactionId), gte(mpesaIncomingPayments.createdAt, new Date(Date.now() - 30 * 60_000)))).orderBy(desc(mpesaIncomingPayments.createdAt)).limit(40);
+function referenceMatchesOrder(reference: string | null | undefined, orderNumber: string | null | undefined) {
+  const incoming = normalizePaymentReference(reference);
+  const order = normalizePaymentReference(orderNumber);
+  return Boolean(incoming && order && (incoming === order || incoming === order.slice(0, 12)));
+}
+
+function chooseIncomingPayment<T extends { receiptNumber: string; amount: string; phone: string | null; accountReference: string | null; createdAt: Date }>(
+  payment: typeof paymentTransactions.$inferSelect,
+  orderNumber: string | null,
+  recent: T[],
+) {
   const amountMatches = recent.filter((row) => Math.abs(Number(row.amount) - Number(payment.amount)) <= 0.001);
   const receiptMatch = payment.receiptNumber ? amountMatches.find((row) => row.receiptNumber === payment.receiptNumber) : null;
-  const referenceMatch = order ? amountMatches.find((row) => row.accountReference?.toUpperCase() === order.orderNumber.toUpperCase()) : null;
-  const normalized = paymentPhone(payment.phone);
-  const phoneMatches = normalized ? amountMatches.filter((row) => paymentPhone(row.phone) === normalized) : [];
-  const incoming = receiptMatch || referenceMatch || (phoneMatches.length === 1 ? phoneMatches[0] : null) || (!normalized && amountMatches.length === 1 ? amountMatches[0] : null);
-  if (!incoming) return false;
-  await markPaymentPaid(payment.id, { receiptNumber: incoming.receiptNumber, amount: Number(incoming.amount), phone: incoming.phone, providerPayload: incoming.providerPayload || undefined });
-  await db.update(mpesaIncomingPayments).set({ matchedTransactionId: payment.id }).where(and(eq(mpesaIncomingPayments.id, incoming.id), isNull(mpesaIncomingPayments.matchedTransactionId)));
-  return true;
+  const referenceMatches = orderNumber ? amountMatches.filter((row) => referenceMatchesOrder(row.accountReference, orderNumber)) : [];
+  const normalizedPhone = paymentPhone(payment.phone);
+  const phoneMatches = normalizedPhone ? amountMatches.filter((row) => paymentPhone(row.phone) === normalizedPhone && Date.now() - row.createdAt.getTime() <= 30 * 60_000) : [];
+  const veryRecentAmountMatches = amountMatches.filter((row) => Date.now() - row.createdAt.getTime() <= 10 * 60_000);
+  return receiptMatch
+    || (referenceMatches.length === 1 ? referenceMatches[0] : null)
+    || (["PENDING", "CANCEL_REQUESTED"].includes(payment.status) && phoneMatches.length === 1 ? phoneMatches[0] : null)
+    || (["PENDING", "CANCEL_REQUESTED"].includes(payment.status) && !normalizedPhone && veryRecentAmountMatches.length === 1 ? veryRecentAmountMatches[0] : null)
+    || null;
+}
+
+async function findIncomingPaymentCandidate(transactionId: number) {
+  const db = getDb();
+  const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1);
+  if (!payment || payment.method !== "MANUAL_MPESA" || payment.status === "PAID" || payment.status === "REFUNDED") return null;
+  const [order] = await db.select({ orderNumber: orders.orderNumber }).from(orders).where(eq(orders.id, payment.orderId)).limit(1);
+  const recent = await db.select().from(mpesaIncomingPayments).where(and(isNull(mpesaIncomingPayments.matchedTransactionId), gte(mpesaIncomingPayments.createdAt, new Date(Date.now() - 24 * 60 * 60_000)))).orderBy(desc(mpesaIncomingPayments.createdAt)).limit(200);
+  return chooseIncomingPayment(payment, order?.orderNumber || null, recent);
+}
+
+function incomingCandidatePayload(incoming: typeof mpesaIncomingPayments.$inferSelect | null) {
+  return incoming ? { id:incoming.id, receiptNumber:incoming.receiptNumber, amount:Number(incoming.amount), phone:incoming.phone, payerName:incoming.payerName, accountReference:incoming.accountReference, receivedAt:incoming.createdAt } : null;
 }
 
 async function paymentStatus(checkoutToken: string) {
   const db = getDb();
   const [order] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, status: orders.status, paymentStatus: orders.paymentStatus, paymentMethod: orders.paymentMethod, paymentReference: orders.paymentReference, amountPaid: orders.amountPaid, total: orders.total }).from(orders).where(eq(orders.checkoutToken, checkoutToken)).limit(1);
   if (!order) return null;
-  const [payment] = await db.select({ id: paymentTransactions.id, method: paymentTransactions.method, status: paymentTransactions.status, resultDescription: paymentTransactions.resultDescription, receiptNumber: paymentTransactions.receiptNumber, updatedAt: paymentTransactions.updatedAt }).from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
+  const [payment] = await db.select({ id: paymentTransactions.id, method: paymentTransactions.method, status: paymentTransactions.status, resultCode: paymentTransactions.resultCode, resultDescription: paymentTransactions.resultDescription, receiptNumber: paymentTransactions.receiptNumber, updatedAt: paymentTransactions.updatedAt }).from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
   return { order, payment: payment || null };
 }
 
@@ -191,8 +224,39 @@ export async function handleManualPayment(request: Request) {
     return json({ error: "That M-Pesa code has already been submitted for another payment." }, { status: 409 });
   }
   await db.update(orders).set({ paymentMethod: "MANUAL_MPESA", paymentStatus: "PENDING", paymentReference: receiptNumber }).where(eq(orders.id, order.id));
-  const paid = await matchIncomingPayment(transaction.id);
-  return json({ ok: true, paid, orderNumber: order.orderNumber, message: paid ? "Payment verified automatically." : channel === "ONLINE" ? "Payment proof submitted for administrator approval." : "Waiting for the till payment. This sale will complete automatically when M-Pesa confirms it." }, { status: paid ? 200 : 202 });
+  const candidate = channel === "POS" ? await findIncomingPaymentCandidate(transaction.id) : null;
+  if (candidate) await db.update(paymentTransactions).set({ status:"REQUIRES_REVIEW", receiptNumber:candidate.receiptNumber, resultDescription:"Till payment found; waiting for the seller to confirm the payer identity." }).where(eq(paymentTransactions.id,transaction.id));
+  return json({ ok: true, paid:false, candidatePayment:incomingCandidatePayload(candidate), orderNumber: order.orderNumber, message: candidate ? "A Till payment was found. Confirm the payer name with the customer to complete the sale." : channel === "ONLINE" ? "Payment proof submitted for administrator approval." : "Waiting for the till payment. The seller will confirm the payer name before completing the sale." }, { status: 202 });
+}
+
+async function finalizeCancellation(orderId: number, paymentId: number, actorId: number | null) {
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const [payment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.id, paymentId)).limit(1).for("update");
+    const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
+    if (!payment || !order || payment.status !== "CANCEL_REQUESTED" || order.paymentStatus === "PAID") return false;
+    const items = await tx.select({ id: orderItems.id, productId: orderItems.productId }).from(orderItems).where(eq(orderItems.orderId, order.id));
+    const fulfilments = items.length ? await tx.select().from(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map((item) => item.id))) : [];
+    for (const fulfilment of fulfilments) {
+      const item = items.find((entry) => entry.id === fulfilment.orderItemId);
+      if (!item?.productId || fulfilment.quantityReserved <= 0) continue;
+      const [stock] = await tx.select().from(branchInventory).where(and(eq(branchInventory.branchId, fulfilment.branchId), eq(branchInventory.productId, item.productId))).limit(1).for("update");
+      if (stock) await tx.update(branchInventory).set({ quantityReserved: Math.max(0, stock.quantityReserved - fulfilment.quantityReserved), updatedBy: actorId }).where(eq(branchInventory.id, stock.id));
+      await tx.update(orderItemFulfilments).set({ quantityReserved: 0, status: "UNAVAILABLE" }).where(eq(orderItemFulfilments.id, fulfilment.id));
+    }
+    await tx.update(paymentTransactions).set({ status: "CANCELLED", resultDescription: "Counter sale cancelled after the payment reconciliation window." }).where(eq(paymentTransactions.id, payment.id));
+    await tx.update(orders).set({ status: "CANCELLED", paymentStatus: "FAILED" }).where(eq(orders.id, order.id));
+    await tx.insert(activityLogs).values({ actorId, action: "WALK_IN_SALE_CANCELLED", entityType: "order", entityId: String(order.id), metadata: { orderNumber: order.orderNumber, paymentId: payment.id } });
+    return true;
+  });
+}
+
+export async function finalizeExpiredPaymentCancellations() {
+  const db = getDb();
+  const expired = await db.select({ id: paymentTransactions.id, orderId: paymentTransactions.orderId, actorId: paymentTransactions.reviewedBy }).from(paymentTransactions).where(and(eq(paymentTransactions.status, "CANCEL_REQUESTED"), lte(paymentTransactions.updatedAt, new Date(Date.now() - cancellationGraceMs)))).limit(50);
+  let finalized = 0;
+  for (const payment of expired) if (await finalizeCancellation(payment.orderId, payment.id, payment.actorId)) finalized += 1;
+  return finalized;
 }
 
 export async function handlePaymentReconcile(request: Request) {
@@ -205,8 +269,16 @@ export async function handlePaymentReconcile(request: Request) {
   const db = getDb();
   const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, status.payment.id)).limit(1);
   if (payment.method === "MANUAL_MPESA") {
-    const paid = await matchIncomingPayment(payment.id);
-    return json({ ok: true, paid, ...(await paymentStatus(checkoutToken)) });
+    const candidate = payment.channel === "POS" ? await findIncomingPaymentCandidate(payment.id) : null;
+    if (candidate) {
+      await db.update(paymentTransactions).set({ status:"REQUIRES_REVIEW", receiptNumber:candidate.receiptNumber, resultDescription:"Till payment found; waiting for the seller to confirm the payer identity." }).where(eq(paymentTransactions.id,payment.id));
+      return json({ ok:true, paid:false, candidatePayment:incomingCandidatePayload(candidate), message:"Till payment found. Ask the customer to confirm the payer name, receipt and amount.", ...(await paymentStatus(checkoutToken)) });
+    }
+    if (payment.status === "CANCEL_REQUESTED" && Date.now() - payment.updatedAt.getTime() >= cancellationGraceMs) {
+      const cancelled = await finalizeCancellation(payment.orderId, payment.id, payment.reviewedBy);
+      return json({ ok: true, paid: false, cancelled, message: "No Till payment was found. The counter sale has been cancelled.", ...(await paymentStatus(checkoutToken)) });
+    }
+    return json({ ok: true, paid: false, cancellationRequested: payment.status === "CANCEL_REQUESTED", ...(await paymentStatus(checkoutToken)) });
   }
   if (!payment.checkoutRequestId) return json({ error: payment.resultDescription || "M-Pesa Express was not started.", code: "MPESA_NOT_STARTED" }, { status: 409 });
   // Daraja may acknowledge an STK request before it becomes queryable. The
@@ -219,12 +291,23 @@ export async function handlePaymentReconcile(request: Request) {
     const outcome = classifyStkQueryResult(result);
     if (outcome.state === "PAID") {
       const receiptNumber = String(result.MpesaReceiptNumber || payment.receiptNumber || "");
-      if (!receiptNumber) return json({ ok: true, paid: false, message: "M-Pesa approved the request; waiting for the receipt callback." }, { status: 202 });
+      if (!receiptNumber) {
+        await db.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", resultCode: "0", resultDescription: "Safaricom confirms payment; waiting for the receipt callback.", providerPayload: result }).where(and(eq(paymentTransactions.id, payment.id), inArray(paymentTransactions.status, ["PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW"])));
+        return json({ ok: true, paid: false, providerConfirmed: true, message: "Safaricom confirms payment. Do not retry or cancel; the receipt confirmation is still arriving.", ...(await paymentStatus(checkoutToken)) }, { status: 202 });
+      }
       await markPaymentPaid(payment.id, { receiptNumber, amount: Number(payment.amount), phone: payment.phone, providerPayload: result });
       return json({ ok: true, paid: true, ...(await paymentStatus(checkoutToken)) });
     }
     if (outcome.state === "PENDING") {
+      if (payment.status === "CANCEL_REQUESTED" && Date.now() - payment.updatedAt.getTime() >= cancellationGraceMs) {
+        const cancelled = await finalizeCancellation(payment.orderId, payment.id, payment.reviewedBy);
+        return json({ ok: true, paid: false, cancelled, message: "No successful M-Pesa response arrived. The counter sale has been cancelled.", ...(await paymentStatus(checkoutToken)) });
+      }
       return json({ ok: true, paid: false, message: "Waiting for the payment response.", ...status }, { status: 202 });
+    }
+    if (payment.status === "CANCEL_REQUESTED") {
+      await finalizeCancellation(payment.orderId, payment.id, payment.reviewedBy);
+      return json({ ok: true, paid: false, cancelled: true, message: outcome.resultDescription || "M-Pesa payment was not completed.", ...(await paymentStatus(checkoutToken)) });
     }
     await db.update(paymentTransactions).set({ status: "FAILED", resultCode: outcome.resultCode, resultDescription: outcome.resultDescription || "M-Pesa payment was not completed.", providerPayload: result }).where(and(eq(paymentTransactions.id, payment.id), eq(paymentTransactions.status, "PENDING")));
     await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
@@ -233,6 +316,10 @@ export async function handlePaymentReconcile(request: Request) {
     return json({ ok: true, paid: false, failed: true, message: outcome.resultDescription || "M-Pesa payment was not completed.", ...latestStatus });
   } catch (error) {
     console.warn("STK status query is still pending", { transactionId: payment.id, message: error instanceof Error ? error.message : "Unknown provider response" });
+    if (payment.status === "CANCEL_REQUESTED" && Date.now() - payment.updatedAt.getTime() >= cancellationGraceMs) {
+      const cancelled = await finalizeCancellation(payment.orderId, payment.id, payment.reviewedBy);
+      return json({ ok: true, paid: false, cancelled, message: "The reconciliation window ended without a successful confirmation.", ...(await paymentStatus(checkoutToken)) });
+    }
     return json({ ok: true, paid: false, message: "Payment confirmation is still pending.", ...(await paymentStatus(checkoutToken)) }, { status: 202 });
   }
 }
@@ -267,21 +354,28 @@ export async function handlePaymentCancel(request: Request) {
   const [order] = await db.select().from(orders).where(eq(orders.checkoutToken, checkoutToken)).limit(1);
   if (!order || !order.orderNumber.startsWith("POS-")) return json({ error: "Pending counter sale not found." }, { status: 404 });
   if (order.paymentStatus === "PAID") return json({ error: "A paid sale cannot be cancelled here." }, { status: 409 });
-  await db.transaction(async (tx) => {
-    const items = await tx.select({ id: orderItems.id, productId: orderItems.productId }).from(orderItems).where(eq(orderItems.orderId, order.id));
-    const fulfilments = items.length ? await tx.select().from(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map((item) => item.id))) : [];
-    for (const fulfilment of fulfilments) {
-      const item = items.find((entry) => entry.id === fulfilment.orderItemId);
-      if (!item?.productId || fulfilment.quantityReserved <= 0) continue;
-      const [stock] = await tx.select().from(branchInventory).where(and(eq(branchInventory.branchId, fulfilment.branchId), eq(branchInventory.productId, item.productId))).limit(1).for("update");
-      if (stock) await tx.update(branchInventory).set({ quantityReserved: Math.max(0, stock.quantityReserved - fulfilment.quantityReserved), updatedBy: auth.session.userId }).where(eq(branchInventory.id, stock.id));
-      await tx.update(orderItemFulfilments).set({ quantityReserved: 0, status: "UNAVAILABLE" }).where(eq(orderItemFulfilments.id, fulfilment.id));
-    }
-    await tx.update(paymentTransactions).set({ status: "CANCELLED", reviewedBy: auth.session.userId, reviewedAt: new Date(), resultDescription: "Counter sale cancelled by teller." }).where(and(eq(paymentTransactions.orderId, order.id), ne(paymentTransactions.status, "PAID")));
-    await tx.update(orders).set({ status: "CANCELLED", paymentStatus: "FAILED" }).where(eq(orders.id, order.id));
-    await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "WALK_IN_SALE_CANCELLED", entityType: "order", entityId: String(order.id), metadata: { orderNumber: order.orderNumber } });
+  const [latest] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
+  if (!latest) return json({ error: "Payment attempt not found." }, { status: 404 });
+  if (latest.status === "REQUIRES_REVIEW" && latest.resultCode === "0") return json({ error: "Safaricom reports this payment as successful. It cannot be cancelled while the receipt is pending." }, { status: 409 });
+  const reconciliation = await handlePaymentReconcile(new Request(request.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken }) }));
+  const reconciliationData = await reconciliation.clone().json().catch(() => ({})) as { paid?: boolean; providerConfirmed?: boolean; candidatePayment?: unknown; order?: { paymentStatus?: string } };
+  if (reconciliationData.paid || reconciliationData.order?.paymentStatus === "PAID") return json({ error: "Payment was confirmed while cancellation was requested. The sale has been completed." }, { status: 409 });
+  if (reconciliationData.providerConfirmed) return json({ error: "Safaricom reports this payment as successful. It cannot be cancelled while the receipt is pending." }, { status: 409 });
+  if (reconciliationData.candidatePayment) return json({ error: "A matching Till payment was found. Confirm the payer name with the customer before closing the sale." }, { status: 409 });
+  const state = await db.transaction(async (tx) => {
+    const [lockedPayment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.id, latest.id)).limit(1).for("update");
+    const [lockedOrder] = await tx.select().from(orders).where(eq(orders.id, order.id)).limit(1).for("update");
+    if (!lockedPayment || !lockedOrder) return "MISSING" as const;
+    if (lockedPayment.status === "PAID" || lockedOrder.paymentStatus === "PAID") return "PAID" as const;
+    if (lockedPayment.status === "REQUIRES_REVIEW" && lockedPayment.resultCode === "0") return "CONFIRMED" as const;
+    await tx.update(paymentTransactions).set({ status: "CANCEL_REQUESTED", reviewedBy: auth.session.userId, reviewedAt: new Date(), resultDescription: "Cancellation requested; reconciling late M-Pesa confirmation before releasing stock." }).where(eq(paymentTransactions.id, lockedPayment.id));
+    await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "WALK_IN_SALE_CANCELLATION_REQUESTED", entityType: "order", entityId: String(lockedOrder.id), metadata: { orderNumber: lockedOrder.orderNumber, paymentId: lockedPayment.id, graceSeconds: cancellationGraceMs / 1000 } });
+    return "REQUESTED" as const;
   });
-  return json({ ok: true });
+  if (state === "PAID") return json({ error: "Payment was confirmed while cancellation was requested. The sale has been completed." }, { status: 409 });
+  if (state === "CONFIRMED") return json({ error: "Safaricom reports this payment as successful. Wait for the receipt confirmation." }, { status: 409 });
+  if (state === "MISSING") return json({ error: "Pending counter sale not found." }, { status: 404 });
+  return json({ ok: true, cancellationRequested: true, graceSeconds: cancellationGraceMs / 1000, message: "Cancellation requested. Healthfield will keep checking M-Pesa before releasing stock." }, { status: 202 });
 }
 
 export async function handleStkNotification(request: Request) {
@@ -303,8 +397,11 @@ export async function handleStkNotification(request: Request) {
     try { await markPaymentPaid(payment.id, { receiptNumber: parsed.receiptNumber, amount: parsed.amount, phone: parsed.phone, providerPayload: payload }); }
     catch (error) { console.error("Mobile-money notification requires review", { transactionId: payment.id, error }); }
   } else {
-    await db.update(paymentTransactions).set({ status: "FAILED", resultCode: parsed.resultCode, resultDescription: parsed.resultDescription, providerPayload: payload }).where(and(eq(paymentTransactions.id, payment.id), eq(paymentTransactions.status, "PENDING")));
-    await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
+    if (payment.status === "CANCEL_REQUESTED") await finalizeCancellation(payment.orderId, payment.id, payment.reviewedBy);
+    else {
+      await db.update(paymentTransactions).set({ status: "FAILED", resultCode: parsed.resultCode, resultDescription: parsed.resultDescription, providerPayload: payload }).where(and(eq(paymentTransactions.id, payment.id), eq(paymentTransactions.status, "PENDING")));
+      await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
+    }
   }
   if (callbackId) await db.update(mpesaStkCallbacks).set({ processedTransactionId: payment.id }).where(eq(mpesaStkCallbacks.id, callbackId));
   return json({ ResultCode: 0, ResultDesc: "Accepted" });
@@ -319,8 +416,11 @@ export async function replayStoredStkCallback(checkoutRequestId: string) {
   if (!payment) return false;
   if (parsed.resultCode === "0" && parsed.receiptNumber && parsed.amount !== null) await markPaymentPaid(payment.id, { receiptNumber: parsed.receiptNumber, amount: parsed.amount, phone: parsed.phone, providerPayload: stored.providerPayload });
   else {
-    await db.update(paymentTransactions).set({ status: "FAILED", resultCode: parsed.resultCode, resultDescription: parsed.resultDescription, providerPayload: stored.providerPayload }).where(and(eq(paymentTransactions.id, payment.id), eq(paymentTransactions.status, "PENDING")));
-    await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
+    if (payment.status === "CANCEL_REQUESTED") await finalizeCancellation(payment.orderId, payment.id, payment.reviewedBy);
+    else {
+      await db.update(paymentTransactions).set({ status: "FAILED", resultCode: parsed.resultCode, resultDescription: parsed.resultDescription, providerPayload: stored.providerPayload }).where(and(eq(paymentTransactions.id, payment.id), eq(paymentTransactions.status, "PENDING")));
+      await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
+    }
   }
   await db.update(mpesaStkCallbacks).set({ processedTransactionId: payment.id }).where(eq(mpesaStkCallbacks.id, stored.id));
   return true;
@@ -337,19 +437,23 @@ export async function handleC2bConfirmation(request: Request) {
     incomingId = created.insertId;
   } catch { return json({ ResultCode: 0, ResultDesc: "Duplicate accepted" }); }
   const [receiptPayment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.receiptNumber, incoming.receiptNumber)).limit(1);
-  let payment: typeof paymentTransactions.$inferSelect | undefined = receiptPayment;
+  let payment: typeof paymentTransactions.$inferSelect | undefined = receiptPayment?.method === "MPESA_EXPRESS" ? receiptPayment : undefined;
   if (!payment) {
-    const candidates = await db.select({ payment: paymentTransactions, orderNumber: orders.orderNumber }).from(paymentTransactions).innerJoin(orders, eq(orders.id, paymentTransactions.orderId)).where(and(eq(paymentTransactions.channel, "POS"), eq(paymentTransactions.method, "MANUAL_MPESA"), eq(paymentTransactions.status, "PENDING"), gte(paymentTransactions.createdAt, new Date(Date.now() - 30 * 60_000)))).orderBy(desc(paymentTransactions.createdAt)).limit(40);
+    const candidates = await db.select({ payment: paymentTransactions, orderNumber: orders.orderNumber }).from(paymentTransactions).innerJoin(orders, eq(orders.id, paymentTransactions.orderId)).where(and(eq(paymentTransactions.channel, "POS"), eq(paymentTransactions.method,"MPESA_EXPRESS"), inArray(paymentTransactions.status, ["PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "FAILED", "CANCELLED"]), gte(paymentTransactions.createdAt, new Date(Date.now() - 24 * 60 * 60_000)))).orderBy(desc(paymentTransactions.createdAt)).limit(200);
     const amountMatches = candidates.filter((row) => Math.abs(Number(row.payment.amount) - incoming.amount) <= 0.001);
-    const referenceMatch = amountMatches.find((row) => incoming.accountReference?.toUpperCase() === row.orderNumber.toUpperCase());
+    const referenceMatches = amountMatches.filter((row) => referenceMatchesOrder(incoming.accountReference, row.orderNumber));
     const normalized = paymentPhone(incoming.phone);
-    const phoneMatches = normalized ? amountMatches.filter((row) => paymentPhone(row.payment.phone) === normalized) : [];
-    payment = (referenceMatch || (phoneMatches.length === 1 ? phoneMatches[0] : null) || (!normalized && amountMatches.length === 1 ? amountMatches[0] : null))?.payment;
+    const activeAmountMatches = amountMatches.filter((row) => ["PENDING", "CANCEL_REQUESTED"].includes(row.payment.status) && Date.now() - row.payment.createdAt.getTime() <= 30 * 60_000);
+    const phoneMatches = normalized ? activeAmountMatches.filter((row) => paymentPhone(row.payment.phone) === normalized) : [];
+    const selected = referenceMatches.length === 1 ? referenceMatches[0]
+      : phoneMatches.length === 1 ? phoneMatches[0]
+      : !normalized && activeAmountMatches.length === 1 ? activeAmountMatches[0]
+      : null;
+    payment = selected?.payment;
   }
   if (payment && Math.abs(Number(payment.amount) - incoming.amount) <= 0.001) {
     try {
-      await markPaymentPaid(payment.id, { receiptNumber: incoming.receiptNumber, amount: incoming.amount, phone: incoming.phone, providerPayload: payload });
-      await db.update(mpesaIncomingPayments).set({ matchedTransactionId: payment.id }).where(eq(mpesaIncomingPayments.id, incomingId));
+      await markPaymentPaid(payment.id, { receiptNumber: incoming.receiptNumber, amount: incoming.amount, phone: incoming.phone, providerPayload: payload, incomingPaymentId: incomingId });
     } catch (error) { console.error("C2B payment match requires review", { transactionId: payment.id, error }); }
   }
   return json({ ResultCode: 0, ResultDesc: "Accepted" });
@@ -360,6 +464,59 @@ export async function handleC2bVerification(request: Request) {
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
   try { parseC2bPayment(payload); return json({ ResultCode: 0, ResultDesc: "Accepted" }); }
   catch { return json({ ResultCode: "C2B00012", ResultDesc: "Invalid transaction details" }); }
+}
+
+export async function handleIncomingPaymentMatch(request: Request, incomingId: number) {
+  const auth = await requireSession(request, [...admins]);
+  if ("response" in auth) return auth.response;
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  const input = await request.json().catch(() => null) as { orderReference?: string } | null;
+  const orderReference = (input?.orderReference || "").trim().toUpperCase();
+  if (!orderReference || orderReference.length > 40) return json({ error: "Enter the exact Healthfield order reference." }, { status: 400 });
+  const db = getDb();
+  const [incoming] = await db.select().from(mpesaIncomingPayments).where(and(eq(mpesaIncomingPayments.id, incomingId), isNull(mpesaIncomingPayments.matchedTransactionId))).limit(1);
+  if (!incoming) return json({ error: "This incoming payment was not found or is already matched." }, { status: 404 });
+  const [order] = await db.select().from(orders).where(eq(orders.orderNumber, orderReference)).limit(1);
+  if (!order) return json({ error: "No order has that reference." }, { status: 404 });
+  if (order.paymentStatus === "PAID" || order.paymentStatus === "REFUNDED") return json({ error: "That order is already paid or refunded." }, { status: 409 });
+  if (Math.abs(Number(order.total) - Number(incoming.amount)) > 0.001) return json({ error: `Amount mismatch: the payment is KES ${Number(incoming.amount).toLocaleString()} but ${order.orderNumber} requires KES ${Number(order.total).toLocaleString()}.` }, { status: 409 });
+  const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
+  if (!payment || payment.method === "CASH") return json({ error: "That order has no compatible M-Pesa payment attempt." }, { status: 409 });
+  const result = await markPaymentPaid(payment.id, { receiptNumber: incoming.receiptNumber, amount: Number(incoming.amount), phone: incoming.phone, providerPayload: incoming.providerPayload || undefined, actorId: auth.session.userId, incomingPaymentId: incoming.id });
+  return json({ ok: true, orderId: order.id, orderNumber: order.orderNumber, inventoryFinalized: result.inventoryFinalized, message: result.inventoryFinalized ? "Payment matched and the sale was completed." : "Payment matched. The order is paid and requires fulfilment review because its stock had been released." });
+}
+
+export async function handlePosIncomingPaymentConfirm(request: Request, incomingId: number) {
+  const auth = await requireTeamPermission(request, "POS_USE");
+  if ("response" in auth) return auth.response;
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  const input = await request.json().catch(() => null) as { checkoutToken?:string } | null;
+  const checkoutToken=(input?.checkoutToken||"").trim();
+  const db=getDb();
+  const [order]=await db.select().from(orders).where(eq(orders.checkoutToken,checkoutToken)).limit(1);
+  if(!order||!order.orderNumber.startsWith("POS-"))return json({error:"Counter sale not found."},{status:404});
+  if(auth.session.role==="STAFF"&&auth.session.homeBranchId!==order.suggestedBranchId)return json({error:"This sale belongs to another shop."},{status:403});
+  if(order.paymentStatus==="PAID")return json({ok:true,paid:true,orderNumber:order.orderNumber,receiptNumber:order.paymentReference});
+  const [payment]=await db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId,order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
+  if(!payment||payment.method!=="MANUAL_MPESA")return json({error:"This is not a Till payment sale."},{status:409});
+  const candidate=await findIncomingPaymentCandidate(payment.id);
+  if(!candidate||candidate.id!==incomingId)return json({error:"That Till receipt is no longer the unique safe match for this sale. Review it in Unmatched payments."},{status:409});
+  const result=await markPaymentPaid(payment.id,{receiptNumber:candidate.receiptNumber,amount:Number(candidate.amount),phone:candidate.phone,providerPayload:candidate.providerPayload||undefined,actorId:auth.session.userId,incomingPaymentId:candidate.id});
+  return json({ok:true,paid:true,orderNumber:order.orderNumber,receiptNumber:candidate.receiptNumber,inventoryFinalized:result.inventoryFinalized,message:result.inventoryFinalized?"Customer identity confirmed. Payment recorded and stock updated.":"Payment recorded. The order requires fulfilment review because reserved stock was no longer available."});
+}
+
+export async function handleC2bRegistration(request: Request) {
+  const auth = await requireSession(request, [...admins]);
+  if ("response" in auth) return auth.response;
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  try {
+    const result = await registerC2bUrls();
+    await getDb().insert(activityLogs).values({ actorId: auth.session.userId, action: "MPESA_C2B_URLS_REGISTERED", entityType: "payment_configuration", entityId: null, metadata: { responseCode: result.responseCode } });
+    return json({ ok: true, message: result.responseDescription, responseCode: result.responseCode });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Safaricom did not register the callback URLs.";
+    return json({ error: message }, { status: 409 });
+  }
 }
 
 export function paymentConfigurationSummary() {

@@ -50,7 +50,7 @@ export function PrescriptionCheckoutForm({prescriptionId,data}:{prescriptionId:n
       const response=await fetch(`/api/prescriptions/${prescriptionId}/checkout`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({checkoutToken:checkoutToken.current,fulfilmentMethod:fulfilment,paymentMethod,phone:value("phone"),billingPhone:paymentMethod==="MPESA_EXPRESS"?value("billingPhone"):undefined,manualPaymentMessage:paymentMethod==="MANUAL_MPESA"?manualMessage.trim():undefined,deliveryAddress:fulfilment==="DELIVERY"?value("deliveryAddress"):undefined,deliveryArea:fulfilment==="DELIVERY"?value("deliveryArea"):undefined,deliveryLatitude:coordinates?.latitude,deliveryLongitude:coordinates?.longitude})});
       const payload=await response.json().catch(()=>({}));
       if(!response.ok){setError(payload.error||"Unable to start prescription checkout.");return}
-      const state=paymentMethod==="MANUAL_MPESA"?"REVIEW":payload.paymentStatus==="PAID"?"PAID":payload.paymentStatus==="FAILED"?"FAILED":"WAITING";
+      const state=payload.paymentStatus==="PAID"?"PAID":paymentMethod==="MANUAL_MPESA"?"REVIEW":payload.paymentStatus==="FAILED"?"FAILED":"WAITING";
       setResult({id:payload.id,orderNumber:payload.orderNumber,total:Number(payload.total),state,message:payload.paymentMessage||"Payment request started."});
     }catch{setError("Unable to reach checkout. Please try again.")}finally{setSubmitting(false)}
   }

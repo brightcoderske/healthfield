@@ -26,7 +26,12 @@ import Image from "next/image";
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { ProductCard } from "./product-card";
-import { CatalogueInterruption, type Guide, type OfferTeaser, type Promotion } from "./catalogue-interruption";
+import {
+  CatalogueInterruption,
+  type Guide,
+  type OfferTeaser,
+  type Promotion,
+} from "./catalogue-interruption";
 import { planBreaks } from "@/lib/catalogue-breaks";
 
 type CatalogProduct = {
@@ -43,9 +48,42 @@ type CatalogProduct = {
   rating: number | null;
   reviewCount: number;
   discountPrice: number | null;
+  prescriptionRequired: boolean;
 };
-type CatalogCategory = { id: number; name: string; slug: string; featuredOnStorefront?: boolean };
+type CatalogCategory = {
+  id: number;
+  name: string;
+  slug: string;
+  featuredOnStorefront?: boolean;
+};
 type HealthCondition = { id: number; name: string; slug: string };
+type SearchPayload = { products: CatalogProduct[]; similar: CatalogProduct[] };
+
+const searchCache = new Map<string, SearchPayload>();
+
+function searchWords(value: string) {
+  return value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+}
+
+function productMatches(
+  product: CatalogProduct,
+  words: string[],
+  categories: CatalogCategory[],
+) {
+  if (!words.length) return true;
+  const haystack =
+    `${product.name} ${product.brand || ""} ${product.shortDescription || ""} ${product.description || ""} ${categories.find((category) => category.id === product.categoryId)?.name || ""}`
+      .replace(/<[^>]*>/g, " ")
+      .toLowerCase();
+  return words.every((word) => haystack.includes(word));
+}
+
+function mergeProducts(primary: CatalogProduct[], secondary: CatalogProduct[]) {
+  const seen = new Set<number>();
+  return [...primary, ...secondary].filter(
+    (product) => !seen.has(product.id) && Boolean(seen.add(product.id)),
+  );
+}
 
 // The storefront shows a fixed six-category shortlist chosen by an administrator
 // (topped up with the remaining categories so the list is never short). Everything
@@ -62,7 +100,10 @@ type HeaderMenu = "category" | "condition";
 // The header menus normally open on hover. They are desktop-only, so a caller that
 // cannot reach them (narrow viewport) is told to fall back to a full page instead.
 function headerMenuReachable(label: HeaderMenu) {
-  return Boolean(document.querySelector<HTMLElement>(`[data-nav-menu="${label}"]`)?.offsetParent);
+  return Boolean(
+    document.querySelector<HTMLElement>(`[data-nav-menu="${label}"]`)
+      ?.offsetParent,
+  );
 }
 
 const categoryPresentation = [
@@ -82,11 +123,36 @@ const conditionPresentation = [
   { icon: ShieldCheck, color: "blue" },
 ];
 
-function SocialIcon({ brand }: { brand: "facebook" | "instagram" | "tiktok" | "whatsapp" }) {
-  if (brand === "facebook") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.03 1.79-4.7 4.53-4.7 1.31 0 2.69.24 2.69.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.89v2.27h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07Z" /></svg>;
-  if (brand === "instagram") return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle cx="17.5" cy="6.5" r="1" /></svg>;
-  if (brand === "tiktok") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3c.6 2.4 2 3.8 4.5 4.1v3.1c-1.7 0-3.2-.5-4.5-1.5v6.1a5.3 5.3 0 1 1-4.6-5.2v3.2a2.2 2.2 0 1 0 1.5 2.1V3H15Z" /></svg>;
-  return <svg viewBox="0 0 448 512" aria-hidden="true"><path d="M380.9 97.1C339 55.1 283.2 32 223.9 32c-122.4 0-222 99.6-222 222 0 39.1 10.2 77.3 29.6 111L0 480l117.7-30.9c32.4 17.7 68.9 27 106.1 27h.1c122.3 0 224.1-99.6 224.1-222 0-59.3-25.2-115-67.1-157zM223.9 438c-33.2 0-65.7-8.9-94-25.7l-6.7-4-69.8 18.3L72 358.2l-4.4-7c-18.5-29.4-28.2-63.3-28.2-98.2 0-101.7 82.8-184.5 184.6-184.5 49.3 0 95.6 19.2 130.4 54.1 34.8 34.9 56.2 81.2 56.1 130.5 0 101.8-84.9 184.9-186.6 184.9zm101.9-138.6c-5.6-2.8-33.2-16.4-38.3-18.2-5.1-1.9-8.8-2.8-12.5 2.8s-14.4 18.2-17.6 22c-3.2 3.7-6.5 4.2-12.1 1.4-32.6-16.3-54-29.1-75.5-66-5.7-9.8 5.7-9.1 16.3-30.3 1.9-3.7.9-6.9-.5-9.7-1.4-2.8-12.5-30.1-17.1-41.2-4.5-10.8-9.1-9.3-12.5-9.5-3.2-.2-6.9-.2-10.6-.2-3.7 0-9.7 1.4-14.8 6.9-5.1 5.6-19.4 19-19.4 46.3s19.9 53.7 22.6 57.4c2.8 3.7 39.1 59.7 94.8 83.8 13.2 5.7 23.5 9.1 31.5 11.7 13.2 4.2 25.2 3.6 34.7 2.2 10.6-1.6 33.2-13.6 37.9-26.7 4.6-13.1 4.6-24.3 3.2-26.7-1.3-2.5-5.1-3.9-10.6-6.6z" /></svg>;
+function SocialIcon({
+  brand,
+}: {
+  brand: "facebook" | "instagram" | "tiktok" | "whatsapp";
+}) {
+  if (brand === "facebook")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.03 1.79-4.7 4.53-4.7 1.31 0 2.69.24 2.69.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.89v2.27h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07Z" />
+      </svg>
+    );
+  if (brand === "instagram")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="5" />
+        <circle cx="12" cy="12" r="4" />
+        <circle cx="17.5" cy="6.5" r="1" />
+      </svg>
+    );
+  if (brand === "tiktok")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M15 3c.6 2.4 2 3.8 4.5 4.1v3.1c-1.7 0-3.2-.5-4.5-1.5v6.1a5.3 5.3 0 1 1-4.6-5.2v3.2a2.2 2.2 0 1 0 1.5 2.1V3H15Z" />
+      </svg>
+    );
+  return (
+    <svg viewBox="0 0 448 512" aria-hidden="true">
+      <path d="M380.9 97.1C339 55.1 283.2 32 223.9 32c-122.4 0-222 99.6-222 222 0 39.1 10.2 77.3 29.6 111L0 480l117.7-30.9c32.4 17.7 68.9 27 106.1 27h.1c122.3 0 224.1-99.6 224.1-222 0-59.3-25.2-115-67.1-157zM223.9 438c-33.2 0-65.7-8.9-94-25.7l-6.7-4-69.8 18.3L72 358.2l-4.4-7c-18.5-29.4-28.2-63.3-28.2-98.2 0-101.7 82.8-184.5 184.6-184.5 49.3 0 95.6 19.2 130.4 54.1 34.8 34.9 56.2 81.2 56.1 130.5 0 101.8-84.9 184.9-186.6 184.9zm101.9-138.6c-5.6-2.8-33.2-16.4-38.3-18.2-5.1-1.9-8.8-2.8-12.5 2.8s-14.4 18.2-17.6 22c-3.2 3.7-6.5 4.2-12.1 1.4-32.6-16.3-54-29.1-75.5-66-5.7-9.8 5.7-9.1 16.3-30.3 1.9-3.7.9-6.9-.5-9.7-1.4-2.8-12.5-30.1-17.1-41.2-4.5-10.8-9.1-9.3-12.5-9.5-3.2-.2-6.9-.2-10.6-.2-3.7 0-9.7 1.4-14.8 6.9-5.1 5.6-19.4 19-19.4 46.3s19.9 53.7 22.6 57.4c2.8 3.7 39.1 59.7 94.8 83.8 13.2 5.7 23.5 9.1 31.5 11.7 13.2 4.2 25.2 3.6 34.7 2.2 10.6-1.6 33.2-13.6 37.9-26.7 4.6-13.1 4.6-24.3 3.2-26.7-1.3-2.5-5.1-3.9-10.6-6.6z" />
+    </svg>
+  );
 }
 
 export function Storefront({
@@ -137,74 +203,139 @@ export function Storefront({
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<Record<number, number>>(initialCart);
   const [wishlist] = useState<number[]>(initialWishlist);
-  const [selectedCategory, setSelectedCategory] = useState<number | null>(initialCategoryId);
-  const [selectedCondition, setSelectedCondition] = useState<number | null>(initialConditionId);
+  const [selectedCategory, setSelectedCategory] = useState<number | null>(
+    initialCategoryId,
+  );
+  const [selectedCondition, setSelectedCondition] = useState<number | null>(
+    initialConditionId,
+  );
   const [conditionQuery, setConditionQuery] = useState("");
   const [categoryQuery, setCategoryQuery] = useState("");
   const [openMenu, setOpenMenu] = useState<HeaderMenu | null>(null);
   const [visibleCount, setVisibleCount] = useState(PRODUCT_PAGE_SIZE);
   const [showBackToTop, setShowBackToTop] = useState(false);
-  const [searchResults, setSearchResults] = useState<{ products: CatalogProduct[]; similar: CatalogProduct[] } | null>(null);
-  const [searching, setSearching] = useState(false);
-  const activeSearchResults = query.trim().length >= 2 ? searchResults : null;
+  const [searchResults, setSearchResults] = useState<
+    (SearchPayload & { term: string }) | null
+  >(null);
+  const normalizedQuery = useMemo(() => query.trim().toLowerCase(), [query]);
+  const queryWords = useMemo(() => searchWords(query), [query]);
+  const localSearchResults = useMemo(
+    () =>
+      queryWords.length
+        ? initialProducts.filter((product) =>
+            productMatches(product, queryWords, initialCategories),
+          )
+        : initialProducts,
+    [initialProducts, initialCategories, queryWords],
+  );
+  const activeSearchResults = useMemo(() => {
+    if (normalizedQuery.length < 2) return null;
+    if (searchResults?.term === normalizedQuery) return searchResults;
+    const cached = searchCache.get(normalizedQuery);
+    return cached ? { term: normalizedQuery, ...cached } : null;
+  }, [normalizedQuery, searchResults]);
+  const searching = normalizedQuery.length >= 2 && !activeSearchResults;
+  const searchedProducts = useMemo(
+    () =>
+      queryWords.length
+        ? mergeProducts(localSearchResults, activeSearchResults?.products || [])
+        : initialProducts,
+    [
+      activeSearchResults,
+      initialProducts,
+      localSearchResults,
+      queryWords.length,
+    ],
+  );
 
   const filtered = useMemo(
     () =>
-      (query.trim() ? activeSearchResults?.products || [] : initialProducts).filter(
+      searchedProducts.filter(
         (product) =>
-          `${product.name} ${product.brand || ""} ${product.shortDescription || ""} ${product.description || ""} ${initialCategories.find((category) => category.id === product.categoryId)?.name || ""}`
-            .replace(/<[^>]*>/g, " ")
-            .toLowerCase()
-            .includes(query.toLowerCase()) &&
+          productMatches(product, queryWords, initialCategories) &&
           (!selectedCategory || product.categoryId === selectedCategory) &&
           (!selectedCondition ||
             product.conditionIds.includes(selectedCondition)) &&
           (!offersOnly || product.discountPrice !== null),
       ),
     [
-      initialProducts,
-      activeSearchResults,
+      searchedProducts,
       initialCategories,
-      query,
+      queryWords,
       selectedCategory,
       selectedCondition,
       offersOnly,
     ],
   );
-  const similarProducts = activeSearchResults?.similar || [];
+  const similarProducts = useMemo(() => {
+    const exactIds = new Set(searchedProducts.map((product) => product.id));
+    return (activeSearchResults?.similar || []).filter(
+      (product) => !exactIds.has(product.id),
+    );
+  }, [activeSearchResults, searchedProducts]);
   const orderedCategories = [...initialCategories].sort((left, right) => {
     const isPrescription = (category: CatalogCategory) =>
-      `${category.name} ${category.slug}`.toLowerCase().includes("prescription");
+      `${category.name} ${category.slug}`
+        .toLowerCase()
+        .includes("prescription");
     return Number(isPrescription(left)) - Number(isPrescription(right));
   });
   const displayedCategories = orderedCategories.map((category, index) => ({
     ...category,
-    ...(`${category.name} ${category.slug}`.toLowerCase().includes("prescription")
+    ...(`${category.name} ${category.slug}`
+      .toLowerCase()
+      .includes("prescription")
       ? { icon: Upload, color: "green" }
       : categoryPresentation[index % categoryPresentation.length]),
   }));
-  const prescriptionCategory = displayedCategories.find((category) => `${category.name} ${category.slug}`.toLowerCase().includes("prescription"));
+  const prescriptionCategory = displayedCategories.find((category) =>
+    `${category.name} ${category.slug}`.toLowerCase().includes("prescription"),
+  );
   // Administrator picks come first; the rest top the list up so the storefront never
   // renders a short row while nobody has chosen any.
   const visibleCategories = [
     ...displayedCategories.filter((category) => category.featuredOnStorefront),
     ...displayedCategories.filter((category) => !category.featuredOnStorefront),
   ].slice(0, CATEGORY_PREVIEW);
-  const hiddenCategoryCount = Math.max(0, displayedCategories.length - visibleCategories.length);
+  const hiddenCategoryCount = Math.max(
+    0,
+    displayedCategories.length - visibleCategories.length,
+  );
   // Which offer and blog cards break up the catalogue scroll, and where. The rules
   // (spacing, relevance, urgency, seeded variation) live in lib/catalogue-breaks.
-  const breakPlan = useMemo(() => planBreaks({
-    products: filtered.slice(0, visibleCount).map((product) => ({
-      id: product.id, name: product.name,
-    })),
-    offers,
-    guides,
-    promotions,
-    seed: layoutSeed,
-    // A shopper mid-search or mid-filter is working towards something specific.
-    focused: Boolean(query.trim() || selectedCategory || selectedCondition || offersOnly),
-  }), [filtered, visibleCount, offers, guides, promotions, layoutSeed, query, selectedCategory, selectedCondition, offersOnly]);
-  const breakAt = useMemo(() => new Map(breakPlan.map((entry) => [entry.position, entry.item])), [breakPlan]);
+  const breakPlan = useMemo(
+    () =>
+      planBreaks({
+        products: filtered.slice(0, visibleCount).map((product) => ({
+          id: product.id,
+          name: product.name,
+        })),
+        offers,
+        guides,
+        promotions,
+        seed: layoutSeed,
+        // A shopper mid-search or mid-filter is working towards something specific.
+        focused: Boolean(
+          query.trim() || selectedCategory || selectedCondition || offersOnly,
+        ),
+      }),
+    [
+      filtered,
+      visibleCount,
+      offers,
+      guides,
+      promotions,
+      layoutSeed,
+      query,
+      selectedCategory,
+      selectedCondition,
+      offersOnly,
+    ],
+  );
+  const breakAt = useMemo(
+    () => new Map(breakPlan.map((entry) => [entry.position, entry.item])),
+    [breakPlan],
+  );
 
   const visibleConditions = initialConditions.slice(0, CONDITION_PREVIEW);
   // "View all" jumps to the header menu that already lists everything, rather than
@@ -231,40 +362,84 @@ export function Storefront({
     setOpenMenu(null);
     document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
   }
+  function viewSearchResults() {
+    if (!query.trim()) return;
+    setOpenMenu(null);
+    (
+      document.getElementById("mobile-shop-menu") as
+        (HTMLElement & { hidePopover?: () => void }) | null
+    )?.hidePopover?.();
+    window.requestAnimationFrame(() => {
+      const target = document.getElementById("products");
+      if (!target) return;
+      const stickyHeader = document.querySelector<HTMLElement>(
+        window.innerWidth >= 900 ? ".desktop-store" : ".approved-topbar",
+      );
+      const obstruction = Math.max(
+        0,
+        stickyHeader?.getBoundingClientRect().bottom || 0,
+      );
+      const top =
+        window.scrollY + target.getBoundingClientRect().top - obstruction - 12;
+      window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    });
+  }
   useEffect(() => {
     if (!openMenu) return;
     const dismiss = (event: Event) => {
       if (event instanceof KeyboardEvent && event.key !== "Escape") return;
       const target = event.target instanceof Element ? event.target : null;
-      if (event.type === "pointerdown" && target?.closest(`[data-nav-menu="${openMenu}"]`)) return;
+      if (
+        event.type === "pointerdown" &&
+        target?.closest(`[data-nav-menu="${openMenu}"]`)
+      )
+        return;
       setOpenMenu(null);
     };
     document.addEventListener("pointerdown", dismiss);
     document.addEventListener("keydown", dismiss);
-    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", dismiss); };
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", dismiss);
+    };
   }, [openMenu]);
 
   useEffect(() => {
-    const term = query.trim();
-    if (term.length < 2) return;
+    const term = query.trim().toLowerCase();
+    if (term.length < 2 || searchCache.has(term)) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
-      setSearching(true);
       try {
-        const response = await fetch(`/api/catalogue/search?q=${encodeURIComponent(term)}`, { signal: controller.signal });
-        const data = await response.json().catch(() => null) as { products?: CatalogProduct[]; similar?: CatalogProduct[] } | null;
+        const response = await fetch(
+          `/api/catalogue/search?q=${encodeURIComponent(term)}`,
+          { signal: controller.signal },
+        );
+        const data = (await response.json().catch(() => null)) as {
+          products?: CatalogProduct[];
+          similar?: CatalogProduct[];
+        } | null;
         if (!response.ok || !data) throw new Error("Search failed");
-        setSearchResults({ products: Array.isArray(data.products) ? data.products : [], similar: Array.isArray(data.similar) ? data.similar : [] });
+        const result = {
+          products: Array.isArray(data.products) ? data.products : [],
+          similar: Array.isArray(data.similar) ? data.similar : [],
+        };
+        searchCache.set(term, result);
+        if (searchCache.size > 30)
+          searchCache.delete(searchCache.keys().next().value!);
+        setSearchResults({ term, ...result });
       } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) setSearchResults({ products: [], similar: [] });
-      } finally {
-        if (!controller.signal.aborted) setSearching(false);
+        if (!(error instanceof DOMException && error.name === "AbortError"))
+          setSearchResults({ term, products: [], similar: [] });
       }
-    }, 220);
-    return () => { controller.abort(); window.clearTimeout(timer); };
+    }, 80);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
   }, [query]);
   useEffect(() => {
-    const updateBackToTop = () => setShowBackToTop(window.scrollY > window.innerHeight * 0.6);
+    const updateBackToTop = () =>
+      setShowBackToTop(window.scrollY > window.innerHeight * 0.6);
     updateBackToTop();
     window.addEventListener("scroll", updateBackToTop, { passive: true });
     return () => window.removeEventListener("scroll", updateBackToTop);
@@ -287,10 +462,7 @@ export function Storefront({
     (sum, quantity) => sum + quantity,
     0,
   );
-  async function addToCart(
-    event: React.FormEvent<HTMLFormElement>,
-    productId: number,
-  ) {
+  async function addToCart(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const response = await fetch("/api/cart", {
@@ -300,19 +472,30 @@ export function Storefront({
       }),
       data = await response.json().catch(() => null);
     if (response.ok && data?.cart) setCart(data.cart);
-    else
-      setCart((current) => ({
-        ...current,
-        [productId]: Math.min(99, (current[productId] || 0) + 1),
-      }));
   }
 
   return (
     <div className="approved-app">
       <div className="store-utility-strip">
-        <span><Truck /> {contact.deliveryMessage || "Delivery across Kenya"}</span>
-        <a href={contact.phone ? `tel:${contact.phone.replace(/\s/g, "")}` : contact.whatsapp ? `https://wa.me/${contact.whatsapp.replace(/\D/g, "")}` : "/contact"}><Phone /> {contact.phone || contact.whatsapp || "Call pharmacy"}</a>
-        {contact.licenceNumber && <span><ShieldCheck /> Pharmacy licence: {contact.licenceNumber}</span>}
+        <span>
+          <Truck /> {contact.deliveryMessage || "Delivery across Kenya"}
+        </span>
+        <a
+          href={
+            contact.phone
+              ? `tel:${contact.phone.replace(/\s/g, "")}`
+              : contact.whatsapp
+                ? `https://wa.me/${contact.whatsapp.replace(/\D/g, "")}`
+                : "/contact"
+          }
+        >
+          <Phone /> {contact.phone || contact.whatsapp || "Call pharmacy"}
+        </a>
+        {contact.licenceNumber && (
+          <span>
+            <ShieldCheck /> Pharmacy licence: {contact.licenceNumber}
+          </span>
+        )}
       </div>
       <div className="desktop-store">
         <div className="desktop-trust">
@@ -348,7 +531,11 @@ export function Storefront({
             </a>
           )}
           {viewer && (
-            <form className="desktop-logout" action="/api/auth/logout" method="post">
+            <form
+              className="desktop-logout"
+              action="/api/auth/logout"
+              method="post"
+            >
               <button type="submit">Log out</button>
             </form>
           )}
@@ -372,10 +559,25 @@ export function Storefront({
           <label>
             <input
               value={query}
-              onChange={(event) => { setQuery(event.target.value); setSelectedCategory(null); setSelectedCondition(null); setVisibleCount(PRODUCT_PAGE_SIZE); }}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setSelectedCategory(null);
+                setSelectedCondition(null);
+                setVisibleCount(PRODUCT_PAGE_SIZE);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  viewSearchResults();
+                }
+              }}
               placeholder="Search for medicines, health & wellness products..."
             />
-            <button>
+            <button
+              type="button"
+              onClick={viewSearchResults}
+              aria-label="View search results"
+            >
               <Search />
             </button>
           </label>
@@ -399,29 +601,82 @@ export function Storefront({
           </a>
         </div>
         <nav className="desktop-store-nav">
-          <Link className={!selectedCategory ? "active" : ""} href="/">Home</Link>
+          <Link className={!selectedCategory ? "active" : ""} href="/">
+            Home
+          </Link>
           <a href="/prescriptions/upload">Upload prescription</a>
-          <div className={`desktop-nav-dropdown${openMenu === "category" ? " is-open" : ""}`} data-nav-menu="category">
-            <button type="button">Shop by category <ChevronDown/></button>
+          <div
+            className={`desktop-nav-dropdown${openMenu === "category" ? " is-open" : ""}`}
+            data-nav-menu="category"
+          >
+            <button type="button">
+              Shop by category <ChevronDown />
+            </button>
             <div className="desktop-nav-grid category-nav-grid">
-              {displayedCategories.map((category) => <a key={category.id} className={selectedCategory===category.id?"active":""} href="#products" onClick={(event)=>{event.preventDefault();showCategory(category.id)}}>{category.name}</a>)}
+              {displayedCategories.map((category) => (
+                <a
+                  key={category.id}
+                  className={selectedCategory === category.id ? "active" : ""}
+                  href="#products"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    showCategory(category.id);
+                  }}
+                >
+                  {category.name}
+                </a>
+              ))}
             </div>
           </div>
-          <div className={`desktop-nav-dropdown${openMenu === "condition" ? " is-open" : ""}`} data-nav-menu="condition">
-            <button type="button">Shop by condition <ChevronDown/></button>
+          <div
+            className={`desktop-nav-dropdown${openMenu === "condition" ? " is-open" : ""}`}
+            data-nav-menu="condition"
+          >
+            <button type="button">
+              Shop by condition <ChevronDown />
+            </button>
             <div className="desktop-nav-grid condition-nav-grid">
-              {initialConditions.map((condition) => <a key={condition.id} className={selectedCondition===condition.id?"active":""} href="#products" onClick={(event)=>{event.preventDefault();showCondition(condition.id)}}>{condition.name}</a>)}
+              {initialConditions.map((condition) => (
+                <a
+                  key={condition.id}
+                  className={selectedCondition === condition.id ? "active" : ""}
+                  href="#products"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    showCondition(condition.id);
+                  }}
+                >
+                  {condition.name}
+                </a>
+              ))}
               <a href="/conditions">View all conditions</a>
             </div>
           </div>
-          {prescriptionCategory&&<a href="#products" onClick={(event)=>{event.preventDefault();showCategory(prescriptionCategory.id)}}>Prescription Medicines</a>}
+          {prescriptionCategory && (
+            <a
+              href="#products"
+              onClick={(event) => {
+                event.preventDefault();
+                showCategory(prescriptionCategory.id);
+              }}
+            >
+              Prescription Medicines
+            </a>
+          )}
           <div className="desktop-nav-dropdown services-nav-dropdown">
-            <button type="button">Our services <ChevronDown/></button>
+            <button type="button">
+              Our services <ChevronDown />
+            </button>
             <div className="desktop-nav-grid services-nav-grid">
-              <a href="/contact">Pharmacist advice</a><a href="/prescriptions/upload">Prescription fulfilment</a><a href="/chat">Chat with our pharmacy</a><a href="/shipping-policy">Medicine delivery</a><a href="/account#orders">Track an order</a><a href="/conditions">Shop by health need</a>
+              <a href="/contact">Pharmacist advice</a>
+              <a href="/prescriptions/upload">Prescription fulfilment</a>
+              <a href="/chat">Chat with our pharmacy</a>
+              <a href="/shipping-policy">Medicine delivery</a>
+              <a href="/account#orders">Track an order</a>
+              <a href="/conditions">Shop by health need</a>
             </div>
           </div>
-          <a href="/offers">Offers</a>
+          <Link href="/offers">Offers</Link>
           <Link href="/blog">Blogs</Link>
         </nav>
       </div>
@@ -438,7 +693,18 @@ export function Storefront({
             <Search />
             <input
               value={query}
-              onChange={(event) => { setQuery(event.target.value); setSelectedCategory(null); setSelectedCondition(null); setVisibleCount(PRODUCT_PAGE_SIZE); }}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setSelectedCategory(null);
+                setSelectedCondition(null);
+                setVisibleCount(PRODUCT_PAGE_SIZE);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  viewSearchResults();
+                }
+              }}
               placeholder="Search products"
             />
           </label>
@@ -469,7 +735,10 @@ export function Storefront({
                   <a
                     key={condition.id}
                     href="#products"
-                    onClick={(event)=>{event.preventDefault();showCondition(condition.id)}}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      showCondition(condition.id);
+                    }}
                   >
                     {condition.name}
                   </a>
@@ -502,15 +771,18 @@ export function Storefront({
                   <a
                     key={category.id}
                     href="#products"
-                    onClick={(event)=>{event.preventDefault();showCategory(category.id)}}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      showCategory(category.id);
+                    }}
                   >
                     {category.name}
                   </a>
                 ))}
             </div>
           </details>
-          <a href="/offers">Offers</a>
-          <a href="/offers">Campaign offers</a>
+          <Link href="/offers">Offers</Link>
+          <Link href="/offers">Campaign offers</Link>
           {viewer ? (
             <>
               <div className="mobile-account-summary">
@@ -587,80 +859,111 @@ export function Storefront({
         </div>
       </header>
 
-      <main className={`approved-content ${query.trim() ? "search-results-active" : ""}`}>
-        {!query.trim() && <div className="desktop-hero-row">
-          <aside>
+      <main
+        className={`approved-content ${query.trim() ? "search-results-active" : ""}`}
+      >
+        {!query.trim() && (
+          <div className="desktop-hero-row">
+            <aside>
+              <h2>
+                <Menu /> Shop by Category
+              </h2>
+              {visibleCategories.map(({ name, icon: Icon, id }) => (
+                <a
+                  href={`#category-${id}`}
+                  key={id}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setSelectedCategory(id);
+                    setVisibleCount(PRODUCT_PAGE_SIZE);
+                    document
+                      .getElementById("products")
+                      ?.scrollIntoView({ behavior: "smooth" });
+                  }}
+                >
+                  <Icon />
+                  {name}
+                  <span>›</span>
+                </a>
+              ))}
+              {hiddenCategoryCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => revealHeaderMenu("category", "/#products")}
+                >
+                  View All Categories →
+                </button>
+              )}
+            </aside>
+            <section>
+              <div>
+                <h1>
+                  Your Health,
+                  <br />
+                  <em>Our Priority</em>
+                </h1>
+                <p className="desktop-hero-description">
+                  Quality medicine and health products delivered to your door.
+                </p>
+                <a href="#products">Shop Now →</a>
+              </div>
+              <Image
+                className="hero-pharmacist"
+                src="/healthfield-hero-pharmacist.png"
+                alt="Healthfield pharmacist with health and wellness products"
+                width={2048}
+                height={910}
+                priority
+              />
+              <div className="desktop-hero-trust">
+                <span>
+                  <Truck /> Fast Delivery
+                </span>
+                <span>
+                  <ShieldCheck /> Secure Payments
+                </span>
+                <span>
+                  <Sparkles /> Genuine Products
+                </span>
+              </div>
+            </section>
+          </div>
+        )}
+        {query.trim() && (
+          <aside className="desktop-search-categories">
             <h2>
               <Menu /> Shop by Category
             </h2>
+            {/* Capped to the same shortlist as the hero list so the panel keeps a fixed
+              height instead of growing with every new category. */}
             {visibleCategories.map(({ name, icon: Icon, id }) => (
-              <a
-                href={`#category-${id}`}
-                key={id}
-                onClick={(event) => {
-                  event.preventDefault();
-                  setSelectedCategory(id);
+              <button
+                type="button"
+                className={selectedCategory === id ? "active" : ""}
+                onClick={() => {
+                  setSelectedCategory(selectedCategory === id ? null : id);
                   setVisibleCount(PRODUCT_PAGE_SIZE);
-                  document
-                    .getElementById("products")
-                    ?.scrollIntoView({ behavior: "smooth" });
                 }}
+                key={id}
               >
                 <Icon />
                 {name}
                 <span>›</span>
-              </a>
-            ))}
-            {hiddenCategoryCount > 0 && (
-              <button type="button" onClick={() => revealHeaderMenu("category", "/#products")}>
-                View All Categories →
               </button>
-            )}
-          </aside>
-          <section>
-            <div>
-              <h1>
-                Your Health,<br /><em>Our Priority</em>
-              </h1>
-              <p className="desktop-hero-description">
-                Quality medicine and health products delivered to your door.
-              </p>
-              <a href="#products">Shop Now →</a>
-            </div>
-            <Image
-              className="hero-pharmacist"
-              src="/healthfield-hero-pharmacist.png"
-              alt="Healthfield pharmacist with health and wellness products"
-              width={2048}
-              height={910}
-              priority
-            />
-            <div className="desktop-hero-trust">
-              <span>
-                <Truck /> Fast Delivery
-              </span>
-              <span>
-                <ShieldCheck /> Secure Payments
-              </span>
-              <span>
-                <Sparkles /> Genuine Products
-              </span>
-            </div>
-          </section>
-        </div>}
-        {query.trim() && <aside className="desktop-search-categories">
-          <h2><Menu /> Shop by Category</h2>
-          {/* Capped to the same shortlist as the hero list so the panel keeps a fixed
-              height instead of growing with every new category. */}
-          {visibleCategories.map(({ name, icon: Icon, id }) => (
-            <button type="button" className={selectedCategory===id?"active":""} onClick={()=>{setSelectedCategory(selectedCategory===id?null:id);setVisibleCount(PRODUCT_PAGE_SIZE)}} key={id}>
-              <Icon />
-              {name}
-              <span>›</span>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedCategory(null);
+                setSelectedCondition(null);
+                setQuery("");
+                setVisibleCount(PRODUCT_PAGE_SIZE);
+              }}
+            >
+              View All Categories →
             </button>
-          ))}
-          <button type="button" onClick={()=>{setSelectedCategory(null);setSelectedCondition(null);setQuery("");setVisibleCount(PRODUCT_PAGE_SIZE)}}>View All Categories →</button>
-        </aside>}
+          </aside>
+        )}
         <label className="approved-search">
           <Search />
           <input
@@ -671,59 +974,77 @@ export function Storefront({
               setSelectedCondition(null);
               setVisibleCount(PRODUCT_PAGE_SIZE);
             }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                viewSearchResults();
+              }
+            }}
             placeholder="Search products, categories..."
             aria-label="Search products and categories"
           />
         </label>
 
-        {!query.trim() && <section className="approved-section" id="conditions">
-          <div className="approved-title">
-            <h2>Shop by Condition</h2>
-            <button className="title-action" type="button" aria-label="View all conditions" onClick={() => revealHeaderMenu("condition", "/conditions")}>
-              <span className="title-action-label">View all</span>
-              <ChevronRight />
-            </button>
-          </div>
-          <div className="approved-categories">
-            <a
-              className="prescription-category-link"
-              href="/prescriptions/upload"
-            >
-              <span className="green">
-                <Upload />
-              </span>
-              <small>Upload Prescription</small>
-            </a>
-            {visibleConditions.map((condition, index) => {
-              const { icon: Icon, color } = conditionPresentation[index % conditionPresentation.length];
-              return (
-                <button
-                  key={condition.id}
-                  id={`condition-${condition.id}`}
-                  onClick={() => {
-                    setSelectedCondition(condition.id);
-                    setSelectedCategory(null);
-                    setVisibleCount(PRODUCT_PAGE_SIZE);
-                    document
-                      .getElementById("products")
-                      ?.scrollIntoView({ behavior: "smooth" });
-                  }}
-                >
-                  <span className={color}>
-                    <Icon />
-                  </span>
-                  <small>{condition.name}</small>
-                </button>
-              );
-            })}
-          </div>
-        </section>}
+        {!query.trim() && (
+          <section className="approved-section" id="conditions">
+            <div className="approved-title">
+              <h2>Shop by Condition</h2>
+              <button
+                className="title-action"
+                type="button"
+                aria-label="View all conditions"
+                onClick={() => revealHeaderMenu("condition", "/conditions")}
+              >
+                <span className="title-action-label">View all</span>
+                <ChevronRight />
+              </button>
+            </div>
+            <div className="approved-categories">
+              <a
+                className="prescription-category-link"
+                href="/prescriptions/upload"
+              >
+                <span className="green">
+                  <Upload />
+                </span>
+                <small>Upload Prescription</small>
+              </a>
+              {visibleConditions.map((condition, index) => {
+                const { icon: Icon, color } =
+                  conditionPresentation[index % conditionPresentation.length];
+                return (
+                  <button
+                    key={condition.id}
+                    id={`condition-${condition.id}`}
+                    onClick={() => {
+                      setSelectedCondition(condition.id);
+                      setSelectedCategory(null);
+                      setVisibleCount(PRODUCT_PAGE_SIZE);
+                      document
+                        .getElementById("products")
+                        ?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                  >
+                    <span className={color}>
+                      <Icon />
+                    </span>
+                    <small>{condition.name}</small>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         <section className="approved-section" id="products">
           <div className="approved-title">
             <div>
               <h2>Shop Health &amp; Wellness</h2>
-              <small>{searching ? "Searching the catalogue…" : "Search by product, brand or health need"}</small>
+              <small>
+                {searching
+                  ? "Searching the catalogue…"
+                  : "Search by product, brand or health need"}
+              </small>
             </div>
           </div>
           <div
@@ -731,26 +1052,63 @@ export function Storefront({
           >
             {filtered.slice(0, visibleCount).map((product, index) => {
               const slot = breakAt.get(index);
-              return <Fragment key={product.id}>
-                {slot && <CatalogueInterruption item={slot} />}
-                <ProductCard product={product} wishlistActive={wishlist.includes(product.id)} cartQuantity={cart[product.id]} returnTo="/#products" onAddToCart={addToCart} />
-              </Fragment>;
+              return (
+                <Fragment key={product.id}>
+                  {slot && <CatalogueInterruption item={slot} />}
+                  <ProductCard
+                    product={product}
+                    wishlistActive={wishlist.includes(product.id)}
+                    cartQuantity={cart[product.id]}
+                    returnTo="/#products"
+                    onAddToCart={addToCart}
+                  />
+                </Fragment>
+              );
             })}
           </div>
           {visibleCount < filtered.length && (
             <button
               className="catalogue-show-more"
               type="button"
-              onClick={() => setVisibleCount((count) => count + PRODUCT_PAGE_SIZE)}
+              onClick={() =>
+                setVisibleCount((count) => count + PRODUCT_PAGE_SIZE)
+              }
             >
               Show more products
             </button>
           )}
           {(selectedCategory || selectedCondition || query || offersOnly) &&
             filtered.length === 0 && (
-              <div className="catalogue-empty"><Package /><strong>No matching products</strong><span>Try another category or search term.</span></div>
+              <div className="catalogue-empty">
+                <Package />
+                <strong>No matching products</strong>
+                <span>Try another category or search term.</span>
+              </div>
             )}
-          {query.trim() && similarProducts.length > 0 && <section className="search-suggestions"><header><h3>{filtered.length ? "Mostly shopped with" : "Similar products you may need"}</h3><span>Available alternatives from our catalogue</span></header><div className="approved-products catalogue-expanded">{similarProducts.map((product) => <ProductCard key={product.id} product={product} wishlistActive={wishlist.includes(product.id)} cartQuantity={cart[product.id]} returnTo="/#products" onAddToCart={addToCart} />)}</div></section>}
+          {query.trim() && similarProducts.length > 0 && (
+            <section className="search-suggestions">
+              <header>
+                <h3>
+                  {filtered.length
+                    ? "Mostly shopped with"
+                    : "Similar products you may need"}
+                </h3>
+                <span>Available alternatives from our catalogue</span>
+              </header>
+              <div className="approved-products catalogue-expanded">
+                {similarProducts.map((product) => (
+                  <ProductCard
+                    key={product.id}
+                    product={product}
+                    wishlistActive={wishlist.includes(product.id)}
+                    cartQuantity={cart[product.id]}
+                    returnTo="/#products"
+                    onAddToCart={addToCart}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
         </section>
       </main>
 
@@ -761,11 +1119,7 @@ export function Storefront({
         </Link>
         <Link
           prefetch={false}
-          href={
-            viewer?.role === "CUSTOMER"
-              ? "/account#orders"
-              : "/login"
-          }
+          href={viewer?.role === "CUSTOMER" ? "/account#orders" : "/login"}
         >
           <Package />
           <span>Orders</span>
@@ -800,7 +1154,12 @@ export function Storefront({
         popoverTarget="healthfield-services"
         aria-label="Open Healthfield services"
       >
-        <Image src="/healthfield-icon.png" alt="Healthfield Pharmacy services" width={54} height={46} />
+        <Image
+          src="/healthfield-icon.png"
+          alt="Healthfield Pharmacy services"
+          width={54}
+          height={46}
+        />
       </button>
       <div
         className="approved-services-overlay"
@@ -922,7 +1281,12 @@ export function Storefront({
               </a>
             )}
             {contact.whatsapp && (
-              <a href={`https://wa.me/${contact.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" aria-label="WhatsApp">
+              <a
+                href={`https://wa.me/${contact.whatsapp.replace(/\D/g, "")}`}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="WhatsApp"
+              >
                 <SocialIcon brand="whatsapp" />
                 <span className="visually-hidden">WhatsApp</span>
               </a>
@@ -985,7 +1349,13 @@ export function Storefront({
           </span>
         </div>
       </footer>
-      <button className={`back-to-top${showBackToTop ? " visible" : ""}`} type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} aria-label="Back to top" tabIndex={showBackToTop ? 0 : -1}>
+      <button
+        className={`back-to-top${showBackToTop ? " visible" : ""}`}
+        type="button"
+        onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        aria-label="Back to top"
+        tabIndex={showBackToTop ? 0 : -1}
+      >
         <ArrowUp />
       </button>
     </div>

@@ -211,6 +211,13 @@
       "when": 1786857600000,
       "tag": "0029_staff_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "5",
+      "when": 1786944000000,
+      "tag": "0030_payment_reconciliation",
+      "breakpoints": true
     }
   ]
 }

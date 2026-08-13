@@ -1,9 +1,10 @@
-import { Activity, BookOpen, Boxes, Building2, ClipboardList, History, Megaphone, Percent, LayoutDashboard, LayoutList, MessageSquareText, Pill, Settings, ShieldCheck, ShoppingBasket, UserCog, Users } from "lucide-react";
+import { Activity, BookOpen, Boxes, Building2, ClipboardList, History, Megaphone, Percent, LayoutDashboard, LayoutList, MessageSquareText, Pill, Settings, ShieldCheck, ShoppingBasket, UserCog, Users, WalletCards } from "lucide-react";
 
 export const adminNavGroups = [
   { label: "Daily operations", items: [
     ["/admin", "Dashboard", LayoutDashboard],
     ["/admin/walk-in-sales", "Walk-in sale", ShoppingBasket],
+    ["/admin/unmatched-payments", "Unmatched payments", WalletCards],
     ["/admin/orders", "Orders", ClipboardList],
     ["/admin/past-orders", "Past orders", History],
     ["/admin/prescriptions", "Prescriptions", ShieldCheck],
