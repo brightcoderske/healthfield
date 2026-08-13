@@ -42,12 +42,35 @@ function tokenStart(value: string, index: number) {
   return value.startsWith("**", index) || value.startsWith("++", index) || value.startsWith("==", index) || value[index] === "*" || value[index] === "[" || value[index] === "{";
 }
 
+function customTokenNeedsSpace(value: string, index: number) {
+  if (index < 1 || /\s/.test(value[index - 1]) || /\s/.test(value[index])) return false;
+  const previousWasToken = value[index - 1] === "}";
+  const nextIsToken = value[index] === "{";
+  if (!previousWasToken && !nextIsToken) return false;
+  // Keep punctuation attached to the formatted word before it.
+  if (/[.,!?;:)]/.test(value[index])) return false;
+  return true;
+}
+
 function inline(value: string, keyPrefix = ""): ReactNode[] {
   const parts: ReactNode[] = [];
   let index = 0;
 
   while (index < value.length) {
     const key = `${keyPrefix}${index}`;
+
+    // Older editor saves sometimes joined separately formatted lines without a
+    // literal space. Restore a readable boundary between custom formatting runs.
+    if (parts.length && customTokenNeedsSpace(value, index)) parts.push(" ");
+
+    if (value.startsWith("***", index)) {
+      const end = value.indexOf("***", index + 3);
+      if (end > index + 3) {
+        parts.push(<strong key={key}><em>{inline(value.slice(index + 3, end), `${key}-`)}</em></strong>);
+        index = end + 3;
+        continue;
+      }
+    }
 
     if (value.startsWith("**", index)) {
       const end = value.indexOf("**", index + 2);

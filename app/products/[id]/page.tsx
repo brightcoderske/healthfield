@@ -72,7 +72,9 @@ async function currentOrigin() {
 
 async function dataFor(id: number) {
   try {
-    return await backendPublicJson<ProductData>(`/v1/views/products/${id}`, 60);
+    return await backendPublicJson<ProductData>(`/v1/views/products/${id}`, 60, [
+      `product:${id}`,
+    ]);
   } catch (error) {
     if (error instanceof BackendError && error.status === 404) return null;
     throw error;

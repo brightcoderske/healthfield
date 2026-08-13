@@ -14,6 +14,6 @@ export default async function Blog() {
   // to throw here and fail the entire deployment, so a backend blip took the whole
   // site down. It now degrades to an empty list and self-heals on the next
   // revalidation instead.
-  const data = await backendPublicJson<{ posts: Post[] }>("/v1/views/blogs", 300).catch(() => null);
+  const data = await backendPublicJson<{ posts: Post[] }>("/v1/views/blogs", 300, ["blogs"]).catch(() => null);
   return <BlogCatalogue posts={data?.posts ?? []}/>;
 }

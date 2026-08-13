@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ProductCard } from "./product-card";
 import {
   CatalogueInterruption,
@@ -217,6 +217,7 @@ export function Storefront({
   const [searchResults, setSearchResults] = useState<
     (SearchPayload & { term: string }) | null
   >(null);
+  const searchScrollRequest = useRef(0);
   const normalizedQuery = useMemo(() => query.trim().toLowerCase(), [query]);
   const queryWords = useMemo(() => searchWords(query), [query]);
   const localSearchResults = useMemo(
@@ -362,6 +363,46 @@ export function Storefront({
     setOpenMenu(null);
     document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
   }
+  function scheduleSearchResultsScroll(behavior: ScrollBehavior = "smooth") {
+    const request = ++searchScrollRequest.current;
+    const placeResultsBelowHeader = (nextBehavior: ScrollBehavior) => {
+      if (request !== searchScrollRequest.current) return;
+      const section = document.getElementById("products");
+      const target = section?.querySelector<HTMLElement>(".approved-title") || section;
+      if (!target) return;
+      const stickyBottom = Array.from(
+        document.querySelectorAll<HTMLElement>(".desktop-store, .approved-topbar"),
+      ).reduce((bottom, header) => {
+        const bounds = header.getBoundingClientRect();
+        return bounds.height > 0 ? Math.max(bottom, bounds.bottom) : bottom;
+      }, 0);
+      const nextTop =
+        window.scrollY + target.getBoundingClientRect().top - stickyBottom - 16;
+      if (Math.abs(window.scrollY - nextTop) > 1) {
+        window.scrollTo({ top: Math.max(0, nextTop), behavior: nextBehavior });
+      }
+    };
+
+    // The hero and filter panels disappear as soon as a search starts. Waiting
+    // for two frames measures the catalogue after that layout change, not before it.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        placeResultsBelowHeader(behavior);
+        if (behavior === "smooth") {
+          window.setTimeout(() => placeResultsBelowHeader("auto"), 420);
+        }
+      });
+    });
+  }
+  function updateSearchQuery(nextQuery: string) {
+    const searchStarting = !query.trim() && Boolean(nextQuery.trim());
+    if (!nextQuery.trim()) searchScrollRequest.current += 1;
+    setQuery(nextQuery);
+    setSelectedCategory(null);
+    setSelectedCondition(null);
+    setVisibleCount(PRODUCT_PAGE_SIZE);
+    if (searchStarting) scheduleSearchResultsScroll();
+  }
   function viewSearchResults() {
     if (!query.trim()) return;
     setOpenMenu(null);
@@ -369,20 +410,7 @@ export function Storefront({
       document.getElementById("mobile-shop-menu") as
         (HTMLElement & { hidePopover?: () => void }) | null
     )?.hidePopover?.();
-    window.requestAnimationFrame(() => {
-      const target = document.getElementById("products");
-      if (!target) return;
-      const stickyHeader = document.querySelector<HTMLElement>(
-        window.innerWidth >= 900 ? ".desktop-store" : ".approved-topbar",
-      );
-      const obstruction = Math.max(
-        0,
-        stickyHeader?.getBoundingClientRect().bottom || 0,
-      );
-      const top =
-        window.scrollY + target.getBoundingClientRect().top - obstruction - 12;
-      window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
-    });
+    scheduleSearchResultsScroll();
   }
   useEffect(() => {
     if (!openMenu) return;
@@ -559,12 +587,7 @@ export function Storefront({
           <label>
             <input
               value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setSelectedCategory(null);
-                setSelectedCondition(null);
-                setVisibleCount(PRODUCT_PAGE_SIZE);
-              }}
+              onChange={(event) => updateSearchQuery(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
@@ -693,12 +716,7 @@ export function Storefront({
             <Search />
             <input
               value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setSelectedCategory(null);
-                setSelectedCondition(null);
-                setVisibleCount(PRODUCT_PAGE_SIZE);
-              }}
+              onChange={(event) => updateSearchQuery(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
@@ -968,12 +986,7 @@ export function Storefront({
           <Search />
           <input
             value={query}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setSelectedCategory(null);
-              setSelectedCondition(null);
-              setVisibleCount(PRODUCT_PAGE_SIZE);
-            }}
+            onChange={(event) => updateSearchQuery(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();

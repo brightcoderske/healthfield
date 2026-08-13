@@ -36,12 +36,16 @@ export async function backendJson<T>(path: string, init: RequestInit = {}): Prom
   return data;
 }
 
-export async function backendPublicJson<T>(path: string, revalidate = 60): Promise<T> {
+export async function backendPublicJson<T>(
+  path: string,
+  revalidate = 60,
+  tags: string[] = [],
+): Promise<T> {
   const headers = new Headers();
   headers.set("X-Healthfield-Key", apiKey());
   const response = await fetch(`${apiBase()}${path.startsWith("/") ? path : `/${path}`}`, {
     headers,
-    next: { revalidate },
+    next: { revalidate, tags },
   });
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {

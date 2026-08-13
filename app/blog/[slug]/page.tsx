@@ -13,7 +13,7 @@ type Post = { title:string; excerpt:string; content:string; imageUrl:string|null
 type Article = { post: Post; products?: PromoProduct[] };
 
 async function get(slug: string): Promise<Article | null> {
-  try { return await backendPublicJson<Article>(`/v1/views/blogs/${encodeURIComponent(slug)}`, 300); }
+  try { return await backendPublicJson<Article>(`/v1/views/blogs/${encodeURIComponent(slug)}`, 300, [`blog:${slug}`]); }
   catch (error) { if (error instanceof BackendError && error.status === 404) return null; throw error; }
 }
 

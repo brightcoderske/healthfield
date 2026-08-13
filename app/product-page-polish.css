@@ -61,6 +61,16 @@
 .product-information article { padding:10px !important; }
 .product-information > div > article:first-child { grid-column:1 / -1; }
 .product-description-empty { margin:0 !important;padding:5px 0;color:#77717c !important;font-size:9px !important; }
+.product-information .rich-content{color:#4e4652;font-size:13px;line-height:1.72}
+.product-information .rich-content p{margin:0 0 10px;color:inherit;font-size:inherit;line-height:inherit;white-space:normal}
+.product-information .rich-content h2{margin:17px 0 7px;font-size:18px;line-height:1.3}
+.product-information .rich-content h3{margin:14px 0 6px;font-size:15px;line-height:1.35}
+.product-information .rich-content ul,.product-information .rich-content ol{margin:8px 0 12px;padding-left:24px}
+.product-information .rich-content li{margin:5px 0;font-size:inherit;line-height:1.65}
+.product-information .rich-content strong{font-weight:750}
+.product-information .rich-content .rt-sm{font-size:.88em}
+.product-information .rich-content .rt-lg{font-size:1.25em}
+.product-information .rich-content .rt-xl{font-size:1.55em;line-height:1.3}
 
 .product-detail > .product-reviews {
   display: block !important;
