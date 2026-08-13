@@ -13,6 +13,7 @@
     "check:api": "tsc --noEmit -p api-service/tsconfig.json",
     "test:email-verification": "node --experimental-strip-types --test api-service/src/email-verification.test.ts",
     "test:mpesa": "node --experimental-strip-types --test api-service/src/mpesa.test.ts",
+    "mpesa:register-pull": "npm run build:api && node --env-file=.env.local api-service/dist/register-pull.mjs",
     "test:two-factor": "node --experimental-strip-types --test api-service/src/two-factor.test.ts",
     "test:prescriptions": "node --experimental-strip-types --test lib/prescription-workflow.test.ts",
     "test:permissions": "node --experimental-strip-types --test lib/staff-permissions.test.ts",

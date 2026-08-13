@@ -13,8 +13,12 @@ rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 
 await build({
-  entryPoints: [resolve(service, "src", "server.ts")],
-  outfile: resolve(output, "server.mjs"),
+  entryPoints: {
+    server: resolve(service, "src", "server.ts"),
+    "register-pull": resolve(service, "src", "register-pull.ts"),
+  },
+  outdir: output,
+  outExtension: { ".js": ".mjs" },
   bundle: true,
   platform: "node",
   format: "esm",

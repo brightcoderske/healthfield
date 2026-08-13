@@ -3,6 +3,7 @@
 import { ArrowLeft, Check, CheckCircle2, Clipboard, CreditCard, LoaderCircle, LocateFixed, LockKeyhole, MapPin, ReceiptText, ShoppingBag, Smartphone } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { paymentPollDelay } from "@/lib/payment-poll";
 import type { CustomerPrescriptionData } from "../../types";
 
 type PaymentMethod="MPESA_EXPRESS"|"MANUAL_MPESA";
@@ -29,9 +30,10 @@ export function PrescriptionCheckoutForm({prescriptionId,data}:{prescriptionId:n
       const payload=await response.json().catch(()=>({}));
       if(payload.paid||payload.order?.paymentStatus==="PAID")setResult((current)=>current?{...current,state:"PAID",message:`M-Pesa payment confirmed${payload.order?.paymentReference?` · Receipt ${payload.order.paymentReference}`:""}.`}:current);
       else if(payload.failed||payload.order?.paymentStatus==="FAILED")setResult((current)=>current?{...current,state:"FAILED",message:payload.message||payload.payment?.resultDescription||"The M-Pesa payment was not completed."}:current);
-      else if(pollCount.current>=24)setResult((current)=>current?{...current,state:"FAILED",message:"We could not confirm the M-Pesa prompt. Return to the proposal to try again or choose manual M-Pesa."}:current);
+      else if(pollCount.current===24)setResult((current)=>current?{...current,message:"Safaricom has not returned a final result yet. Healthfield is still checking; do not pay a second time."}:current);
     }
-    void check();const timer=window.setInterval(()=>void check(),5000);return()=>{cancelled=true;window.clearInterval(timer)};
+    let timer=0;function schedule(){if(cancelled)return;timer=window.setTimeout(()=>void check().finally(schedule),paymentPollDelay(pollCount.current))}
+    void check().finally(schedule);return()=>{cancelled=true;window.clearTimeout(timer)};
   },[result?.state]);
 
   function locate(){

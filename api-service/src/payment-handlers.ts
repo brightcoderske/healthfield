@@ -1,16 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
-import { activityLogs, branchInventory, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions, siteSettings } from "../../db/schema";
+import { and, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
+import { activityLogs, branchInventory, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions, siteSettings, users } from "../../db/schema";
 import { requestSession, requireSession } from "./auth";
+import { sendEmail } from "./email";
 import { requireTeamPermission } from "./staff-permissions";
 import { getDb } from "./db";
 import { json } from "./http";
-import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, normalizePaymentReference, parseC2bPayment, parseStkCallback, queryStkPush, registerC2bUrls } from "./mpesa";
+import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, selectIncomingPaymentCandidate, transactionStatusConfiguration, type IncomingMpesaPayment } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const cancellationGraceMs = 2 * 60_000;
+const pullRecoveryThrottleMs = 10 * 60_000;
 type DatabaseTransaction = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
 
 async function finalizePosInventory(tx: DatabaseTransaction, orderId: number, actorId: number | null) {
@@ -66,36 +68,18 @@ async function markPaymentPaid(transactionId: number, details: { receiptNumber: 
   return result;
 }
 
-function paymentPhone(value: string | null | undefined) {
-  const digits = (value || "").replace(/\D/g, "");
-  if (digits.startsWith("254") && digits.length === 12) return digits;
-  if (digits.startsWith("0") && digits.length === 10) return `254${digits.slice(1)}`;
-  if (digits.length === 9) return `254${digits}`;
-  return digits;
-}
-
-function referenceMatchesOrder(reference: string | null | undefined, orderNumber: string | null | undefined) {
-  const incoming = normalizePaymentReference(reference);
-  const order = normalizePaymentReference(orderNumber);
-  return Boolean(incoming && order && (incoming === order || incoming === order.slice(0, 12)));
-}
-
-function chooseIncomingPayment<T extends { receiptNumber: string; amount: string; phone: string | null; accountReference: string | null; createdAt: Date }>(
+function chooseIncomingPayment<T extends { receiptNumber: string; amount: string; accountReference: string | null; createdAt: Date }>(
   payment: typeof paymentTransactions.$inferSelect,
   orderNumber: string | null,
   recent: T[],
 ) {
-  const amountMatches = recent.filter((row) => Math.abs(Number(row.amount) - Number(payment.amount)) <= 0.001);
-  const receiptMatch = payment.receiptNumber ? amountMatches.find((row) => row.receiptNumber === payment.receiptNumber) : null;
-  const referenceMatches = orderNumber ? amountMatches.filter((row) => referenceMatchesOrder(row.accountReference, orderNumber)) : [];
-  const normalizedPhone = paymentPhone(payment.phone);
-  const phoneMatches = normalizedPhone ? amountMatches.filter((row) => paymentPhone(row.phone) === normalizedPhone && Date.now() - row.createdAt.getTime() <= 30 * 60_000) : [];
-  const veryRecentAmountMatches = amountMatches.filter((row) => Date.now() - row.createdAt.getTime() <= 10 * 60_000);
-  return receiptMatch
-    || (referenceMatches.length === 1 ? referenceMatches[0] : null)
-    || (["PENDING", "CANCEL_REQUESTED"].includes(payment.status) && phoneMatches.length === 1 ? phoneMatches[0] : null)
-    || (["PENDING", "CANCEL_REQUESTED"].includes(payment.status) && !normalizedPhone && veryRecentAmountMatches.length === 1 ? veryRecentAmountMatches[0] : null)
-    || null;
+  return selectIncomingPaymentCandidate({
+    amount: payment.amount,
+    receiptNumber: payment.receiptNumber,
+    orderNumber,
+    allowAmountOnly: ["PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "FAILED", "CANCELLED"].includes(payment.status),
+    recent,
+  });
 }
 
 async function findIncomingPaymentCandidate(transactionId: number) {
@@ -224,6 +208,7 @@ export async function handleManualPayment(request: Request) {
     return json({ error: "That M-Pesa code has already been submitted for another payment." }, { status: 409 });
   }
   await db.update(orders).set({ paymentMethod: "MANUAL_MPESA", paymentStatus: "PENDING", paymentReference: receiptNumber }).where(eq(orders.id, order.id));
+  if (channel === "ONLINE" && receiptNumber) void requestKnownTransactionStatus(transaction.id).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: transaction.id, error }));
   const candidate = channel === "POS" ? await findIncomingPaymentCandidate(transaction.id) : null;
   if (candidate) await db.update(paymentTransactions).set({ status:"REQUIRES_REVIEW", receiptNumber:candidate.receiptNumber, resultDescription:"Till payment found; waiting for the seller to confirm the payer identity." }).where(eq(paymentTransactions.id,transaction.id));
   return json({ ok: true, paid:false, candidatePayment:incomingCandidatePayload(candidate), orderNumber: order.orderNumber, message: candidate ? "A Till payment was found. Confirm the payer name with the customer to complete the sale." : channel === "ONLINE" ? "Payment proof submitted for administrator approval." : "Waiting for the till payment. The seller will confirm the payer name before completing the sale." }, { status: 202 });
@@ -274,6 +259,7 @@ export async function handlePaymentReconcile(request: Request) {
       await db.update(paymentTransactions).set({ status:"REQUIRES_REVIEW", receiptNumber:candidate.receiptNumber, resultDescription:"Till payment found; waiting for the seller to confirm the payer identity." }).where(eq(paymentTransactions.id,payment.id));
       return json({ ok:true, paid:false, candidatePayment:incomingCandidatePayload(candidate), message:"Till payment found. Ask the customer to confirm the payer name, receipt and amount.", ...(await paymentStatus(checkoutToken)) });
     }
+    if (payment.channel === "ONLINE" && payment.receiptNumber) void requestKnownTransactionStatus(payment.id).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: payment.id, error }));
     if (payment.status === "CANCEL_REQUESTED" && Date.now() - payment.updatedAt.getTime() >= cancellationGraceMs) {
       const cancelled = await finalizeCancellation(payment.orderId, payment.id, payment.reviewedBy);
       return json({ ok: true, paid: false, cancelled, message: "No Till payment was found. The counter sale has been cancelled.", ...(await paymentStatus(checkoutToken)) });
@@ -337,9 +323,16 @@ export async function handlePaymentReview(request: Request, transactionId: numbe
   if (input.decision === "APPROVE") {
     await markPaymentPaid(payment.id, { receiptNumber: payment.receiptNumber, amount: Number(payment.amount), phone: payment.phone, actorId: auth.session.userId });
   } else {
-    await db.update(paymentTransactions).set({ status: "FAILED", reviewedBy: auth.session.userId, reviewedAt: new Date(), resultDescription: input.note?.trim() || "Payment proof rejected by administrator." }).where(eq(paymentTransactions.id, payment.id));
-    await db.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, payment.orderId));
-    await db.insert(activityLogs).values({ actorId:auth.session.userId, action:"PAYMENT_REJECTED", entityType:"order", entityId:String(payment.orderId), metadata:{ transactionId:payment.id, amount:payment.amount, actorRole:auth.session.role } });
+    const rejected = await db.transaction(async (tx) => {
+      const [lockedPayment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.id, payment.id)).limit(1).for("update");
+      const [lockedOrder] = await tx.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1).for("update");
+      if (!lockedPayment || !lockedOrder || lockedPayment.status === "PAID" || lockedOrder.paymentStatus === "PAID") return false;
+      await tx.update(paymentTransactions).set({ status: "FAILED", reviewedBy: auth.session.userId, reviewedAt: new Date(), resultDescription: input.note?.trim() || "Payment proof rejected by administrator." }).where(eq(paymentTransactions.id, lockedPayment.id));
+      await tx.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, lockedOrder.id));
+      await tx.insert(activityLogs).values({ actorId:auth.session.userId, action:"PAYMENT_REJECTED", entityType:"order", entityId:String(lockedOrder.id), metadata:{ transactionId:lockedPayment.id, amount:lockedPayment.amount, actorRole:auth.session.role } });
+      return true;
+    });
+    if (!rejected) return json({ error: "Safaricom confirmed this payment before the rejection completed. The order remains paid." }, { status: 409 });
   }
   return json({ ok: true });
 }
@@ -426,44 +419,108 @@ export async function replayStoredStkCallback(checkoutRequestId: string) {
   return true;
 }
 
+async function ingestIncomingPayment(incoming: IncomingMpesaPayment, payload: Record<string, unknown>, source: "C2B" | "PULL" | "TRANSACTION_STATUS") {
+  const db = getDb();
+  let incomingId = 0;
+  let isNewIncoming = false;
+  try {
+    const [created] = await db.insert(mpesaIncomingPayments).values({ ...incoming, amount: incoming.amount.toFixed(2), providerPayload: { ...payload, healthfieldRecoverySource: source } });
+    incomingId = created.insertId;
+    isNewIncoming = true;
+  } catch {
+    const [existing] = await db.select({ id: mpesaIncomingPayments.id }).from(mpesaIncomingPayments).where(eq(mpesaIncomingPayments.receiptNumber, incoming.receiptNumber)).limit(1);
+    if (!existing) throw new Error("The incoming M-Pesa receipt could not be stored.");
+    incomingId = existing.id;
+  }
+  if (isNewIncoming) {
+    try {
+      await db.insert(activityLogs).values({ actorId: null, action: "MPESA_TILL_PAYMENT_RECEIVED", entityType: "mpesa_incoming_payment", entityId: String(incomingId), metadata: { receiptNumber: incoming.receiptNumber, amount: incoming.amount, accountReference: incoming.accountReference, source } });
+      const recipients = process.env.NOTIFICATION_EMAIL
+        ? [process.env.NOTIFICATION_EMAIL]
+        : (await db.select({ email: users.email }).from(users).where(and(inArray(users.role, ["ADMIN", "SUPER_ADMIN"]), eq(users.isActive, true)))).map((row) => row.email);
+      const reference = incoming.accountReference || "No reference supplied";
+      const payer = incoming.payerName || "Name not supplied";
+      if (recipients.length) void sendEmail({
+        to: [...new Set(recipients)],
+        subject: `Till payment received · ${incoming.receiptNumber}`,
+        message: `Safaricom delivered a new Till payment to Healthfield.\n\nReceipt: ${incoming.receiptNumber}\nAmount: KES ${incoming.amount.toLocaleString()}\nPayer: ${payer}\nReference: ${reference}\n\nOpen Unmatched payments if this receipt still needs an order match.`,
+        action: { label: "Open Till payments", url: `${(process.env.APP_URL || "https://healthfieldpharmacy.co.ke").replace(/\/$/, "")}/admin/unmatched-payments` },
+        channel: "orders",
+      }).catch((error) => console.error("Till payment notification failed", { incomingId, error }));
+    } catch (error) {
+      console.error("Till payment admin notification could not be queued", { incomingId, error });
+    }
+  }
+  const [receiptPayment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.receiptNumber, incoming.receiptNumber)).limit(1);
+  let payment: typeof paymentTransactions.$inferSelect | undefined = receiptPayment?.method !== "CASH" ? receiptPayment : undefined;
+  if (!payment) {
+    const candidates = await db.select({ payment: paymentTransactions, orderNumber: orders.orderNumber }).from(paymentTransactions).innerJoin(orders, eq(orders.id, paymentTransactions.orderId)).where(and(inArray(paymentTransactions.method, ["MPESA_EXPRESS", "MANUAL_MPESA"]), inArray(paymentTransactions.status, ["INITIATED", "PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "FAILED", "CANCELLED"]), gte(paymentTransactions.createdAt, new Date(Date.now() - 24 * 60 * 60_000)))).orderBy(desc(paymentTransactions.createdAt)).limit(200);
+    const amountMatches = candidates.filter((row) => Math.abs(Number(row.payment.amount) - incoming.amount) <= 0.001);
+    const referenceMatches = amountMatches.filter((row) => paymentReferenceMatchesOrder(incoming.accountReference, row.orderNumber));
+    const selected = referenceMatches.length === 1 ? referenceMatches[0] : null;
+    payment = selected?.payment;
+  }
+  if (payment && Math.abs(Number(payment.amount) - incoming.amount) <= 0.001) {
+    if (payment.channel === "POS" && payment.method === "MANUAL_MPESA") {
+      await db.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", resultDescription: "Till payment found; waiting for the seller to confirm the payer identity." }).where(and(eq(paymentTransactions.id, payment.id), inArray(paymentTransactions.status, ["PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "FAILED", "CANCELLED"])));
+    } else {
+      try {
+        await markPaymentPaid(payment.id, { receiptNumber: incoming.receiptNumber, amount: incoming.amount, phone: incoming.phone, providerPayload: { ...payload, healthfieldRecoverySource: source }, incomingPaymentId: incomingId });
+      } catch (error) { console.error("C2B payment match requires review", { transactionId: payment.id, error }); }
+    }
+  }
+  return { incomingId, isNewIncoming };
+}
+
 export async function handleC2bConfirmation(request: Request) {
   if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
   const incoming = parseC2bPayment(payload);
-  const db = getDb();
-  let incomingId = 0;
-  try {
-    const [created] = await db.insert(mpesaIncomingPayments).values({ ...incoming, amount: incoming.amount.toFixed(2), providerPayload: payload });
-    incomingId = created.insertId;
-  } catch { return json({ ResultCode: 0, ResultDesc: "Duplicate accepted" }); }
-  const [receiptPayment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.receiptNumber, incoming.receiptNumber)).limit(1);
-  let payment: typeof paymentTransactions.$inferSelect | undefined = receiptPayment?.method === "MPESA_EXPRESS" ? receiptPayment : undefined;
-  if (!payment) {
-    const candidates = await db.select({ payment: paymentTransactions, orderNumber: orders.orderNumber }).from(paymentTransactions).innerJoin(orders, eq(orders.id, paymentTransactions.orderId)).where(and(eq(paymentTransactions.channel, "POS"), eq(paymentTransactions.method,"MPESA_EXPRESS"), inArray(paymentTransactions.status, ["PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "FAILED", "CANCELLED"]), gte(paymentTransactions.createdAt, new Date(Date.now() - 24 * 60 * 60_000)))).orderBy(desc(paymentTransactions.createdAt)).limit(200);
-    const amountMatches = candidates.filter((row) => Math.abs(Number(row.payment.amount) - incoming.amount) <= 0.001);
-    const referenceMatches = amountMatches.filter((row) => referenceMatchesOrder(incoming.accountReference, row.orderNumber));
-    const normalized = paymentPhone(incoming.phone);
-    const activeAmountMatches = amountMatches.filter((row) => ["PENDING", "CANCEL_REQUESTED"].includes(row.payment.status) && Date.now() - row.payment.createdAt.getTime() <= 30 * 60_000);
-    const phoneMatches = normalized ? activeAmountMatches.filter((row) => paymentPhone(row.payment.phone) === normalized) : [];
-    const selected = referenceMatches.length === 1 ? referenceMatches[0]
-      : phoneMatches.length === 1 ? phoneMatches[0]
-      : !normalized && activeAmountMatches.length === 1 ? activeAmountMatches[0]
-      : null;
-    payment = selected?.payment;
-  }
-  if (payment && Math.abs(Number(payment.amount) - incoming.amount) <= 0.001) {
-    try {
-      await markPaymentPaid(payment.id, { receiptNumber: incoming.receiptNumber, amount: incoming.amount, phone: incoming.phone, providerPayload: payload, incomingPaymentId: incomingId });
-    } catch (error) { console.error("C2B payment match requires review", { transactionId: payment.id, error }); }
-  }
+  await ingestIncomingPayment(incoming, payload, "C2B");
   return json({ ResultCode: 0, ResultDesc: "Accepted" });
 }
 
 export async function handleC2bVerification(request: Request) {
   if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
-  try { parseC2bPayment(payload); return json({ ResultCode: 0, ResultDesc: "Accepted" }); }
+  try { parseC2bPayment(payload); return json({ ResultCode: "0", ResultDesc: "Accepted" }); }
   catch { return json({ ResultCode: "C2B00012", ResultDesc: "Invalid transaction details" }); }
+}
+
+export async function handlePullTransactionsNotification(request: Request) {
+  if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
+  const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const transactions = parsePullTransactions(payload);
+  let inserted = 0;
+  for (const transaction of transactions) {
+    const result = await ingestIncomingPayment(transaction, payload, "PULL");
+    if (result.isNewIncoming) inserted += 1;
+  }
+  await getDb().insert(activityLogs).values({ actorId: null, action: "MPESA_PULL_CALLBACK_RECEIVED", entityType: "payment_recovery", entityId: null, metadata: { received: transactions.length, inserted } });
+  return json({ ResultCode: 0, ResultDesc: "Accepted" });
+}
+
+export async function handleTransactionStatusResult(request: Request) {
+  if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
+  const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const result = parseTransactionStatusResult(payload);
+  if (result.successful && result.payment) await ingestIncomingPayment(result.payment, payload, "TRANSACTION_STATUS");
+  else if (result.receiptNumber || result.originatorConversationId) {
+    const [payment] = await getDb().select().from(paymentTransactions).where(or(
+      ...(result.receiptNumber ? [eq(paymentTransactions.receiptNumber, result.receiptNumber)] : []),
+      ...(result.originatorConversationId ? [eq(paymentTransactions.merchantRequestId, result.originatorConversationId)] : []),
+    )).limit(1);
+    if (payment && payment.status !== "PAID") await getDb().update(paymentTransactions).set({ status: "REQUIRES_REVIEW", resultCode: result.resultCode, resultDescription: result.resultDescription || "Safaricom Transaction Status requires administrator review.", providerPayload: payload }).where(eq(paymentTransactions.id, payment.id));
+  }
+  await getDb().insert(activityLogs).values({ actorId: null, action: "MPESA_TRANSACTION_STATUS_RESULT", entityType: "payment_recovery", entityId: result.receiptNumber || result.originatorConversationId, metadata: { resultCode: result.resultCode, resultDescription: result.resultDescription, hasPaymentDetails: Boolean(result.payment) } });
+  return json({ ResultCode: 0, ResultDesc: "Accepted" });
+}
+
+export async function handleTransactionStatusTimeout(request: Request) {
+  if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
+  const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
+  await getDb().insert(activityLogs).values({ actorId: null, action: "MPESA_TRANSACTION_STATUS_TIMEOUT", entityType: "payment_recovery", entityId: null, metadata: { payload } });
+  return json({ ResultCode: 0, ResultDesc: "Accepted" });
 }
 
 export async function handleIncomingPaymentMatch(request: Request, incomingId: number) {
@@ -505,20 +562,62 @@ export async function handlePosIncomingPaymentConfirm(request: Request, incoming
   return json({ok:true,paid:true,orderNumber:order.orderNumber,receiptNumber:candidate.receiptNumber,inventoryFinalized:result.inventoryFinalized,message:result.inventoryFinalized?"Customer identity confirmed. Payment recorded and stock updated.":"Payment recorded. The order requires fulfilment review because reserved stock was no longer available."});
 }
 
-export async function handleC2bRegistration(request: Request) {
+export async function requestKnownTransactionStatus(transactionId: number) {
+  if (!transactionStatusConfiguration()) return { requested: false, reason: "not-configured" as const };
+  const db = getDb();
+  const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1);
+  if (!payment?.receiptNumber || payment.method !== "MANUAL_MPESA" || payment.status === "PAID" || payment.status === "REFUNDED") return { requested: false, reason: "not-queryable" as const };
+  const [recent] = await db.select({ id: activityLogs.id }).from(activityLogs).where(and(eq(activityLogs.action, "MPESA_TRANSACTION_STATUS_REQUESTED"), eq(activityLogs.entityType, "payment_transaction"), eq(activityLogs.entityId, String(payment.id)), gte(activityLogs.createdAt, new Date(Date.now() - 30 * 60_000)))).orderBy(desc(activityLogs.createdAt)).limit(1);
+  if (recent) return { requested: false, reason: "throttled" as const };
+  await db.insert(activityLogs).values({ actorId: null, action: "MPESA_TRANSACTION_STATUS_REQUESTED", entityType: "payment_transaction", entityId: String(payment.id), metadata: { receiptNumber: payment.receiptNumber } });
+  const response = await queryTransactionStatus(payment.receiptNumber);
+  const originatorConversationId = String(response.OriginatorConversationID || "").trim() || null;
+  await db.update(paymentTransactions).set({ merchantRequestId: originatorConversationId || payment.merchantRequestId, resultDescription: "Safaricom Transaction Status request accepted; waiting for the result callback.", providerPayload: response }).where(and(eq(paymentTransactions.id, payment.id), inArray(paymentTransactions.status, ["PENDING", "REQUIRES_REVIEW", "FAILED", "CANCELLED"])));
+  return { requested: true, response };
+}
+
+export async function recoverMissedMpesaPayments(actorId: number | null = null, hours = 2) {
+  if (!pullTransactionsConfiguration()) return { requested: false, configured: false, message: "M-Pesa Pull Transactions is not configured." };
+  const db = getDb();
+  const [recent] = await db.select({ createdAt: activityLogs.createdAt }).from(activityLogs).where(and(eq(activityLogs.action, "MPESA_PULL_QUERY_REQUESTED"), gte(activityLogs.createdAt, new Date(Date.now() - pullRecoveryThrottleMs)))).orderBy(desc(activityLogs.createdAt)).limit(1);
+  if (recent) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((recent.createdAt.getTime() + pullRecoveryThrottleMs - Date.now()) / 1000));
+    return { requested: false, configured: true, throttled: true, retryAfterSeconds, message: `A Till recovery check already ran recently. Try again in ${Math.ceil(retryAfterSeconds / 60)} minute(s).` };
+  }
+  const end = new Date();
+  const boundedHours = Math.min(24, Math.max(1, Math.trunc(hours)));
+  const start = new Date(end.getTime() - boundedHours * 60 * 60_000);
+  await db.insert(activityLogs).values({ actorId, action: "MPESA_PULL_QUERY_REQUESTED", entityType: "payment_recovery", entityId: null, metadata: { start: start.toISOString(), end: end.toISOString(), hours: boundedHours } });
+  const response = await queryPulledTransactions(start, end, 0);
+  const transactions = parsePullTransactions(response);
+  let inserted = 0;
+  for (const transaction of transactions) {
+    const result = await ingestIncomingPayment(transaction, response, "PULL");
+    if (result.isNewIncoming) inserted += 1;
+  }
+  await db.insert(activityLogs).values({ actorId, action: "MPESA_PULL_QUERY_COMPLETED", entityType: "payment_recovery", entityId: null, metadata: { received: transactions.length, inserted, responseCode: String(response.ResponseCode ?? "") } });
+  return { requested: true, configured: true, received: transactions.length, inserted, message: transactions.length ? `Recovered ${transactions.length} Till transaction(s); ${inserted} were new.` : "Safaricom accepted the recovery check. Any asynchronous results will appear here when delivered." };
+}
+
+export async function handlePullTransactionsRecovery(request: Request) {
   const auth = await requireSession(request, [...admins]);
   if ("response" in auth) return auth.response;
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
   try {
-    const result = await registerC2bUrls();
-    await getDb().insert(activityLogs).values({ actorId: auth.session.userId, action: "MPESA_C2B_URLS_REGISTERED", entityType: "payment_configuration", entityId: null, metadata: { responseCode: result.responseCode } });
-    return json({ ok: true, message: result.responseDescription, responseCode: result.responseCode });
+    const result = await recoverMissedMpesaPayments(auth.session.userId, 24);
+    return json({ ok: result.requested || result.throttled, ...result }, { status: result.configured === false ? 409 : result.throttled ? 429 : 202, headers: result.throttled ? { "Retry-After": String(result.retryAfterSeconds) } : undefined });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Safaricom did not register the callback URLs.";
+    const message = error instanceof Error ? error.message : "Safaricom could not complete the Till recovery check.";
     return json({ error: message }, { status: 409 });
   }
 }
 
 export function paymentConfigurationSummary() {
-  return { mpesaConfigured: Boolean(mpesaConfiguration()) };
+  return {
+    mpesaConfigured: Boolean(mpesaConfiguration()),
+    stkQueryConfigured: Boolean(mpesaConfiguration()),
+    c2bCallbacksConfigured: Boolean(mpesaConfiguration()),
+    transactionStatusConfigured: Boolean(transactionStatusConfiguration()),
+    pullTransactionsConfigured: Boolean(pullTransactionsConfiguration()),
+  };
 }

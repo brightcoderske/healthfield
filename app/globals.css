@@ -2782,6 +2782,10 @@ to{transform:rotate(360deg);}
 /*Operational payment tables share one column grid so every heading and row stays aligned.*/
 .unmatched-table-scroller,
 .payment-exceptions-scroller{width:min(1180px, 100%);margin:0 auto;border:1px solid #e5dfe7;border-radius:11px;background:#fff;overflow-x:auto;}
+.unmatched-payments-page .compact-table-tools{flex-wrap:wrap;gap:8px;}
+.pull-recovery-button{min-height:34px;padding:0 11px;border:0;border-radius:7px;color:#fff;background:#762584;display:inline-flex;align-items:center;gap:6px;font-size:9px;font-weight:800;white-space:nowrap;}
+.pull-recovery-button svg{width:14px;height:14px;}
+.pull-recovery-button:disabled{opacity:.58;}
 .unmatched-payments-table,
 .payment-exceptions table{width:100%;border-collapse:collapse;table-layout:fixed;}
 .unmatched-payments-table{min-width:1120px;}
@@ -2819,6 +2823,7 @@ to{transform:rotate(360deg);}
 .payment-exceptions th:nth-child(8){width:85px;}
 .payment-exceptions td > a{color:#762584;font-weight:800;white-space:nowrap;}
 @media (max-width: 760px){
+.pull-recovery-button{width:100%;justify-content:center;}
 .product-modal.inventory-modal{height:100dvh;padding:0;place-items:end stretch;overflow:hidden;}
 .inventory-modal > section{width:100%;height:min(92dvh, 100%);max-height:92dvh;padding:0;border-radius:16px 16px 0 0;overflow:hidden;display:flex;flex-direction:column;overscroll-behavior:contain;}
 .inventory-modal > section > header{flex:none;padding:14px;border-bottom:1px solid #e9e2eb;background:#fff;position:sticky;top:0;z-index:2;}

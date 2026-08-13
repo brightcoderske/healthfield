@@ -9,7 +9,7 @@ import { getDb, closeDb } from "./db";
 import { json } from "./http";
 import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
-import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bRegistration, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handleStkNotification } from "./payment-handlers";
+import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, recoverMissedMpesaPayments } from "./payment-handlers";
 import {
   handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
@@ -70,12 +70,18 @@ async function route(request: Request, ip: string): Promise<Response> {
   // Browser navigations and <img> tags often omit Origin; only enforce CORS for credentialed cross-origin API calls.
   if (origin && !allowedOrigins.has(origin) && url.pathname.startsWith("/v1/")) return json({ error: "Origin not allowed." }, { status: 403 });
   if (url.pathname === "/health") return json({ service: "healthfield-api", status: "ok", timestamp: new Date().toISOString(), deployment: deploymentInfo() });
-  const paymentNotificationRoute = url.pathname.match(/^\/v1\/payments\/mobile-money\/(stk\/notification|c2b\/confirmation|c2b\/verification)\/([^/]+)$/);
+  const paymentNotificationRoute = url.pathname.match(/^\/v1\/payments\/mobile-money\/(stk\/notification|c2b\/confirmation|c2b\/verification|status\/result|status\/timeout|recovery\/notification)\/([^/]+)$/);
   if (paymentNotificationRoute) {
     const configuredSecret = mpesaConfiguration()?.callbackSecret || "";
     const suppliedSecret = decodeURIComponent(paymentNotificationRoute[2]);
     if (!configuredSecret || !safeEqual(suppliedSecret, configuredSecret)) return json({ error: "Payment endpoint not found." }, { status: 404 });
-    return responseOf(paymentNotificationRoute[1] === "stk/notification" ? handleStkNotification(request) : paymentNotificationRoute[1] === "c2b/verification" ? handleC2bVerification(request) : handleC2bConfirmation(request));
+    const paymentRoute = paymentNotificationRoute[1];
+    return responseOf(paymentRoute === "stk/notification" ? handleStkNotification(request)
+      : paymentRoute === "c2b/verification" ? handleC2bVerification(request)
+      : paymentRoute === "c2b/confirmation" ? handleC2bConfirmation(request)
+      : paymentRoute === "status/result" ? handleTransactionStatusResult(request)
+      : paymentRoute === "status/timeout" ? handleTransactionStatusTimeout(request)
+      : handlePullTransactionsNotification(request));
   }
   const imageMatch = url.pathname.match(/^\/uploads\/products\/([^/]+)$/);
   if (imageMatch && request.method === "GET") return serveProductImage(imageMatch[1]);
@@ -102,7 +108,7 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/payments/reconcile") return responseOf(handlePaymentReconcile(request));
   if (url.pathname === "/v1/payments/retry") return responseOf(handlePaymentRetry(request));
   if (url.pathname === "/v1/payments/cancel") return responseOf(handlePaymentCancel(request));
-  if (url.pathname === "/v1/payments/mobile-money/c2b/register") return responseOf(handleC2bRegistration(request));
+  if (url.pathname === "/v1/payments/mobile-money/recover") return responseOf(handlePullTransactionsRecovery(request));
   const incomingPaymentMatch = url.pathname.match(/^\/v1\/payments\/incoming\/(\d+)\/match$/);
   if (incomingPaymentMatch) return responseOf(handleIncomingPaymentMatch(request, Number(incomingPaymentMatch[1])));
   const posIncomingPaymentConfirmation = url.pathname.match(/^\/v1\/payments\/incoming\/(\d+)\/confirm-pos$/);
@@ -186,12 +192,18 @@ if (process.env.RUN_MIGRATIONS !== "false") await migrate(getDb(), { migrationsF
 const server = app.listen(port, "0.0.0.0", () => console.log(`Healthfield API listening on ${port}`));
 const paymentMaintenance = setInterval(() => void finalizeExpiredPaymentCancellations().catch((error) => console.error("Payment cancellation maintenance failed", error)), 30_000);
 paymentMaintenance.unref();
+const initialPaymentRecovery = setTimeout(() => void recoverMissedMpesaPayments(null, 2).catch((error) => console.error("Initial M-Pesa Pull recovery failed", error)), 60_000);
+initialPaymentRecovery.unref();
+const paymentRecovery = setInterval(() => void recoverMissedMpesaPayments(null, 2).catch((error) => console.error("Scheduled M-Pesa Pull recovery failed", error)), 15 * 60_000);
+paymentRecovery.unref();
 
 let shuttingDown = false;
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   clearInterval(paymentMaintenance);
+  clearTimeout(initialPaymentRecovery);
+  clearInterval(paymentRecovery);
   console.log(`Healthfield API received ${signal}; closing server and database pool.`);
   const forceExit = setTimeout(() => process.exit(0), 5_000);
   forceExit.unref();

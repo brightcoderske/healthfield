@@ -18,6 +18,7 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { paymentPollDelay } from "@/lib/payment-poll";
 import { prescriptionUploadHref } from "@/lib/prescription-selection";
 
 type Product = {
@@ -187,24 +188,27 @@ export function CheckoutForm({
                 }
               : current,
           );
-      } else if (pollCount.current >= 24 && !cancelled) {
+      } else if (pollCount.current === 24 && !cancelled) {
         setResult((current) =>
           current
             ? {
                 ...current,
-                state: "FAILED",
                 message:
-                  "We could not confirm the M-Pesa prompt. You can submit the till payment message below.",
+                  "Safaricom has not returned a final result yet. Healthfield is still checking; do not pay a second time.",
               }
             : current,
         );
       }
     }
-    void check();
-    const timer = window.setInterval(() => void check(), 5_000);
+    let timer = 0;
+    function schedule() {
+      if (cancelled) return;
+      timer = window.setTimeout(() => void check().finally(schedule), paymentPollDelay(pollCount.current));
+    }
+    void check().finally(schedule);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, [result?.state]);
 

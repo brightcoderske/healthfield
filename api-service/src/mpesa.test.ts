@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildC2bCallbackUrls, buildStkNotificationUrl, buildStkPushPayload, classifyStkQueryResult, extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parseStkCallback, type MpesaConfiguration } from "./mpesa.ts";
+import { buildC2bCallbackUrls, buildPaymentRecoveryCallbackUrls, buildPullTransactionsQueryPayload, buildStkNotificationUrl, buildStkPushPayload, buildTransactionStatusPayload, classifyStkQueryResult, extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, selectIncomingPaymentCandidate, type MpesaConfiguration } from "./mpesa.ts";
 
 test("normalizes supported Kenyan mobile number formats", () => {
   assert.equal(normalizeKenyanPhone("0712 345 678"), "254712345678");
@@ -28,6 +28,67 @@ test("builds secret-protected C2B callback URLs and normalizes order references"
   });
   assert.equal(normalizePaymentReference("POS-ME8K-12ab"), "POSME8K12AB");
   assert.equal(normalizePaymentReference(" pos me8k 12ab "), "POSME8K12AB");
+  assert.equal(paymentReferenceMatchesOrder("HF1234567890", "HF-123456789012"), true);
+});
+
+test("builds separate secret-protected Transaction Status and Pull callback URLs", () => {
+  assert.deepEqual(buildPaymentRecoveryCallbackUrls("https://api.healthfieldpharmacy.co.ke/", "secret/value"), {
+    transactionStatusResultUrl: "https://api.healthfieldpharmacy.co.ke/v1/payments/mobile-money/status/result/secret%2Fvalue",
+    transactionStatusTimeoutUrl: "https://api.healthfieldpharmacy.co.ke/v1/payments/mobile-money/status/timeout/secret%2Fvalue",
+    pullNotificationUrl: "https://api.healthfieldpharmacy.co.ke/v1/payments/mobile-money/recovery/notification/secret%2Fvalue",
+  });
+});
+
+test("builds documented Transaction Status and Pull query payloads", () => {
+  const urls = buildPaymentRecoveryCallbackUrls("https://api.healthfieldpharmacy.co.ke", "a-secure-callback-secret-at-least-24-characters");
+  assert.deepEqual(buildTransactionStatusPayload({ initiatorName: "healthfield-api", securityCredential: "encrypted-value", shortcode: "4502013" }, " tgh7k2ab91 ", urls), {
+    Initiator: "healthfield-api",
+    SecurityCredential: "encrypted-value",
+    CommandID: "TransactionStatusQuery",
+    TransactionID: "TGH7K2AB91",
+    PartyA: 4502013,
+    IdentifierType: "4",
+    ResultURL: urls.transactionStatusResultUrl,
+    QueueTimeOutURL: urls.transactionStatusTimeoutUrl,
+    Remarks: "Healthfield payment reconciliation",
+    Occasion: "Payment verification",
+  });
+  assert.deepEqual(buildPullTransactionsQueryPayload("4502013", new Date("2026-08-14T05:00:00Z"), new Date("2026-08-14T06:00:00Z")), {
+    ShortCode: 4502013,
+    StartDate: "2026-08-14 08:00:00",
+    EndDate: "2026-08-14 09:00:00",
+    OffSetValue: "0",
+  });
+});
+
+test("matches a unique Till payment by exact amount without using either phone number", () => {
+  const now = new Date("2026-08-13T12:00:00Z");
+  const candidate = selectIncomingPaymentCandidate({
+    amount: "2450.00",
+    orderNumber: "POS-ME8K-12AB",
+    allowAmountOnly: true,
+    now: now.getTime(),
+    recent: [{ receiptNumber: "TGH7K2AB91", amount: "2450.00", accountReference: null, createdAt: new Date(now.getTime() - 60_000), phone: "254722000000" }],
+  });
+  assert.equal(candidate?.receiptNumber, "TGH7K2AB91");
+});
+
+test("does not guess when two recent Till payments have the same amount", () => {
+  const now = new Date("2026-08-13T12:00:00Z");
+  const recent = [
+    { receiptNumber: "TGH7K2AB91", amount: "2450.00", accountReference: null, createdAt: new Date(now.getTime() - 60_000) },
+    { receiptNumber: "TGH7K2AB92", amount: "2450.00", accountReference: null, createdAt: new Date(now.getTime() - 90_000) },
+  ];
+  assert.equal(selectIncomingPaymentCandidate({ amount: 2450, allowAmountOnly: true, now: now.getTime(), recent }), null);
+});
+
+test("exact order reference wins when equal-amount Till payments are ambiguous", () => {
+  const now = new Date("2026-08-13T12:00:00Z");
+  const recent = [
+    { receiptNumber: "TGH7K2AB91", amount: "2450.00", accountReference: "POS-ME8K-12AB", createdAt: now },
+    { receiptNumber: "TGH7K2AB92", amount: "2450.00", accountReference: "OTHER", createdAt: now },
+  ];
+  assert.equal(selectIncomingPaymentCandidate({ amount: 2450, orderNumber: "POS-ME8K-12AB", allowAmountOnly: true, now: now.getTime(), recent })?.receiptNumber, "TGH7K2AB91");
 });
 
 test("builds the documented Buy Goods STK request shape", () => {
@@ -77,4 +138,28 @@ test("extracts receipts and parses successful callbacks", () => {
 
 test("parses C2B till confirmations", () => {
   assert.deepEqual(parseC2bPayment({ TransID: "TGH7K2AB91", TransAmount: "1250.00", MSISDN: "254712345678", FirstName:"Jane", MiddleName:"W", LastName:"Njeri", BillRefNumber: "HF-123" }), { receiptNumber: "TGH7K2AB91", amount: 1250, phone: "254712345678", payerName:"Jane W Njeri", accountReference: "HF-123", transactionTime: null });
+});
+
+test("parses and deduplicates Pull Transactions response rows", () => {
+  const parsed = parsePullTransactions({ Response: [
+    { transactionId: "TGH7K2AB91", amount: "1250.00", msisdn: "2547*****678", trxDate: "2026-08-14 08:30:00", accountReference: "HF-123" },
+    { TransID: "TGH7K2AB91", TransAmount: 1250 },
+    { TransactionID: "TGH7K2AB92", TransactionAmount: 900, DebitPartyName: "Jane Njeri" },
+  ] });
+  assert.equal(parsed.length, 2);
+  assert.deepEqual(parsed[0], { receiptNumber: "TGH7K2AB91", amount: 1250, phone: "2547*****678", payerName: null, accountReference: "HF-123", transactionTime: "2026-08-14 08:30:00" });
+  assert.deepEqual(parsed[1], { receiptNumber: "TGH7K2AB92", amount: 900, phone: null, payerName: "Jane Njeri", accountReference: null, transactionTime: null });
+});
+
+test("parses successful asynchronous Transaction Status result parameters", () => {
+  const parsed = parseTransactionStatusResult({ Result: { ResultCode: 0, ResultDesc: "The service request is processed successfully.", OriginatorConversationID: "status-request-1", ResultParameters: { ResultParameter: [
+    { Key: "ReceiptNo", Value: "TGH7K2AB91" },
+    { Key: "Amount", Value: "1250.00" },
+    { Key: "DebitPartyName", Value: "Jane Njeri" },
+    { Key: "FinalisedTime", Value: "20260814083000" },
+  ] } } });
+  assert.equal(parsed.successful, true);
+  assert.equal(parsed.receiptNumber, "TGH7K2AB91");
+  assert.equal(parsed.originatorConversationId, "status-request-1");
+  assert.deepEqual(parsed.payment, { receiptNumber: "TGH7K2AB91", amount: 1250, phone: null, payerName: "Jane Njeri", accountReference: null, transactionTime: "20260814083000" });
 });

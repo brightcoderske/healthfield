@@ -18,6 +18,24 @@ export type StkQueryOutcome = {
   resultDescription: string;
 };
 
+export type IncomingMpesaPayment = {
+  receiptNumber: string;
+  amount: number;
+  phone: string | null;
+  payerName: string | null;
+  accountReference: string | null;
+  transactionTime: string | null;
+};
+
+type TransactionStatusConfiguration = MpesaConfiguration & {
+  initiatorName: string;
+  securityCredential: string;
+};
+
+type PullTransactionsConfiguration = MpesaConfiguration & {
+  nominatedNumber: string | null;
+};
+
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
 export function normalizeKenyanPhone(value: string) {
@@ -51,6 +69,21 @@ export function mpesaConfiguration(): MpesaConfiguration | null {
   };
 }
 
+export function transactionStatusConfiguration(): TransactionStatusConfiguration | null {
+  const config = mpesaConfiguration();
+  const initiatorName = process.env.MPESA_INITIATOR_NAME?.trim() || "";
+  const securityCredential = process.env.MPESA_SECURITY_CREDENTIAL?.trim() || "";
+  return config && initiatorName && securityCredential ? { ...config, initiatorName, securityCredential } : null;
+}
+
+export function pullTransactionsConfiguration(): PullTransactionsConfiguration | null {
+  const config = mpesaConfiguration();
+  if (!config || process.env.MPESA_PULL_ENABLED?.trim().toLowerCase() !== "true") return null;
+  const nominatedNumber = process.env.MPESA_PULL_NOMINATED_NUMBER?.replace(/\D/g, "") || null;
+  if (nominatedNumber && !/^254[17]\d{8}$/.test(nominatedNumber)) return null;
+  return { ...config, nominatedNumber };
+}
+
 export function mpesaTimestamp(date = new Date()) {
   const part = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}${part(date.getMonth() + 1)}${part(date.getDate())}${part(date.getHours())}${part(date.getMinutes())}${part(date.getSeconds())}`;
@@ -73,8 +106,47 @@ export function buildC2bCallbackUrls(baseUrl: string, secret: string) {
   };
 }
 
+export function buildPaymentRecoveryCallbackUrls(baseUrl: string, secret: string) {
+  const root = `${baseUrl.replace(/\/$/, "")}/v1/payments/mobile-money`;
+  const encodedSecret = encodeURIComponent(secret);
+  return {
+    transactionStatusResultUrl: `${root}/status/result/${encodedSecret}`,
+    transactionStatusTimeoutUrl: `${root}/status/timeout/${encodedSecret}`,
+    pullNotificationUrl: `${root}/recovery/notification/${encodedSecret}`,
+  };
+}
+
 export function normalizePaymentReference(value: string | null | undefined) {
   return (value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+export function paymentReferenceMatchesOrder(reference: string | null | undefined, orderNumber: string | null | undefined) {
+  const incoming = normalizePaymentReference(reference);
+  const order = normalizePaymentReference(orderNumber);
+  return Boolean(incoming && order && (incoming === order || incoming === order.slice(0, 12)));
+}
+
+export function selectIncomingPaymentCandidate<T extends { receiptNumber: string; amount: string | number; accountReference: string | null; createdAt: Date }>(input: {
+  amount: string | number;
+  receiptNumber?: string | null;
+  orderNumber?: string | null;
+  allowAmountOnly: boolean;
+  recent: T[];
+  now?: number;
+}) {
+  const amountMatches = input.recent.filter((row) => Math.abs(Number(row.amount) - Number(input.amount)) <= 0.001);
+  const receiptMatch = input.receiptNumber ? amountMatches.find((row) => row.receiptNumber === input.receiptNumber) : null;
+  if (receiptMatch) return receiptMatch;
+
+  const referenceMatches = input.orderNumber
+    ? amountMatches.filter((row) => paymentReferenceMatchesOrder(row.accountReference, input.orderNumber))
+    : [];
+  if (referenceMatches.length === 1) return referenceMatches[0];
+  if (!input.allowAmountOnly) return null;
+
+  const now = input.now ?? Date.now();
+  const recentAmountMatches = amountMatches.filter((row) => now - row.createdAt.getTime() <= 30 * 60_000);
+  return recentAmountMatches.length === 1 ? recentAmountMatches[0] : null;
 }
 
 export function classifyStkQueryResult(payload: JsonRecord): StkQueryOutcome {
@@ -132,6 +204,12 @@ async function mpesaJson(url: string, init: RequestInit) {
   return data;
 }
 
+function acceptedRequest(data: JsonRecord, fallback: string) {
+  const responseCode = data.ResponseCode ?? data.responseCode;
+  if (responseCode !== undefined && String(responseCode) !== "0") throw new Error(String(data.ResponseDescription || data.errorMessage || fallback));
+  return data;
+}
+
 async function accessToken(config: MpesaConfiguration) {
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
   const credentials = Buffer.from(`${config.consumerKey}:${config.consumerSecret}`).toString("base64");
@@ -178,25 +256,65 @@ export async function queryStkPush(checkoutRequestId: string) {
   });
 }
 
-export async function registerC2bUrls() {
-  const config = mpesaConfiguration();
-  if (!config) throw new Error("M-Pesa is not configured.");
+export async function queryTransactionStatus(transactionId: string) {
+  const config = transactionStatusConfiguration();
+  if (!config) throw new Error("M-Pesa Transaction Status is not configured.");
   const token = await accessToken(config);
-  const urls = buildC2bCallbackUrls(config.callbackBaseUrl, config.callbackSecret);
-  const data = await mpesaJson(`${config.baseUrl}/mpesa/c2b/v2/registerurl`, {
+  const urls = buildPaymentRecoveryCallbackUrls(config.callbackBaseUrl, config.callbackSecret);
+  return acceptedRequest(await mpesaJson(`${config.baseUrl}/mpesa/transactionstatus/v1/query`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ShortCode: Number(config.shortcode),
-      ResponseType: "Completed",
-      ConfirmationURL: urls.confirmationUrl,
-      ValidationURL: urls.validationUrl,
-    }),
-  });
+    body: JSON.stringify(buildTransactionStatusPayload(config, transactionId, urls)),
+  }), "Safaricom did not accept the Transaction Status request.");
+}
+
+export function buildTransactionStatusPayload(config: Pick<TransactionStatusConfiguration, "initiatorName" | "securityCredential" | "shortcode">, transactionId: string, urls: ReturnType<typeof buildPaymentRecoveryCallbackUrls>) {
   return {
-    responseCode: String(data.ResponseCode ?? data.responseCode ?? ""),
-    responseDescription: String(data.ResponseDescription || data.ResponseDesc || "C2B callback URLs registered."),
+    Initiator: config.initiatorName,
+    SecurityCredential: config.securityCredential,
+    CommandID: "TransactionStatusQuery",
+    TransactionID: transactionId.trim().toUpperCase(),
+    PartyA: Number(config.shortcode),
+    IdentifierType: "4",
+    ResultURL: urls.transactionStatusResultUrl,
+    QueueTimeOutURL: urls.transactionStatusTimeoutUrl,
+    Remarks: "Healthfield payment reconciliation",
+    Occasion: "Payment verification",
   };
+}
+
+function pullDate(value: Date) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Nairobi", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(value).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+export function buildPullTransactionsQueryPayload(shortcode: string, start: Date, end: Date, offset = 0) {
+  return { ShortCode: Number(shortcode), StartDate: pullDate(start), EndDate: pullDate(end), OffSetValue: String(Math.max(0, Math.trunc(offset))) };
+}
+
+export async function queryPulledTransactions(start: Date, end: Date, offset = 0) {
+  const config = pullTransactionsConfiguration();
+  if (!config) throw new Error("M-Pesa Pull Transactions is not configured.");
+  if (!(start instanceof Date) || !(end instanceof Date) || !Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) throw new Error("Enter a valid Pull Transactions date range.");
+  if (end.getTime() - start.getTime() > 24 * 60 * 60_000) throw new Error("Pull Transactions is limited to a 24-hour recovery window.");
+  const token = await accessToken(config);
+  return acceptedRequest(await mpesaJson(`${config.baseUrl}/pulltransactions/v1/query`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(buildPullTransactionsQueryPayload(config.shortcode, start, end, offset)),
+  }), "Safaricom did not accept the Pull Transactions request.");
+}
+
+export async function registerPullTransactionsCallback() {
+  const config = pullTransactionsConfiguration();
+  if (!config?.nominatedNumber) throw new Error("Set MPESA_PULL_NOMINATED_NUMBER before registering Pull Transactions.");
+  const token = await accessToken(config);
+  const urls = buildPaymentRecoveryCallbackUrls(config.callbackBaseUrl, config.callbackSecret);
+  return acceptedRequest(await mpesaJson(`${config.baseUrl}/pulltransactions/v1/register`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ ShortCode: Number(config.shortcode), RequestType: "Pull", NominatedNumber: config.nominatedNumber, CallBackURL: urls.pullNotificationUrl }),
+  }), "Safaricom did not register the Pull Transactions callback.");
 }
 
 export function parseStkCallback(payload: JsonRecord) {
@@ -216,10 +334,83 @@ export function parseStkCallback(payload: JsonRecord) {
   };
 }
 
-export function parseC2bPayment(payload: JsonRecord) {
+export function parseC2bPayment(payload: JsonRecord): IncomingMpesaPayment {
   const receiptNumber = String(payload.TransID || payload.TransactionID || "").trim().toUpperCase();
   const amount = Number(payload.TransAmount ?? payload.Amount);
   if (!receiptNumber || !Number.isFinite(amount) || amount <= 0) throw new Error("Invalid M-Pesa C2B confirmation payload.");
   const payerName = [payload.FirstName, payload.MiddleName, payload.LastName].map((value) => String(value || "").trim()).filter(Boolean).join(" ") || String(payload.PayerName || "").trim() || null;
   return { receiptNumber, amount, phone: String(payload.MSISDN || payload.PhoneNumber || "") || null, payerName, accountReference: String(payload.BillRefNumber || payload.AccountReference || "") || null, transactionTime: String(payload.TransTime || payload.TransactionTime || "") || null };
+}
+
+function valueOf(record: JsonRecord, names: string[]) {
+  for (const name of names) if (record[name] !== undefined && record[name] !== null && String(record[name]).trim()) return record[name];
+  return undefined;
+}
+
+function normalizePulledPayment(record: JsonRecord): IncomingMpesaPayment | null {
+  const transactionType = String(valueOf(record, ["TransactionType", "transactionType", "Type", "type"]) || "").trim().toLowerCase();
+  if (transactionType && !["c2b", "customer", "buy good", "pay bill", "paybill", "merchant payment", "payment received"].some((kind) => transactionType.includes(kind))) return null;
+  const receiptNumber = String(valueOf(record, ["TransID", "TransactionID", "transactionId", "ReceiptNo", "receiptNumber", "MpesaReceiptNumber"]) || "").trim().toUpperCase();
+  const amount = Number(valueOf(record, ["TransAmount", "TransactionAmount", "Amount", "amount"]));
+  if (!/^[A-Z0-9]{8,100}$/.test(receiptNumber) || !Number.isFinite(amount) || amount <= 0) return null;
+  const payerName = String(valueOf(record, ["PayerName", "payerName", "DebitPartyName", "debitPartyName"]) || "").trim()
+    || [record.FirstName, record.MiddleName, record.LastName].map((value) => String(value || "").trim()).filter(Boolean).join(" ")
+    || null;
+  return {
+    receiptNumber,
+    amount,
+    phone: String(valueOf(record, ["MSISDN", "PhoneNumber", "msisdn", "phoneNumber"]) || "").trim() || null,
+    payerName,
+    accountReference: String(valueOf(record, ["BillRefNumber", "AccountReference", "accountReference", "billRefNumber"]) || "").trim() || null,
+    transactionTime: String(valueOf(record, ["TransTime", "TransactionTime", "transactionTime", "trxDate"]) || "").trim() || null,
+  };
+}
+
+export function parsePullTransactions(payload: JsonRecord) {
+  const rows: JsonRecord[] = [];
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 5 || value === null || value === undefined) return;
+    if (Array.isArray(value)) { for (const entry of value) visit(entry, depth + 1); return; }
+    if (typeof value !== "object") return;
+    const record = value as JsonRecord;
+    if (normalizePulledPayment(record)) rows.push(record);
+    else for (const nested of Object.values(record)) if (Array.isArray(nested) || (nested && typeof nested === "object")) visit(nested, depth + 1);
+  };
+  visit(payload, 0);
+  const unique = new Map<string, IncomingMpesaPayment>();
+  for (const row of rows) { const payment = normalizePulledPayment(row); if (payment && !unique.has(payment.receiptNumber)) unique.set(payment.receiptNumber, payment); }
+  return [...unique.values()];
+}
+
+export function parseTransactionStatusResult(payload: JsonRecord) {
+  const result = (payload.Result && typeof payload.Result === "object" ? payload.Result : payload) as JsonRecord;
+  const parametersContainer = result.ResultParameters && typeof result.ResultParameters === "object" ? result.ResultParameters as JsonRecord : {};
+  const parameters = Array.isArray(parametersContainer.ResultParameter) ? parametersContainer.ResultParameter as JsonRecord[] : [];
+  const values: JsonRecord = {};
+  for (const parameter of parameters) {
+    const key = String(parameter.Key || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+    if (key) values[key] = parameter.Value;
+  }
+  const receiptNumber = String(valueOf(values, ["receiptno", "transactionid", "transactionreceipt", "mpesareceiptnumber"]) || valueOf(result, ["TransactionID", "ReceiptNo"]) || "").trim().toUpperCase();
+  const amountValue = valueOf(values, ["amount", "transactionamount"]);
+  const amount = amountValue === undefined ? null : Number(amountValue);
+  const resultCode = String(result.ResultCode ?? payload.ResultCode ?? "");
+  const resultDescription = String(result.ResultDesc || payload.ResultDesc || "");
+  const originatorConversationId = String(result.OriginatorConversationID || payload.OriginatorConversationID || "").trim() || null;
+  return {
+    successful: resultCode === "0",
+    resultCode,
+    resultDescription,
+    originatorConversationId,
+    receiptNumber: receiptNumber || null,
+    amount: amount !== null && Number.isFinite(amount) ? amount : null,
+    payment: receiptNumber && amount !== null && Number.isFinite(amount) && amount > 0 ? normalizePulledPayment({
+      TransactionID: receiptNumber,
+      Amount: amount,
+      DebitPartyName: valueOf(values, ["debitpartyname"]),
+      MSISDN: valueOf(values, ["msisdn", "phonenumber"]),
+      AccountReference: valueOf(values, ["accountreference", "billrefnumber"]),
+      TransactionTime: valueOf(values, ["finalisedtime", "transactiontime"]),
+    }) : null,
+  };
 }

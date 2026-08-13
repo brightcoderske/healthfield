@@ -54,10 +54,13 @@ try {
   const stkNotification = await fetch(`${paymentBase}/stk/notification/${paymentEndpointSecret}`);
   const c2bConfirmation = await fetch(`${paymentBase}/c2b/confirmation/${paymentEndpointSecret}`);
   const c2bVerification = await fetch(`${paymentBase}/c2b/verification/${paymentEndpointSecret}`);
-  if (health.status !== 200 || noKey.status !== 401 || badOrigin.status !== 403 || unsignedUpload.status !== 401 || preflight.status !== 204 || forgotPassword.status !== 400 || invalidPaymentNotification.status !== 404 || stkNotification.status !== 405 || c2bConfirmation.status !== 405 || c2bVerification.status !== 405) {
-    throw new Error(`Unexpected statuses: ${health.status}/${noKey.status}/${badOrigin.status}/${unsignedUpload.status}/${preflight.status}/${forgotPassword.status}/${invalidPaymentNotification.status}/${stkNotification.status}/${c2bConfirmation.status}/${c2bVerification.status}`);
+  const transactionStatusResult = await fetch(`${paymentBase}/status/result/${paymentEndpointSecret}`);
+  const transactionStatusTimeout = await fetch(`${paymentBase}/status/timeout/${paymentEndpointSecret}`);
+  const pullNotification = await fetch(`${paymentBase}/recovery/notification/${paymentEndpointSecret}`);
+  if (health.status !== 200 || noKey.status !== 401 || badOrigin.status !== 403 || unsignedUpload.status !== 401 || preflight.status !== 204 || forgotPassword.status !== 400 || invalidPaymentNotification.status !== 404 || stkNotification.status !== 405 || c2bConfirmation.status !== 405 || c2bVerification.status !== 405 || transactionStatusResult.status !== 405 || transactionStatusTimeout.status !== 405 || pullNotification.status !== 405) {
+    throw new Error(`Unexpected statuses: ${health.status}/${noKey.status}/${badOrigin.status}/${unsignedUpload.status}/${preflight.status}/${forgotPassword.status}/${invalidPaymentNotification.status}/${stkNotification.status}/${c2bConfirmation.status}/${c2bVerification.status}/${transactionStatusResult.status}/${transactionStatusTimeout.status}/${pullNotification.status}`);
   }
-  console.log(`API smoke test passed: health=${health.status}, no-key=${noKey.status}, CORS=${badOrigin.status}, unsigned-upload=${unsignedUpload.status}, preflight=${preflight.status}, forgot-password=${forgotPassword.status}, invalid-payment-notification=${invalidPaymentNotification.status}, STK-notification=${stkNotification.status}, C2B-confirmation=${c2bConfirmation.status}, C2B-verification=${c2bVerification.status}`);
+  console.log(`API smoke test passed: health=${health.status}, no-key=${noKey.status}, CORS=${badOrigin.status}, unsigned-upload=${unsignedUpload.status}, preflight=${preflight.status}, forgot-password=${forgotPassword.status}, invalid-payment-notification=${invalidPaymentNotification.status}, STK-notification=${stkNotification.status}, C2B-confirmation=${c2bConfirmation.status}, C2B-verification=${c2bVerification.status}, Transaction-Status-result=${transactionStatusResult.status}, Transaction-Status-timeout=${transactionStatusTimeout.status}, Pull-notification=${pullNotification.status}`);
 } finally {
   child.kill("SIGTERM");
 }

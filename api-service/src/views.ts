@@ -1596,8 +1596,6 @@ export async function handleView(request: Request, path: string) {
           .orderBy(desc(paymentTransactions.createdAt))
           .limit(200),
       ]);
-      const phone = (value: string | null) =>
-        (value || "").replace(/\D/g, "").replace(/^0/, "254");
       const payments = incoming.map((item) => {
         const amountMatches = candidates.filter(
           (candidate) =>
@@ -1610,16 +1608,11 @@ export async function handleView(request: Request, path: string) {
               return reference === order || reference === order.slice(0, 12);
             })
           : [];
-        const phoneMatches = item.phone
-          ? amountMatches.filter(
-              (candidate) => phone(candidate.phone) === phone(item.phone),
-            )
-          : [];
         const suggestion =
           referenceMatches.length === 1
             ? referenceMatches[0]
-            : phoneMatches.length === 1
-              ? phoneMatches[0]
+            : amountMatches.length === 1
+              ? amountMatches[0]
               : null;
         return { ...item, suggestion };
       });

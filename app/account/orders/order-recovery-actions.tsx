@@ -3,6 +3,7 @@
 import { CheckCircle2, LoaderCircle, RefreshCw, ShoppingCart } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { paymentPollDelay } from "@/lib/payment-poll";
 
 type RecoveryItem = { productId: number | null; quantity: number };
 type RecoveryState = "IDLE" | "WAITING" | "PAID" | "FAILED";
@@ -31,14 +32,17 @@ export function OrderRecoveryActions({ orderId, phone: initialPhone, items, mpes
       } else if (data.failed || data.order?.paymentStatus === "FAILED") {
         setState("FAILED");
         setMessage(data.message || data.payment?.resultDescription || "The payment was not completed. You can retry again.");
-      } else if (pollCount.current >= 24) {
-        setState("FAILED");
-        setMessage("Payment has not been confirmed. You can retry the prompt or rebuild the cart.");
+      } else if (pollCount.current === 24) {
+        setMessage("Safaricom has not returned a final result yet. Healthfield is still checking; do not pay a second time.");
       }
     }
-    void check();
-    const timer = window.setInterval(() => void check(), 5_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    let timer = 0;
+    function schedule() {
+      if (cancelled) return;
+      timer = window.setTimeout(() => void check().finally(schedule), paymentPollDelay(pollCount.current));
+    }
+    void check().finally(schedule);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [router, state]);
 
   async function retryPayment() {

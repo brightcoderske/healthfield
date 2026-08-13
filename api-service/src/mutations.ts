@@ -19,7 +19,7 @@ import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, 
 import { json, publicImageUrl, safeFilename } from "./http";
 import { extractMpesaReceipt, initiateStkPush, mpesaConfiguration } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
-import { replayStoredStkCallback } from "./payment-handlers";
+import { replayStoredStkCallback, requestKnownTransactionStatus } from "./payment-handlers";
 import { canGrantTeamRole, canManageTeamAccount } from "./staff-access-policy";
 import { secureHashEqual, twoFactorChallengeLifetimeMs, twoFactorCodeHash, twoFactorMaximumAttempts, twoFactorMaximumResends, twoFactorResendCooldownMs, twoFactorTiming } from "./two-factor";
 import { requireTeamPermission, sessionHasPermission } from "./staff-permissions";
@@ -520,6 +520,8 @@ export async function handleOrders(request: Request, id?: number) {
       await db.update(paymentTransactions).set({ status: "FAILED", resultDescription: paymentMessage }).where(eq(paymentTransactions.id, result.paymentId));
       await db.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, result.orderId));
     }
+  } else if (manualReceipt) {
+    void requestKnownTransactionStatus(result.paymentId).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: result.paymentId, error }));
   }
   if (orderEmail && parsed.data.paymentMethod === "MANUAL_MPESA") void sendEmail({ to: orderEmail, subject: `Payment proof received for ${orderNumber}`, message: `Hello ${parsed.data.fullName},\n\nWe received your payment proof for order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}. We will confirm it before processing the order.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"PAYMENT REVIEW"}), channel:"orders" });
   if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.`, channel:"orders" });
@@ -1209,6 +1211,8 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
         await db.update(paymentTransactions).set({ status: "FAILED", resultDescription: paymentMessage }).where(eq(paymentTransactions.id, outcome.paymentId!));
         await db.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, outcome.order.id));
       }
+    } else if (manualReceipt && outcome.paymentId) {
+      void requestKnownTransactionStatus(outcome.paymentId).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: outcome.paymentId, error }));
     }
     return json({ ok: true, id: outcome.order.id, orderNumber: outcome.order.orderNumber, total: Number(outcome.order.total), paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
   } catch (error) {

@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node dist/server.mjs"
+    "start": "node dist/server.mjs",
+    "register:pull": "node dist/register-pull.mjs"
   }
 }
