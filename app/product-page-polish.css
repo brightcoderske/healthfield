@@ -5,6 +5,7 @@
 .product-page-header .product-header-cart { justify-self:end; }
 .product-page-header .product-header-back svg,.product-page-header .product-header-cart svg { width:16px; }
 
+.compact-product-actions { flex-wrap:wrap !important; }
 .compact-product-actions .quantity-stepper {
   height: 38px !important;
   padding: 3px;
@@ -14,10 +15,10 @@
   overflow: visible;
   background: #faf7fb;
 }
-.compact-product-actions .product-cart-controls { display:flex;align-items:center;gap:7px; }
+.compact-product-actions .product-cart-controls { min-width:0;display:flex;align-items:center;gap:7px;flex:0 0 100%; }
 .compact-product-actions .quantity-stepper form { display:contents; }
-.compact-product-actions .product-add-form { display:flex; }
-.compact-product-actions .product-add-form .primary-cart-action { min-height:42px;padding:0 14px;border:1px solid #792587;color:#fff;background:#792587;display:flex;align-items:center;gap:6px;font-weight:700; }
+.compact-product-actions .product-add-form { min-width:0;display:flex;flex:1; }
+.compact-product-actions .product-add-form .primary-cart-action { width:100%;min-height:42px;padding:0 14px;border:1px solid #792587;color:#fff;background:#792587;display:flex;align-items:center;justify-content:center;gap:6px;font-weight:700; }
 .compact-product-actions .quantity-stepper button {
   width: 30px !important;
   height: 30px !important;

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { CART_UPDATED_EVENT } from "./product-cart-link";
 
 export function ProductActions({ productId, productName, productUrl, initialQuantity=0, initialCartCount=0 }: { productId:number; productName:string; productUrl:string;initialQuantity?:number;initialCartCount?:number }) {
-  const [quantity, setQuantity] = useState(()=>Math.max(1,initialQuantity));
+  const [quantity, setQuantity] = useState(()=>Math.max(0,initialQuantity));
   const [cartCount,setCartCount]=useState(initialCartCount);
   const [cartState,setCartState]=useState<"idle"|"saving"|"added"|"error">("idle");
   const [quantitySaving,setQuantitySaving]=useState(false);
@@ -27,7 +27,7 @@ export function ProductActions({ productId, productName, productUrl, initialQuan
   function applyCart(cart:Record<number,number>){
     const productQuantity=Number(cart[productId])||0;
     const nextCount=Object.values(cart).reduce((total,value)=>total+Number(value),0);
-    setQuantity(Math.max(1,productQuantity));
+    setQuantity(Math.max(0,productQuantity));
     setCartCount(nextCount);
     window.dispatchEvent(new CustomEvent(CART_UPDATED_EVENT,{detail:{count:nextCount}}));
   }
@@ -60,7 +60,7 @@ export function ProductActions({ productId, productName, productUrl, initialQuan
   async function setCartQuantity(nextQuantity:number){
     if(cartState==="saving"||quantitySaving)return;
     const previousQuantity=quantity;
-    const next=Math.max(1,Math.min(99,nextQuantity));
+    const next=Math.max(0,Math.min(99,nextQuantity));
     setQuantity(next);
     setQuantitySaving(true);
     const form=new FormData();
@@ -85,17 +85,17 @@ export function ProductActions({ productId, productName, productUrl, initialQuan
       <div className="quantity-stepper">
         <form action="/api/cart" method="post" onSubmit={(event)=>{event.preventDefault();void setCartQuantity(quantity-1)}}>
           <input type="hidden" name="productId" value={productId}/><input type="hidden" name="action" value="set"/><input type="hidden" name="quantity" value={quantity-1}/><input type="hidden" name="return" value={`/products/${productId}`}/>
-          <button type="submit" disabled={quantity<=1||cartState==="saving"||quantitySaving} aria-label="Decrease cart quantity"><Minus/></button>
+          <button type="submit" disabled={quantity<=0||cartState==="saving"||quantitySaving} aria-label="Decrease this product quantity"><Minus/></button>
         </form>
-        <input type="number" min="1" max="99" inputMode="numeric" value={quantity} readOnly aria-label="Quantity in cart" aria-live="polite"/>
+        <input type="number" min="0" max="99" inputMode="numeric" value={quantity} readOnly aria-label={`${productName} quantity in cart`} aria-live="polite"/>
         <form action="/api/cart" method="post" onSubmit={(event)=>{event.preventDefault();void setCartQuantity(quantity+1)}}>
           <input type="hidden" name="productId" value={productId}/><input type="hidden" name="action" value="set"/><input type="hidden" name="quantity" value={quantity+1}/><input type="hidden" name="return" value={`/products/${productId}`}/>
-          <button type="submit" disabled={quantity>=99||cartState==="saving"||quantitySaving} aria-label="Increase cart quantity"><Plus/></button>
+          <button type="submit" disabled={quantity>=99||cartState==="saving"||quantitySaving} aria-label="Increase this product quantity"><Plus/></button>
         </form>
       </div>
       <form className="product-add-form" action="/api/cart" method="post" onSubmit={(event)=>{event.preventDefault();void addToCart(event.currentTarget)}}>
         <input type="hidden" name="productId" value={productId}/><input type="hidden" name="action" value="add"/><input type="hidden" name="quantity" value="1"/><input type="hidden" name="return" value={`/products/${productId}`}/>
-        <button className={`primary-cart-action ${cartState==="added"?"is-added":""}`} type="submit" disabled={cartState==="saving"||quantitySaving} aria-live="polite">{cartState==="added"?<Check/>:<ShoppingCart/>}<span>{cartState==="saving"?"Adding…":cartState==="added"?"Added to cart":cartState==="error"?"Try again":"Add to cart"}</span>{cartCount>0?<b className="cart-action-badge" aria-label={`${cartCount} items in cart`}>{cartCount>99?"99+":cartCount}</b>:null}</button>
+        <button className={`primary-cart-action ${cartState==="added"?"is-added":""}`} type="submit" disabled={cartState==="saving"||quantitySaving} aria-live="polite">{cartState==="added"?<Check/>:<ShoppingCart/>}<span>{cartState==="saving"?"Adding…":cartState==="added"?"Added to cart":cartState==="error"?"Try again":"Add to cart"}</span>{quantity>0?<b className="cart-action-badge" aria-label={`${quantity} ${productName} in cart`}>{quantity>99?"99+":quantity}</b>:null}</button>
       </form>
     </div>
     <a className="icon-product-action view-cart-action" href="/cart" aria-label={`View cart with ${cartCount} items`} title="View cart"><ShoppingBag/>{cartCount>0?<b className="cart-action-badge" aria-hidden="true">{cartCount>99?"99+":cartCount}</b>:null}</a>

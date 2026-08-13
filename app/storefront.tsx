@@ -620,13 +620,10 @@ export function Storefront({
           <section>
             <div>
               <h1>
-                Healthfield Pharmacy
-                <br />
-                <em>in Kenya</em>
+                Your Health,<br /><em>Our Priority</em>
               </h1>
-              <p>
-                Healthfield Pharmacy website for genuine medicines and pharmacist
-                support in Juja, Nairobi and across Kenya.
+              <p className="desktop-hero-description">
+                Quality medicine and health products delivered to your door.
               </p>
               <a href="#products">Shop Now →</a>
             </div>

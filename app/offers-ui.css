@@ -22,11 +22,11 @@
 .offer-card-items span{min-width:0;display:flex;flex-direction:column}
 .offer-card-items strong{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .offer-card-items small{color:#7c7480;font-size:10px}
-.offer-card-items del{color:#a89fac}
+.offer-card-items del{color:#a89fac;text-decoration-color:#d8263f;text-decoration-thickness:2px}
 .offer-card>footer{margin-top:auto;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .offer-card-price{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
 .offer-card-price b{color:#70227e;font-size:19px;font-weight:850}
-.offer-card-price del{color:#756c79;font-size:14px;font-weight:750}
+.offer-card-price del{color:#756c79;font-size:14px;font-weight:750;text-decoration-color:#d8263f;text-decoration-thickness:2px}
 .offer-card-price em{padding:2px 7px;border-radius:999px;background:#fdeef4;color:#c42e72;font-size:9px;font-weight:800;font-style:normal}
 .offer-card>footer button{min-height:36px;padding:0 15px;border:0;border-radius:9px;background:#70227e;color:#fff;font-size:11px;font-weight:750;cursor:pointer}
 .offer-card-note{color:#7c7480;font-size:10px;font-style:italic}
