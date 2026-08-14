@@ -11,6 +11,7 @@ console.log("Registering the Healthfield Pull Transactions callback", { shortcod
 const response = await registerPullTransactionsCallback();
 console.log("Safaricom Pull Transactions registration response", {
   responseCode: String(response.ResponseCode ?? ""),
+  responseStatus: String(response.ResponseStatus ?? ""),
   responseDescription: String(response.ResponseDescription ?? ""),
   responseRefId: String(response.ResponseRefID ?? ""),
 });

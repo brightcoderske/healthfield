@@ -1597,6 +1597,9 @@ export async function handleView(request: Request, path: string) {
           .limit(200),
       ]);
       const payments = incoming.map((item) => {
+        const sameAmountReceiptCount = incoming.filter(
+          (other) => Math.abs(Number(other.amount) - Number(item.amount)) <= 0.001,
+        ).length;
         const amountMatches = candidates.filter(
           (candidate) =>
             Math.abs(Number(candidate.total) - Number(item.amount)) <= 0.001,
@@ -1611,10 +1614,10 @@ export async function handleView(request: Request, path: string) {
         const suggestion =
           referenceMatches.length === 1
             ? referenceMatches[0]
-            : amountMatches.length === 1
+            : amountMatches.length === 1 && sameAmountReceiptCount === 1
               ? amountMatches[0]
               : null;
-        return { ...item, suggestion };
+        return { ...item, suggestion, candidates: amountMatches, sameAmountReceiptCount };
       });
       return json({ payments, exceptions });
     }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildC2bCallbackUrls, buildPaymentRecoveryCallbackUrls, buildPullTransactionsQueryPayload, buildStkNotificationUrl, buildStkPushPayload, buildTransactionStatusPayload, classifyStkQueryResult, extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, selectIncomingPaymentCandidate, stkBackgroundReconcileDelay, stkReconciliationReference, validDateOrNull, type MpesaConfiguration } from "./mpesa.ts";
+import { buildC2bCallbackUrls, buildPaymentRecoveryCallbackUrls, buildPullTransactionsQueryPayload, buildStkNotificationUrl, buildStkPushPayload, buildTransactionStatusPayload, classifyStkQueryResult, extractMpesaReceipt, isSuccessfulMpesaResponseCode, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, selectIncomingPaymentCandidate, stkBackgroundReconcileDelay, stkReconciliationReference, validDateOrNull, type MpesaConfiguration } from "./mpesa.ts";
 
 test("normalizes supported Kenyan mobile number formats", () => {
   assert.equal(normalizeKenyanPhone("0712 345 678"), "254712345678");
@@ -61,6 +61,15 @@ test("builds documented Transaction Status and Pull query payloads", () => {
   });
 });
 
+test("accepts plain and zero-padded Safaricom success response codes", () => {
+  assert.equal(isSuccessfulMpesaResponseCode(0), true);
+  assert.equal(isSuccessfulMpesaResponseCode("0"), true);
+  assert.equal(isSuccessfulMpesaResponseCode("00000000"), true);
+  assert.equal(isSuccessfulMpesaResponseCode(" 0000 "), true);
+  assert.equal(isSuccessfulMpesaResponseCode(""), false);
+  assert.equal(isSuccessfulMpesaResponseCode("1000"), false);
+});
+
 test("matches a unique Till payment by exact amount without using either phone number", () => {
   const now = new Date("2026-08-13T12:00:00Z");
   const candidate = selectIncomingPaymentCandidate({
@@ -80,6 +89,15 @@ test("does not guess when two recent Till payments have the same amount", () => 
     { receiptNumber: "TGH7K2AB92", amount: "2450.00", accountReference: null, createdAt: new Date(now.getTime() - 90_000) },
   ];
   assert.equal(selectIncomingPaymentCandidate({ amount: 2450, allowAmountOnly: true, now: now.getTime(), recent }), null);
+});
+
+test("an exact receipt resolves equal-amount Till payments", () => {
+  const now = new Date("2026-08-13T12:00:00Z");
+  const recent = [
+    { receiptNumber: "TGH7K2AB91", amount: "2450.00", accountReference: null, createdAt: now },
+    { receiptNumber: "TGH7K2AB92", amount: "2450.00", accountReference: null, createdAt: now },
+  ];
+  assert.equal(selectIncomingPaymentCandidate({ amount: 2450, receiptNumber: "TGH7K2AB92", allowAmountOnly: false, now: now.getTime(), recent })?.receiptNumber, "TGH7K2AB92");
 });
 
 test("exact order reference wins when equal-amount Till payments are ambiguous", () => {

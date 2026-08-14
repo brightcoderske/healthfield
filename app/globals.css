@@ -56,8 +56,19 @@
 .pos-payer-confirmation > p{margin:3px 0;color:#5e5661;font-size:9px;}
 .pos-payer-confirmation > button{min-height:40px;border:0;border-radius:8px;color:#fff;background:#207a46;font-weight:800;}
 .pos-payer-confirmation > button:disabled{opacity:0.6;}
+.pos-payer-candidates{width:min(620px,100%);margin:14px auto;display:grid;gap:7px;text-align:left;}
+.pos-payer-candidates > p{margin:0 0 2px;color:#5e5661;font-size:9px;}
+.pos-payer-candidates > button{width:100%;min-height:52px;padding:8px 10px;border:1px solid #d9c9df;border-radius:9px;background:#faf6fb;display:grid;grid-template-columns:minmax(0,1.3fr) minmax(90px,1fr) 72px 48px;align-items:center;gap:8px;color:#382d3c;text-align:left;}
+.pos-payer-candidates > button:hover{border-color:#8a3998;background:#f5ecf7;}
+.pos-payer-candidates > button:disabled{opacity:.6;}
+.pos-payer-candidates span{min-width:0;display:flex;flex-direction:column;}
+.pos-payer-candidates small{color:#756e79;font-size:8px;}
+.pos-payer-candidates strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;}
+.pos-payer-candidates b{color:#762584;font-size:9px;text-align:right;}
 @media (max-width: 520px){
 .pos-payer-confirmation{grid-template-columns:1fr;}
+.pos-payer-candidates > button{grid-template-columns:minmax(0,1fr) 90px;}
+.pos-payer-candidates > button span:nth-child(3){display:none;}
 }
 .password-page .password-field{width:100%;min-width:0;height:42px;border:1px solid #e4dfe6;border-radius:9px;display:flex;align-items:center;overflow:hidden;}
 .password-page .password-field input{width:100%;min-width:0;height:40px!important;padding:0 11px;border:0!important;outline:0;flex:1;}
@@ -2808,7 +2819,8 @@ to{transform:rotate(360deg);}
 .unmatched-order-match > div{display:grid;grid-template-columns:minmax(0, 1fr) 66px;gap:6px;align-items:end;}
 .unmatched-order-match label{display:flex;flex-direction:column;gap:3px;}
 .unmatched-order-match label > span{color:#77707a;font-size:7.5px;font-weight:800;}
-.unmatched-order-match input{width:100%;height:32px;padding:0 8px;border:1px solid #ddd5e0;border-radius:7px;text-transform:uppercase;}
+.unmatched-order-match input,
+.unmatched-order-match select{width:100%;height:32px;padding:0 8px;border:1px solid #ddd5e0;border-radius:7px;background:#fff;text-transform:uppercase;}
 .unmatched-order-match button{height:32px;border:0;border-radius:7px;color:#fff;background:#762584;font-size:9px;font-weight:800;}
 .unmatched-order-match button:disabled{opacity:0.5;}
 .payment-exceptions-scroller{margin:0;}

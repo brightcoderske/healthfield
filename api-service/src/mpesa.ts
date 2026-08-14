@@ -152,7 +152,7 @@ export function selectIncomingPaymentCandidate<T extends { receiptNumber: string
 export function classifyStkQueryResult(payload: JsonRecord): StkQueryOutcome {
   const resultCode = String(payload.ResultCode ?? "").trim();
   const resultDescription = String(payload.ResultDesc || payload.errorMessage || payload.ResponseDescription || "").trim();
-  if (resultCode === "0") return { state: "PAID", resultCode, resultDescription };
+  if (isSuccessfulMpesaResponseCode(resultCode)) return { state: "PAID", resultCode, resultDescription };
 
   const normalizedDescription = resultDescription.toLowerCase();
   const explicitlyPending = [
@@ -216,15 +216,29 @@ async function mpesaJson(url: string, init: RequestInit) {
   const data = await response.json().catch(() => ({})) as JsonRecord;
   if (!response.ok) {
     const message = String(data.errorMessage || data.ResponseDescription || `M-Pesa returned HTTP ${response.status}.`);
-    console.warn("M-Pesa API request rejected", { endpoint: new URL(url).pathname, status: response.status, errorCode: String(data.errorCode || ""), message });
+    console.warn("M-Pesa API request rejected", {
+      endpoint: new URL(url).pathname,
+      status: response.status,
+      errorCode: String(data.errorCode || data.ResponseCode || data.ResultCode || ""),
+      responseStatus: String(data.ResponseStatus || ""),
+      message,
+    });
     throw new Error(message);
   }
   return data;
 }
 
+export function isSuccessfulMpesaResponseCode(value: unknown) {
+  return /^0+$/.test(String(value ?? "").trim());
+}
+
 function acceptedRequest(data: JsonRecord, fallback: string) {
   const responseCode = data.ResponseCode ?? data.responseCode;
-  if (responseCode !== undefined && String(responseCode) !== "0") throw new Error(String(data.ResponseDescription || data.errorMessage || fallback));
+  if (responseCode !== undefined && !isSuccessfulMpesaResponseCode(responseCode)) {
+    const code = String(responseCode).trim();
+    const description = String(data.ResponseDescription || data.ResultDesc || data.errorMessage || fallback);
+    throw new Error(code ? `${description} (${code})` : description);
+  }
   return data;
 }
 
@@ -254,7 +268,7 @@ export async function initiateStkPush(input: { orderNumber: string; phone: strin
   const checkoutRequestId = String(data.CheckoutRequestID || "");
   const merchantRequestId = String(data.MerchantRequestID || "");
   const responseCode = String(data.ResponseCode || "");
-  if (!checkoutRequestId || responseCode !== "0") {
+  if (!checkoutRequestId || !isSuccessfulMpesaResponseCode(responseCode)) {
     console.warn("M-Pesa STK request was not accepted", { orderNumber: input.orderNumber, responseCode, responseDescription: String(data.ResponseDescription || "") });
     throw new Error(String(data.ResponseDescription || data.CustomerMessage || "M-Pesa could not start the payment request."));
   }
@@ -416,7 +430,7 @@ export function parseTransactionStatusResult(payload: JsonRecord) {
   const resultDescription = String(result.ResultDesc || payload.ResultDesc || "");
   const originatorConversationId = String(result.OriginatorConversationID || payload.OriginatorConversationID || "").trim() || null;
   return {
-    successful: resultCode === "0",
+    successful: isSuccessfulMpesaResponseCode(resultCode),
     resultCode,
     resultDescription,
     originatorConversationId,

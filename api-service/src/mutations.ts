@@ -19,7 +19,7 @@ import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, 
 import { json, publicImageUrl, safeFilename } from "./http";
 import { extractMpesaReceipt, initiateStkPush, mpesaConfiguration } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
-import { replayStoredStkCallback, requestKnownTransactionStatus } from "./payment-handlers";
+import { reconcileManualPaymentFromIncoming, replayStoredStkCallback, requestKnownTransactionStatus } from "./payment-handlers";
 import { canGrantTeamRole, canManageTeamAccount } from "./staff-access-policy";
 import { secureHashEqual, twoFactorChallengeLifetimeMs, twoFactorCodeHash, twoFactorMaximumAttempts, twoFactorMaximumResends, twoFactorResendCooldownMs, twoFactorTiming } from "./two-factor";
 import { requireTeamPermission, sessionHasPermission } from "./staff-permissions";
@@ -460,6 +460,7 @@ export async function handleOrders(request: Request, id?: number) {
   if (parsed.data.paymentMethod === "MANUAL_MPESA" && (!paymentSettings?.onlineManualEnabled || !paymentSettings.mpesaTillNumber)) return json({ error: "Manual M-Pesa payment is currently unavailable.", code: "MANUAL_PAYMENT_UNAVAILABLE" }, { status: 409 });
   if (parsed.data.paymentMethod === "MANUAL_MPESA" && (parsed.data.manualPaymentMessage || "").trim().length < 10) return json({ error: "Paste the complete M-Pesa payment message." }, { status: 400 });
   const manualReceipt = parsed.data.paymentMethod === "MANUAL_MPESA" ? extractMpesaReceipt(parsed.data.manualPaymentMessage || "") : null;
+  if (parsed.data.paymentMethod === "MANUAL_MPESA" && !manualReceipt) return json({ error: "The M-Pesa receipt code could not be found. Paste the complete confirmation SMS." }, { status: 400 });
   const catalog = await db.select().from(products).where(inArray(products.id, parsed.data.items.map((item) => item.productId)));
   if (catalog.length !== new Set(parsed.data.items.map((item) => item.productId)).size) return json({ error: "One or more products are unavailable." }, { status: 409 });
   // Offer pricing is re-resolved here rather than trusted from the client, so the
@@ -506,8 +507,8 @@ export async function handleOrders(request: Request, id?: number) {
     const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: (subtotal + deliveryFee).toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
     return { orderId: created.insertId, paymentId: payment.insertId };
   });
-  let paymentStatus: "PENDING" | "FAILED" = "PENDING";
-  let paymentMessage = parsed.data.paymentMethod === "MANUAL_MPESA" ? "Payment proof submitted for administrator approval." : "Check your phone and enter your M-Pesa PIN.";
+  let paymentStatus: "PENDING" | "FAILED" | "PAID" = "PENDING";
+  let paymentMessage = parsed.data.paymentMethod === "MANUAL_MPESA" ? "Receipt extracted. Healthfield is checking Safaricom before sending it for review." : "Check your phone and enter your M-Pesa PIN.";
   if (parsed.data.paymentMethod === "MPESA_EXPRESS") {
     try {
       const stk = await initiateStkPush({ orderNumber, phone: parsed.data.billingPhone || parsed.data.phone, amount: subtotal + deliveryFee });
@@ -521,9 +522,15 @@ export async function handleOrders(request: Request, id?: number) {
       await db.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, result.orderId));
     }
   } else if (manualReceipt) {
-    void requestKnownTransactionStatus(result.paymentId).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: result.paymentId, error }));
+    const matched = await reconcileManualPaymentFromIncoming(result.paymentId);
+    if (matched.paid) {
+      paymentStatus = "PAID";
+      paymentMessage = "M-Pesa payment matched. Your order has been placed successfully.";
+    } else {
+      void requestKnownTransactionStatus(result.paymentId).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: result.paymentId, error }));
+    }
   }
-  if (orderEmail && parsed.data.paymentMethod === "MANUAL_MPESA") void sendEmail({ to: orderEmail, subject: `Payment proof received for ${orderNumber}`, message: `Hello ${parsed.data.fullName},\n\nWe received your payment proof for order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}. We will confirm it before processing the order.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"PAYMENT REVIEW"}), channel:"orders" });
+  if (orderEmail && parsed.data.paymentMethod === "MANUAL_MPESA" && paymentStatus !== "PAID") void sendEmail({ to: orderEmail, subject: `Payment proof received for ${orderNumber}`, message: `Hello ${parsed.data.fullName},\n\nWe received your payment proof for order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}. We will confirm it before processing the order.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"PAYMENT REVIEW"}), channel:"orders" });
   if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.`, channel:"orders" });
   return json({ ok: true, id: result.orderId, orderNumber, total: subtotal + deliveryFee, paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
 }

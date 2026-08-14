@@ -18,7 +18,7 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { paymentPollDelay } from "@/lib/payment-poll";
+import { manualTillPollDelay, paymentPollDelay } from "@/lib/payment-poll";
 import { prescriptionUploadHref } from "@/lib/prescription-selection";
 
 type Product = {
@@ -151,7 +151,7 @@ export function CheckoutForm({
   const total = subtotal + (method === "DELIVERY" ? 250 : 0);
 
   useEffect(() => {
-    if (result?.state !== "WAITING") return;
+    if (!result || !["WAITING", "REVIEW"].includes(result.state)) return;
     let cancelled = false;
     async function check() {
       pollCount.current += 1;
@@ -198,6 +198,9 @@ export function CheckoutForm({
                 }
               : current,
           );
+      } else if (paymentMethod === "MANUAL_MPESA" && pollCount.current === 6 && !cancelled) {
+        await clearCheckoutCart();
+        setResult((current) => current ? { ...current, state:"REVIEW", message:"The receipt was not matched immediately. It is now safely queued for administrator review; do not pay again." } : current);
       } else if (pollCount.current === 24 && !cancelled) {
         setResult((current) =>
           current
@@ -213,14 +216,15 @@ export function CheckoutForm({
     let timer = 0;
     function schedule() {
       if (cancelled) return;
-      timer = window.setTimeout(() => void check().finally(schedule), paymentPollDelay(pollCount.current));
+      const delay = paymentMethod === "MANUAL_MPESA" ? manualTillPollDelay(pollCount.current) : paymentPollDelay(pollCount.current);
+      timer = window.setTimeout(() => void check().finally(schedule), delay);
     }
     void check().finally(schedule);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [result?.state]);
+  }, [paymentMethod, result?.state]);
 
   function locate() {
     if (!navigator.geolocation)
@@ -301,7 +305,7 @@ export function CheckoutForm({
         data.paymentStatus === "PAID"
           ? "PAID"
           : paymentMethod === "MANUAL_MPESA"
-            ? "REVIEW"
+            ? "WAITING"
             : data.paymentStatus === "FAILED"
               ? "FAILED"
               : "WAITING";
@@ -312,7 +316,7 @@ export function CheckoutForm({
         state: nextState,
         message: data.paymentMessage || "Payment request started.",
       });
-      if (nextState === "REVIEW") await clearCheckoutCart();
+      if (nextState === "PAID") await clearCheckoutCart();
     } catch {
       setError("Unable to reach checkout. Please try again.");
     } finally {
@@ -338,8 +342,7 @@ export function CheckoutForm({
       data.paymentStatus === "PAID" ||
       data.order?.paymentStatus === "PAID"
     ) {
-      await clearCheckoutCart();
-      setResult((current) =>
+       setResult((current) =>
         current
           ? {
               ...current,
@@ -381,12 +384,12 @@ export function CheckoutForm({
     if (!response?.ok)
       setError(data?.error || "Payment proof could not be submitted.");
     else {
-      await clearCheckoutCart();
+      if (data.paid) await clearCheckoutCart();
       setResult((current) =>
         current
           ? {
               ...current,
-              state: data.paid ? "PAID" : "REVIEW",
+              state: data.paid ? "PAID" : "WAITING",
               message: data.message,
             }
           : current,

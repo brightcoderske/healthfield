@@ -74,7 +74,10 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (paymentNotificationRoute) {
     const configuredSecret = mpesaConfiguration()?.callbackSecret || "";
     const suppliedSecret = decodeURIComponent(paymentNotificationRoute[2]);
-    if (!configuredSecret || !safeEqual(suppliedSecret, configuredSecret)) return json({ error: "Payment endpoint not found." }, { status: 404 });
+    if (!configuredSecret || !safeEqual(suppliedSecret, configuredSecret)) {
+      console.warn("M-Pesa callback rejected before handler", { paymentRoute: paymentNotificationRoute[1], sourceIp: ip, configured: Boolean(configuredSecret) });
+      return json({ error: "Payment endpoint not found." }, { status: 404 });
+    }
     const paymentRoute = paymentNotificationRoute[1];
     return responseOf(paymentRoute === "stk/notification" ? handleStkNotification(request)
       : paymentRoute === "c2b/verification" ? handleC2bVerification(request)

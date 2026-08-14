@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { activityLogs, branchInventory, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions, siteSettings, users } from "../../db/schema";
 import { requestSession, requireSession } from "./auth";
 import { sendEmail } from "./email";
@@ -17,6 +17,19 @@ const stkBackgroundChecks = new Map<number, number>();
 const stkQueryCache = new Map<string, { checkedAt: number; result?: Awaited<ReturnType<typeof queryStkPush>>; pending?: Promise<Awaited<ReturnType<typeof queryStkPush>>> }>();
 let stkBackgroundSweepRunning = false;
 type DatabaseTransaction = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+function paymentProviderSource(request: Request) {
+  return String(request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown").split(",")[0].trim().slice(0, 64);
+}
+
+function callbackSummary(payload: Record<string, unknown>, receiptNumber?: string, amount?: number) {
+  const receipt = String(receiptNumber || payload.TransID || payload.TransactionID || "").trim().toUpperCase();
+  return {
+    businessShortCode: String(payload.BusinessShortCode || payload.ShortCode || "").trim(),
+    receiptSuffix: receipt ? receipt.slice(-4) : "",
+    amount: Number.isFinite(amount) ? amount : Number(payload.TransAmount ?? payload.Amount) || null,
+  };
+}
 
 async function throttledStkQuery(checkoutRequestId: string) {
   const now = Date.now();
@@ -105,6 +118,7 @@ function chooseIncomingPayment<T extends { receiptNumber: string; amount: string
   payment: typeof paymentTransactions.$inferSelect,
   orderNumber: string | null,
   recent: T[],
+  now = Date.now(),
 ) {
   return selectIncomingPaymentCandidate({
     amount: payment.amount,
@@ -112,6 +126,7 @@ function chooseIncomingPayment<T extends { receiptNumber: string; amount: string
     orderNumber,
     allowAmountOnly: ["PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "FAILED", "CANCELLED"].includes(payment.status),
     recent,
+    now,
   });
 }
 
@@ -120,12 +135,49 @@ async function findIncomingPaymentCandidate(transactionId: number) {
   const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1);
   if (!payment || payment.method !== "MANUAL_MPESA" || payment.status === "PAID" || payment.status === "REFUNDED") return null;
   const [order] = await db.select({ orderNumber: orders.orderNumber }).from(orders).where(eq(orders.id, payment.orderId)).limit(1);
-  const recent = await db.select().from(mpesaIncomingPayments).where(and(isNull(mpesaIncomingPayments.matchedTransactionId), gte(mpesaIncomingPayments.createdAt, new Date(Date.now() - 24 * 60 * 60_000)))).orderBy(desc(mpesaIncomingPayments.createdAt)).limit(200);
-  return chooseIncomingPayment(payment, order?.orderNumber || null, recent);
+  const recentRows = await db.select({
+    ...getTableColumns(mpesaIncomingPayments),
+    createdAtUnix: sql<number>`unix_timestamp(${mpesaIncomingPayments.createdAt})`,
+    databaseNowUnix: sql<number>`unix_timestamp(current_timestamp)`,
+  }).from(mpesaIncomingPayments).where(and(isNull(mpesaIncomingPayments.matchedTransactionId), sql`${mpesaIncomingPayments.createdAt} >= date_sub(current_timestamp, interval 24 hour)`)).orderBy(desc(mpesaIncomingPayments.createdAt)).limit(200);
+  const now = recentRows.length ? Number(recentRows[0].databaseNowUnix) * 1000 : Date.now();
+  const recent = recentRows.map(({ createdAtUnix, databaseNowUnix: _databaseNowUnix, ...row }) => ({ ...row, createdAt: new Date(Number(createdAtUnix) * 1000) }));
+  return chooseIncomingPayment(payment, order?.orderNumber || null, recent, now);
+}
+
+async function findRecentIncomingAmountCandidates(transactionId: number) {
+  const db = getDb();
+  const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1);
+  if (!payment || payment.method !== "MANUAL_MPESA" || payment.status === "PAID" || payment.status === "REFUNDED") return [];
+  return db.select().from(mpesaIncomingPayments).where(and(
+    isNull(mpesaIncomingPayments.matchedTransactionId),
+    sql`${mpesaIncomingPayments.createdAt} >= date_sub(current_timestamp, interval 30 minute)`,
+    eq(mpesaIncomingPayments.amount, payment.amount),
+  )).orderBy(desc(mpesaIncomingPayments.createdAt)).limit(20);
 }
 
 function incomingCandidatePayload(incoming: typeof mpesaIncomingPayments.$inferSelect | null) {
   return incoming ? { id:incoming.id, receiptNumber:incoming.receiptNumber, amount:Number(incoming.amount), phone:incoming.phone, payerName:incoming.payerName, accountReference:incoming.accountReference, receivedAt:incoming.createdAt } : null;
+}
+
+export async function reconcileManualPaymentFromIncoming(transactionId: number) {
+  const db = getDb();
+  const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1);
+  if (!payment || payment.method !== "MANUAL_MPESA" || payment.status === "PAID" || payment.status === "REFUNDED") return { paid: payment?.status === "PAID", candidate: null };
+  const candidate = await findIncomingPaymentCandidate(payment.id);
+  if (!candidate) return { paid: false, candidate: null };
+
+  // Online customers paste a receipt, so only that exact provider receipt may
+  // complete the order automatically. POS can also use a unique exact-amount
+  // candidate, but a seller must confirm the payer identity before completion.
+  if (payment.channel === "ONLINE" && candidate.receiptNumber !== payment.receiptNumber) return { paid: false, candidate: null };
+  if (payment.channel === "POS") {
+    await db.update(paymentTransactions).set({ status:"REQUIRES_REVIEW", receiptNumber:candidate.receiptNumber, resultDescription:"Till payment found; waiting for the seller to confirm the payer identity." }).where(eq(paymentTransactions.id,payment.id));
+    return { paid: false, candidate };
+  }
+
+  await markPaymentPaid(payment.id, { receiptNumber:candidate.receiptNumber, amount:Number(candidate.amount), phone:candidate.phone, providerPayload:candidate.providerPayload || undefined, incomingPaymentId:candidate.id });
+  return { paid: true, candidate };
 }
 
 async function paymentStatus(checkoutToken: string) {
@@ -224,6 +276,7 @@ export async function handleManualPayment(request: Request) {
   const channel = order.orderNumber.startsWith("POS-") ? "POS" : "ONLINE";
   if (channel === "ONLINE" && message.length < 10) return json({ error: "Paste the complete M-Pesa payment message." }, { status: 400 });
   const receiptNumber = message ? extractMpesaReceipt(message) : null;
+  if (channel === "ONLINE" && !receiptNumber) return json({ error: "The M-Pesa receipt code could not be found. Paste the complete confirmation SMS." }, { status: 400 });
   if (channel === "POS" ? settings?.posManualEnabled === false : settings?.onlineManualEnabled === false) return json({ error: "Manual M-Pesa payment is currently unavailable." }, { status: 409 });
   if (order.paymentStatus === "PAID") return json({ ok: true, paid: true, orderNumber: order.orderNumber });
   let transaction: typeof paymentTransactions.$inferSelect;
@@ -260,10 +313,11 @@ export async function handleManualPayment(request: Request) {
     return json({ error: "That M-Pesa code has already been submitted for another payment." }, { status: 409 });
   }
   await db.update(orders).set({ paymentMethod: "MANUAL_MPESA", paymentStatus: "PENDING", paymentReference: receiptNumber }).where(eq(orders.id, order.id));
+  const matched = await reconcileManualPaymentFromIncoming(transaction.id);
+  if (matched.paid) return json({ ok:true, paid:true, orderNumber:order.orderNumber, receiptNumber:matched.candidate?.receiptNumber, message:"M-Pesa payment matched. Your order has been placed successfully." });
+  const amountCandidates = channel === "POS" && !matched.candidate ? await findRecentIncomingAmountCandidates(transaction.id) : [];
   if (receiptNumber) void requestKnownTransactionStatus(transaction.id).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: transaction.id, error }));
-  const candidate = channel === "POS" && !receiptNumber ? await findIncomingPaymentCandidate(transaction.id) : null;
-  if (candidate) await db.update(paymentTransactions).set({ status:"REQUIRES_REVIEW", receiptNumber:candidate.receiptNumber, resultDescription:"Till payment found; waiting for the seller to confirm the payer identity." }).where(eq(paymentTransactions.id,transaction.id));
-  return json({ ok: true, paid:false, candidatePayment:incomingCandidatePayload(candidate), orderNumber: order.orderNumber, message: candidate ? "A Till payment was found. Confirm the payer name with the customer to complete the sale." : receiptNumber ? "Receipt submitted for administrator approval. Do not ask the customer to pay again." : channel === "ONLINE" ? "Payment proof submitted for administrator approval." : "Waiting for the till payment. The seller will confirm the payer name before completing the sale." }, { status: 202 });
+  return json({ ok: true, paid:false, candidatePayment:incomingCandidatePayload(matched.candidate), candidatePayments:amountCandidates.map(incomingCandidatePayload), orderNumber: order.orderNumber, message: matched.candidate ? "A Till payment was found. Confirm the payer name with the customer to complete the sale." : amountCandidates.length ? `${amountCandidates.length} Till payments have this exact amount. Ask the customer for the payer name or receipt and choose the correct payment.` : receiptNumber ? "Receipt extracted. Healthfield is checking Safaricom before sending it for review." : "Waiting for the till payment. The seller will confirm the payer name before completing the sale." }, { status: 202 });
 }
 
 async function finalizeCancellation(orderId: number, paymentId: number, actorId: number | null) {
@@ -306,10 +360,14 @@ export async function handlePaymentReconcile(request: Request) {
   const db = getDb();
   const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, status.payment.id)).limit(1);
   if (payment.method === "MANUAL_MPESA") {
-    const candidate = payment.channel === "POS" ? await findIncomingPaymentCandidate(payment.id) : null;
-    if (candidate) {
-      await db.update(paymentTransactions).set({ status:"REQUIRES_REVIEW", receiptNumber:candidate.receiptNumber, resultDescription:"Till payment found; waiting for the seller to confirm the payer identity." }).where(eq(paymentTransactions.id,payment.id));
-      return json({ ok:true, paid:false, candidatePayment:incomingCandidatePayload(candidate), message:"Till payment found. Ask the customer to confirm the payer name, receipt and amount.", ...(await paymentStatus(checkoutToken)) });
+    const matched = await reconcileManualPaymentFromIncoming(payment.id);
+    if (matched.paid) return json({ ok:true, paid:true, message:"M-Pesa receipt matched. Your order has been placed successfully.", ...(await paymentStatus(checkoutToken)) });
+    if (matched.candidate) {
+      return json({ ok:true, paid:false, candidatePayment:incomingCandidatePayload(matched.candidate), message:"Till payment found. Ask the customer to confirm the payer name, receipt and amount.", ...(await paymentStatus(checkoutToken)) });
+    }
+    if (payment.channel === "POS") {
+      const amountCandidates = await findRecentIncomingAmountCandidates(payment.id);
+      if (amountCandidates.length) return json({ ok:true, paid:false, candidatePayments:amountCandidates.map(incomingCandidatePayload), message:amountCandidates.length === 1 ? "Till payment found. Ask the customer to confirm the payer name, receipt and amount." : `${amountCandidates.length} Till payments have this exact amount. Ask the customer for the payer name or receipt and choose the correct payment.`, ...(await paymentStatus(checkoutToken)) });
     }
     if (payment.channel === "ONLINE" && payment.receiptNumber) void requestKnownTransactionStatus(payment.id).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: payment.id, error }));
     if (payment.status === "CANCEL_REQUESTED" && Date.now() - payment.updatedAt.getTime() >= cancellationGraceMs) {
@@ -571,29 +629,51 @@ async function ingestIncomingPayment(incoming: IncomingMpesaPayment, payload: Re
 export async function handleC2bConfirmation(request: Request) {
   if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
-  const incoming = parseC2bPayment(payload);
-  await ingestIncomingPayment(incoming, payload, "C2B");
-  return json({ ResultCode: 0, ResultDesc: "Accepted" });
+  const sourceIp = paymentProviderSource(request);
+  try {
+    const incoming = parseC2bPayment(payload);
+    console.info("M-Pesa C2B confirmation received", { sourceIp, ...callbackSummary(payload, incoming.receiptNumber, incoming.amount) });
+    const result = await ingestIncomingPayment(incoming, payload, "C2B");
+    console.info("M-Pesa C2B confirmation accepted", { sourceIp, incomingPaymentId: result.incomingId, isNew: result.isNewIncoming, receiptSuffix: incoming.receiptNumber.slice(-4) });
+    return json({ ResultCode: 0, ResultDesc: "Accepted" });
+  } catch (error) {
+    console.error("M-Pesa C2B confirmation failed", { sourceIp, ...callbackSummary(payload), error });
+    return json({ ResultCode: 1, ResultDesc: "Unable to process confirmation" }, { status: 500 });
+  }
 }
 
 export async function handleC2bVerification(request: Request) {
   if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
-  try { parseC2bPayment(payload); return json({ ResultCode: "0", ResultDesc: "Accepted" }); }
-  catch { return json({ ResultCode: "C2B00012", ResultDesc: "Invalid transaction details" }); }
+  const sourceIp = paymentProviderSource(request);
+  try {
+    const incoming = parseC2bPayment(payload);
+    console.info("M-Pesa C2B verification accepted", { sourceIp, ...callbackSummary(payload, incoming.receiptNumber, incoming.amount) });
+    return json({ ResultCode: "0", ResultDesc: "Accepted" });
+  } catch (error) {
+    console.warn("M-Pesa C2B verification rejected", { sourceIp, ...callbackSummary(payload), error: error instanceof Error ? error.message : "Invalid payload" });
+    return json({ ResultCode: "C2B00012", ResultDesc: "Invalid transaction details" });
+  }
 }
 
 export async function handlePullTransactionsNotification(request: Request) {
   if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
-  const transactions = parsePullTransactions(payload);
-  let inserted = 0;
-  for (const transaction of transactions) {
-    const result = await ingestIncomingPayment(transaction, payload, "PULL");
-    if (result.isNewIncoming) inserted += 1;
+  const sourceIp = paymentProviderSource(request);
+  try {
+    const transactions = parsePullTransactions(payload);
+    let inserted = 0;
+    for (const transaction of transactions) {
+      const result = await ingestIncomingPayment(transaction, payload, "PULL");
+      if (result.isNewIncoming) inserted += 1;
+    }
+    await getDb().insert(activityLogs).values({ actorId: null, action: "MPESA_PULL_CALLBACK_RECEIVED", entityType: "payment_recovery", entityId: null, metadata: { received: transactions.length, inserted } });
+    console.info("M-Pesa Pull callback accepted", { sourceIp, received: transactions.length, inserted });
+    return json({ ResultCode: 0, ResultDesc: "Accepted" });
+  } catch (error) {
+    console.error("M-Pesa Pull callback failed", { sourceIp, error });
+    return json({ ResultCode: 1, ResultDesc: "Unable to process recovery notification" }, { status: 500 });
   }
-  await getDb().insert(activityLogs).values({ actorId: null, action: "MPESA_PULL_CALLBACK_RECEIVED", entityType: "payment_recovery", entityId: null, metadata: { received: transactions.length, inserted } });
-  return json({ ResultCode: 0, ResultDesc: "Accepted" });
 }
 
 export async function handleTransactionStatusResult(request: Request) {
@@ -652,8 +732,16 @@ export async function handlePosIncomingPaymentConfirm(request: Request, incoming
   if(order.paymentStatus==="PAID")return json({ok:true,paid:true,orderNumber:order.orderNumber,receiptNumber:order.paymentReference});
   const [payment]=await db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId,order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
   if(!payment||payment.method!=="MANUAL_MPESA")return json({error:"This is not a Till payment sale."},{status:409});
-  const candidate=await findIncomingPaymentCandidate(payment.id);
-  if(!candidate||candidate.id!==incomingId)return json({error:"That Till receipt is no longer the unique safe match for this sale. Review it in Unmatched payments."},{status:409});
+  const [candidateRow]=await db.select({
+    ...getTableColumns(mpesaIncomingPayments),
+    createdAtUnix:sql<number>`unix_timestamp(${mpesaIncomingPayments.createdAt})`,
+    databaseNowUnix:sql<number>`unix_timestamp(current_timestamp)`,
+  }).from(mpesaIncomingPayments).where(and(eq(mpesaIncomingPayments.id,incomingId),isNull(mpesaIncomingPayments.matchedTransactionId))).limit(1);
+  if(!candidateRow)return json({error:"That Till receipt is no longer available. Review it in Unmatched payments."},{status:409});
+  const {createdAtUnix,databaseNowUnix,...candidate}=candidateRow;
+  const ageSeconds=Number(databaseNowUnix)-Number(createdAtUnix);
+  const exactSubmittedReceipt=Boolean(payment.receiptNumber&&payment.receiptNumber===candidate.receiptNumber);
+  if(Math.abs(Number(payment.amount)-Number(candidate.amount))>0.001||(!exactSubmittedReceipt&&(ageSeconds<0||ageSeconds>30*60)))return json({error:"That payment is not a recent exact-amount match for this sale. Review it in Unmatched payments."},{status:409});
   const result=await markPaymentPaid(payment.id,{receiptNumber:candidate.receiptNumber,amount:Number(candidate.amount),phone:candidate.phone,providerPayload:candidate.providerPayload||undefined,actorId:auth.session.userId,incomingPaymentId:candidate.id});
   return json({ok:true,paid:true,orderNumber:order.orderNumber,receiptNumber:candidate.receiptNumber,inventoryFinalized:result.inventoryFinalized,message:result.inventoryFinalized?"Customer identity confirmed. Payment recorded and stock updated.":"Payment recorded. The order requires fulfilment review because reserved stock was no longer available."});
 }
@@ -675,9 +763,17 @@ export async function requestKnownTransactionStatus(transactionId: number) {
 export async function recoverMissedMpesaPayments(actorId: number | null = null, hours = 2) {
   if (!pullTransactionsConfiguration()) return { requested: false, configured: false, message: "M-Pesa Pull Transactions is not configured." };
   const db = getDb();
-  const [recent] = await db.select({ createdAt: activityLogs.createdAt }).from(activityLogs).where(and(eq(activityLogs.action, "MPESA_PULL_QUERY_REQUESTED"), gte(activityLogs.createdAt, new Date(Date.now() - pullRecoveryThrottleMs)))).orderBy(desc(activityLogs.createdAt)).limit(1);
-  if (recent) {
-    const retryAfterSeconds = Math.max(1, Math.ceil((recent.createdAt.getTime() + pullRecoveryThrottleMs - Date.now()) / 1000));
+  // Compare both timestamps inside MySQL. Parsing a Nairobi database timestamp
+  // with a UTC Node process can otherwise make a ten-minute cooldown look like
+  // a three-hour cooldown.
+  const [recent] = await db.select({
+    requestedAtUnix: sql<number>`unix_timestamp(${activityLogs.createdAt})`,
+    databaseNowUnix: sql<number>`unix_timestamp(current_timestamp)`,
+  }).from(activityLogs).where(eq(activityLogs.action, "MPESA_PULL_QUERY_REQUESTED")).orderBy(desc(activityLogs.createdAt)).limit(1);
+  const throttleSeconds = Math.ceil(pullRecoveryThrottleMs / 1000);
+  const elapsedSeconds = recent ? Number(recent.databaseNowUnix) - Number(recent.requestedAtUnix) : Number.POSITIVE_INFINITY;
+  if (Number.isFinite(elapsedSeconds) && elapsedSeconds < throttleSeconds) {
+    const retryAfterSeconds = Math.max(1, throttleSeconds - Math.max(0, Math.trunc(elapsedSeconds)));
     return { requested: false, configured: true, throttled: true, retryAfterSeconds, message: `A Till recovery check already ran recently. Try again in ${Math.ceil(retryAfterSeconds / 60)} minute(s).` };
   }
   const end = new Date();
