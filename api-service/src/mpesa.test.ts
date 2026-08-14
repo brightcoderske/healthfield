@@ -54,7 +54,7 @@ test("builds documented Transaction Status and Pull query payloads", () => {
     Occasion: "Payment verification",
   });
   assert.deepEqual(buildPullTransactionsQueryPayload("4502013", new Date("2026-08-14T05:00:00Z"), new Date("2026-08-14T06:00:00Z")), {
-    ShortCode: 4502013,
+    ShortCode: "4502013",
     StartDate: "2026-08-14 08:00:00",
     EndDate: "2026-08-14 09:00:00",
     OffSetValue: "0",

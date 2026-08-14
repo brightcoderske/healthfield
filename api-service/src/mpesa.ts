@@ -321,7 +321,7 @@ function pullDate(value: Date) {
 }
 
 export function buildPullTransactionsQueryPayload(shortcode: string, start: Date, end: Date, offset = 0) {
-  return { ShortCode: Number(shortcode), StartDate: pullDate(start), EndDate: pullDate(end), OffSetValue: String(Math.max(0, Math.trunc(offset))) };
+  return { ShortCode: shortcode.trim(), StartDate: pullDate(start), EndDate: pullDate(end), OffSetValue: String(Math.max(0, Math.trunc(offset))) };
 }
 
 export async function queryPulledTransactions(start: Date, end: Date, offset = 0) {
@@ -345,7 +345,7 @@ export async function registerPullTransactionsCallback() {
   return acceptedRequest(await mpesaJson(`${config.baseUrl}/pulltransactions/v1/register`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ ShortCode: Number(config.shortcode), RequestType: "Pull", NominatedNumber: config.nominatedNumber, CallBackURL: urls.pullNotificationUrl }),
+    body: JSON.stringify({ ShortCode: config.shortcode, RequestType: "Pull", NominatedNumber: config.nominatedNumber, CallBackURL: urls.pullNotificationUrl }),
   }), "Safaricom did not register the Pull Transactions callback.");
 }
 
