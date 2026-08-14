@@ -231,7 +231,26 @@ export async function handleManualPayment(request: Request) {
     if (channel === "POS") {
       const [existing] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
       if (!existing) return json({ error: "Payment request not found." }, { status: 404 });
-      await db.update(paymentTransactions).set({ method: "MANUAL_MPESA", status: "PENDING", receiptNumber: null, manualMessage: null, checkoutRequestId: null, merchantRequestId: null, resultCode: null, resultDescription: "Waiting for automatic till confirmation." }).where(eq(paymentTransactions.id, existing.id));
+      if (message && !receiptNumber) return json({ error: "Enter a valid 10-character M-Pesa receipt code or paste the complete confirmation SMS." }, { status: 400 });
+      await db.update(paymentTransactions).set(message ? {
+        method: "MANUAL_MPESA",
+        status: "REQUIRES_REVIEW",
+        receiptNumber,
+        manualMessage: message,
+        checkoutRequestId: null,
+        merchantRequestId: null,
+        resultCode: null,
+        resultDescription: "Receipt supplied at the till; waiting for administrator approval.",
+      } : {
+        method: "MANUAL_MPESA",
+        status: "PENDING",
+        receiptNumber: null,
+        manualMessage: null,
+        checkoutRequestId: null,
+        merchantRequestId: null,
+        resultCode: null,
+        resultDescription: "Waiting for automatic till confirmation.",
+      }).where(eq(paymentTransactions.id, existing.id));
       [transaction] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, existing.id)).limit(1);
     } else {
       const [created] = await db.insert(paymentTransactions).values({ orderId: order.id, method: "MANUAL_MPESA", channel, status: "REQUIRES_REVIEW", amount: order.total, phone: order.phone, receiptNumber, manualMessage: message });
@@ -241,10 +260,10 @@ export async function handleManualPayment(request: Request) {
     return json({ error: "That M-Pesa code has already been submitted for another payment." }, { status: 409 });
   }
   await db.update(orders).set({ paymentMethod: "MANUAL_MPESA", paymentStatus: "PENDING", paymentReference: receiptNumber }).where(eq(orders.id, order.id));
-  if (channel === "ONLINE" && receiptNumber) void requestKnownTransactionStatus(transaction.id).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: transaction.id, error }));
-  const candidate = channel === "POS" ? await findIncomingPaymentCandidate(transaction.id) : null;
+  if (receiptNumber) void requestKnownTransactionStatus(transaction.id).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: transaction.id, error }));
+  const candidate = channel === "POS" && !receiptNumber ? await findIncomingPaymentCandidate(transaction.id) : null;
   if (candidate) await db.update(paymentTransactions).set({ status:"REQUIRES_REVIEW", receiptNumber:candidate.receiptNumber, resultDescription:"Till payment found; waiting for the seller to confirm the payer identity." }).where(eq(paymentTransactions.id,transaction.id));
-  return json({ ok: true, paid:false, candidatePayment:incomingCandidatePayload(candidate), orderNumber: order.orderNumber, message: candidate ? "A Till payment was found. Confirm the payer name with the customer to complete the sale." : channel === "ONLINE" ? "Payment proof submitted for administrator approval." : "Waiting for the till payment. The seller will confirm the payer name before completing the sale." }, { status: 202 });
+  return json({ ok: true, paid:false, candidatePayment:incomingCandidatePayload(candidate), orderNumber: order.orderNumber, message: candidate ? "A Till payment was found. Confirm the payer name with the customer to complete the sale." : receiptNumber ? "Receipt submitted for administrator approval. Do not ask the customer to pay again." : channel === "ONLINE" ? "Payment proof submitted for administrator approval." : "Waiting for the till payment. The seller will confirm the payer name before completing the sale." }, { status: 202 });
 }
 
 async function finalizeCancellation(orderId: number, paymentId: number, actorId: number | null) {

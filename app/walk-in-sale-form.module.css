@@ -1,0 +1,61 @@
+.manualProof {
+  width: min(520px, 100%);
+  margin: 12px auto 2px;
+  padding: 12px;
+  border: 1px solid #ddd1e1;
+  border-radius: 12px;
+  background: #faf6fb;
+  text-align: left;
+}
+
+.manualProof label {
+  display: block;
+  margin-bottom: 7px;
+  color: #3f2844;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.manualProof div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.manualProof input,
+.manualProof button {
+  min-height: 38px;
+  border-radius: 8px;
+}
+
+.manualProof input {
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid #cbbdce;
+  background: #fff;
+}
+
+.manualProof button {
+  padding: 0 12px;
+  border: 0;
+  color: #fff;
+  background: #762584;
+  font-weight: 800;
+}
+
+.manualProof button:disabled {
+  opacity: .55;
+}
+
+.manualProof small {
+  display: block;
+  margin-top: 6px;
+  color: #746978;
+  font-size: 11px;
+}
+
+@media (max-width: 520px) {
+  .manualProof div {
+    grid-template-columns: 1fr;
+  }
+}
