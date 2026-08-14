@@ -9,7 +9,7 @@ import { getDb, closeDb } from "./db";
 import { json } from "./http";
 import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
-import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, recoverMissedMpesaPayments } from "./payment-handlers";
+import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, reconcilePendingStkPayments, recoverMissedMpesaPayments } from "./payment-handlers";
 import {
   handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
@@ -192,6 +192,10 @@ if (process.env.RUN_MIGRATIONS !== "false") await migrate(getDb(), { migrationsF
 const server = app.listen(port, "0.0.0.0", () => console.log(`Healthfield API listening on ${port}`));
 const paymentMaintenance = setInterval(() => void finalizeExpiredPaymentCancellations().catch((error) => console.error("Payment cancellation maintenance failed", error)), 30_000);
 paymentMaintenance.unref();
+const initialStkReconciliation = setTimeout(() => void reconcilePendingStkPayments().catch((error) => console.error("Initial STK reconciliation failed", error)), 15_000);
+initialStkReconciliation.unref();
+const stkReconciliation = setInterval(() => void reconcilePendingStkPayments().catch((error) => console.error("Scheduled STK reconciliation failed", error)), 30_000);
+stkReconciliation.unref();
 const initialPaymentRecovery = setTimeout(() => void recoverMissedMpesaPayments(null, 2).catch((error) => console.error("Initial M-Pesa Pull recovery failed", error)), 60_000);
 initialPaymentRecovery.unref();
 const paymentRecovery = setInterval(() => void recoverMissedMpesaPayments(null, 2).catch((error) => console.error("Scheduled M-Pesa Pull recovery failed", error)), 15 * 60_000);
@@ -202,6 +206,8 @@ async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   clearInterval(paymentMaintenance);
+  clearTimeout(initialStkReconciliation);
+  clearInterval(stkReconciliation);
   clearTimeout(initialPaymentRecovery);
   clearInterval(paymentRecovery);
   console.log(`Healthfield API received ${signal}; closing server and database pool.`);

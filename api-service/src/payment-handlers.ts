@@ -6,14 +6,34 @@ import { sendEmail } from "./email";
 import { requireTeamPermission } from "./staff-permissions";
 import { getDb } from "./db";
 import { json } from "./http";
-import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, selectIncomingPaymentCandidate, transactionStatusConfiguration, type IncomingMpesaPayment } from "./mpesa";
+import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, selectIncomingPaymentCandidate, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, type IncomingMpesaPayment } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const cancellationGraceMs = 2 * 60_000;
 const pullRecoveryThrottleMs = 10 * 60_000;
+const stkBackgroundChecks = new Map<number, number>();
+const stkQueryCache = new Map<string, { checkedAt: number; result?: Awaited<ReturnType<typeof queryStkPush>>; pending?: Promise<Awaited<ReturnType<typeof queryStkPush>>> }>();
+let stkBackgroundSweepRunning = false;
 type DatabaseTransaction = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+async function throttledStkQuery(checkoutRequestId: string) {
+  const now = Date.now();
+  const cached = stkQueryCache.get(checkoutRequestId);
+  if (cached?.pending) return cached.pending;
+  if (cached?.result && now - cached.checkedAt < 5_000) return cached.result;
+  const pending = queryStkPush(checkoutRequestId);
+  stkQueryCache.set(checkoutRequestId, { checkedAt: now, pending });
+  try {
+    const result = await pending;
+    stkQueryCache.set(checkoutRequestId, { checkedAt: Date.now(), result });
+    return result;
+  } catch (error) {
+    stkQueryCache.delete(checkoutRequestId);
+    throw error;
+  }
+}
 
 async function finalizePosInventory(tx: DatabaseTransaction, orderId: number, actorId: number | null) {
   const items = await tx.select({ id: orderItems.id, productId: orderItems.productId, productName: orderItems.productName, quantity: orderItems.quantity }).from(orderItems).where(eq(orderItems.orderId, orderId));
@@ -44,10 +64,23 @@ async function markPaymentPaid(transactionId: number, details: { receiptNumber: 
   const result = await db.transaction(async (tx) => {
     const [payment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1).for("update");
     if (!payment) throw new Error("Payment record not found.");
-    if (payment.status === "PAID") return { orderId: payment.orderId, newlyPaid: false, inventoryFinalized: true };
     if (Math.abs(Number(payment.amount) - details.amount) > 0.001) {
-      await tx.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", resultDescription: "The paid amount does not match the order total.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
+      if (payment.status !== "PAID") await tx.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", resultDescription: "The paid amount does not match the order total.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
       throw new Error("The paid amount does not match the order total.");
+    }
+    if (payment.status === "PAID") {
+      const replacingProvisionalReceipt = Boolean(
+        details.receiptNumber &&
+        payment.receiptNumber?.startsWith("STK-") &&
+        payment.receiptNumber !== details.receiptNumber,
+      );
+      if (replacingProvisionalReceipt) {
+        await tx.update(paymentTransactions).set({ receiptNumber: details.receiptNumber, phone: details.phone || payment.phone, providerPayload: details.providerPayload || payment.providerPayload }).where(eq(paymentTransactions.id, payment.id));
+        await tx.update(orders).set({ paymentReference: details.receiptNumber }).where(eq(orders.id, payment.orderId));
+        await tx.insert(activityLogs).values({ actorId: details.actorId ?? null, action: "PAYMENT_RECEIPT_UPDATED", entityType: "order", entityId: String(payment.orderId), metadata: { transactionId: payment.id, receiptNumber: details.receiptNumber } });
+      }
+      if (details.incomingPaymentId) await tx.update(mpesaIncomingPayments).set({ matchedTransactionId: payment.id }).where(and(eq(mpesaIncomingPayments.id, details.incomingPaymentId), isNull(mpesaIncomingPayments.matchedTransactionId)));
+      return { orderId: payment.orderId, newlyPaid: false, inventoryFinalized: true };
     }
     const [order] = await tx.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1).for("update");
     if (!order) throw new Error("Order not found.");
@@ -273,14 +306,10 @@ export async function handlePaymentReconcile(request: Request) {
     return json({ ok: true, paid: false, message: "Payment prompt sent. Waiting for the phone response.", ...status }, { status: 202 });
   }
   try {
-    const result = await queryStkPush(payment.checkoutRequestId);
+    const result = await throttledStkQuery(payment.checkoutRequestId);
     const outcome = classifyStkQueryResult(result);
     if (outcome.state === "PAID") {
-      const receiptNumber = String(result.MpesaReceiptNumber || payment.receiptNumber || "");
-      if (!receiptNumber) {
-        await db.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", resultCode: "0", resultDescription: "Safaricom confirms payment; waiting for the receipt callback.", providerPayload: result }).where(and(eq(paymentTransactions.id, payment.id), inArray(paymentTransactions.status, ["PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW"])));
-        return json({ ok: true, paid: false, providerConfirmed: true, message: "Safaricom confirms payment. Do not retry or cancel; the receipt confirmation is still arriving.", ...(await paymentStatus(checkoutToken)) }, { status: 202 });
-      }
+      const receiptNumber = stkReconciliationReference(payment.checkoutRequestId, result.MpesaReceiptNumber || payment.receiptNumber);
       await markPaymentPaid(payment.id, { receiptNumber, amount: Number(payment.amount), phone: payment.phone, providerPayload: result });
       return json({ ok: true, paid: true, ...(await paymentStatus(checkoutToken)) });
     }
@@ -307,6 +336,51 @@ export async function handlePaymentReconcile(request: Request) {
       return json({ ok: true, paid: false, cancelled, message: "The reconciliation window ended without a successful confirmation.", ...(await paymentStatus(checkoutToken)) });
     }
     return json({ ok: true, paid: false, message: "Payment confirmation is still pending.", ...(await paymentStatus(checkoutToken)) }, { status: 202 });
+  }
+}
+
+export async function reconcilePendingStkPayments() {
+  if (stkBackgroundSweepRunning || !mpesaConfiguration()) return { checked: 0, paid: 0, failed: 0 };
+  stkBackgroundSweepRunning = true;
+  try {
+    const db = getDb();
+    const now = Date.now();
+    for (const [paymentId, checkedAt] of stkBackgroundChecks) if (now - checkedAt > 25 * 60 * 60_000) stkBackgroundChecks.delete(paymentId);
+    for (const [checkoutRequestId, query] of stkQueryCache) if (now - query.checkedAt > 10 * 60_000) stkQueryCache.delete(checkoutRequestId);
+    const candidates = await db.select().from(paymentTransactions).where(and(
+      eq(paymentTransactions.method, "MPESA_EXPRESS"),
+      inArray(paymentTransactions.status, ["PENDING", "REQUIRES_REVIEW"]),
+      gte(paymentTransactions.createdAt, new Date(now - 24 * 60 * 60_000)),
+    )).orderBy(desc(paymentTransactions.createdAt)).limit(100);
+    let checked = 0, paid = 0, failed = 0;
+    for (const payment of candidates) {
+      if (checked >= 4 || !payment.checkoutRequestId || now - payment.createdAt.getTime() < 10_000) continue;
+      const lastCheckedAt = stkBackgroundChecks.get(payment.id) || 0;
+      if (now - lastCheckedAt < stkBackgroundReconcileDelay(now - payment.createdAt.getTime())) continue;
+      stkBackgroundChecks.set(payment.id, now);
+      checked += 1;
+      try {
+        const result = await throttledStkQuery(payment.checkoutRequestId);
+        const outcome = classifyStkQueryResult(result);
+        if (outcome.state === "PAID") {
+          const receiptNumber = stkReconciliationReference(payment.checkoutRequestId, result.MpesaReceiptNumber || payment.receiptNumber);
+          await markPaymentPaid(payment.id, { receiptNumber, amount: Number(payment.amount), phone: payment.phone, providerPayload: result });
+          paid += 1;
+          console.info("Background STK reconciliation confirmed payment", { transactionId: payment.id, channel: payment.channel, checkoutRequestId: payment.checkoutRequestId });
+        } else if (outcome.state === "FAILED") {
+          await db.update(paymentTransactions).set({ status: "FAILED", resultCode: outcome.resultCode, resultDescription: outcome.resultDescription || "M-Pesa payment was not completed.", providerPayload: result }).where(and(eq(paymentTransactions.id, payment.id), inArray(paymentTransactions.status, ["PENDING", "REQUIRES_REVIEW"])));
+          await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
+          failed += 1;
+        } else {
+          await db.update(paymentTransactions).set({ resultCode: outcome.resultCode || payment.resultCode, resultDescription: outcome.resultDescription || payment.resultDescription, providerPayload: result }).where(and(eq(paymentTransactions.id, payment.id), inArray(paymentTransactions.status, ["PENDING", "REQUIRES_REVIEW"])));
+        }
+      } catch (error) {
+        console.warn("Background STK reconciliation is still pending", { transactionId: payment.id, channel: payment.channel, message: error instanceof Error ? error.message : "Unknown provider response" });
+      }
+    }
+    return { checked, paid, failed };
+  } finally {
+    stkBackgroundSweepRunning = false;
   }
 }
 
@@ -375,16 +449,15 @@ export async function handleStkNotification(request: Request) {
   if (request.method !== "POST") return json({ ResultCode: 1, ResultDesc: "Method not allowed" }, { status: 405 });
   const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
   const parsed = parseStkCallback(payload);
-  if (!parsed.checkoutRequestId || !parsed.merchantRequestId) return json({ ResultCode: 1, ResultDesc: "Invalid notification" }, { status: 400 });
+  if (!parsed.checkoutRequestId) return json({ ResultCode: 1, ResultDesc: "Invalid notification" }, { status: 400 });
   const db = getDb();
   let callbackId = 0;
   try { const [created] = await db.insert(mpesaStkCallbacks).values({ checkoutRequestId: parsed.checkoutRequestId, providerPayload: payload }); callbackId = created.insertId; }
   catch { const [existing] = await db.select({ id: mpesaStkCallbacks.id }).from(mpesaStkCallbacks).where(eq(mpesaStkCallbacks.checkoutRequestId, parsed.checkoutRequestId)).limit(1); callbackId = existing?.id || 0; }
   const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.checkoutRequestId, parsed.checkoutRequestId)).limit(1);
   if (!payment) return json({ ResultCode: 0, ResultDesc: "Accepted" });
-  if (!payment.merchantRequestId || payment.merchantRequestId !== parsed.merchantRequestId) {
-    console.warn("Rejected mismatched STK notification", { transactionId: payment.id });
-    return json({ ResultCode: 0, ResultDesc: "Accepted" });
+  if (payment.merchantRequestId && payment.merchantRequestId !== parsed.merchantRequestId) {
+    console.warn("STK notification MerchantRequestID differs; CheckoutRequestID remains authoritative", { transactionId: payment.id, checkoutRequestId: parsed.checkoutRequestId });
   }
   if (parsed.resultCode === "0" && parsed.receiptNumber && parsed.amount !== null) {
     try { await markPaymentPaid(payment.id, { receiptNumber: parsed.receiptNumber, amount: parsed.amount, phone: parsed.phone, providerPayload: payload }); }
@@ -454,8 +527,11 @@ async function ingestIncomingPayment(incoming: IncomingMpesaPayment, payload: Re
   const [receiptPayment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.receiptNumber, incoming.receiptNumber)).limit(1);
   let payment: typeof paymentTransactions.$inferSelect | undefined = receiptPayment?.method !== "CASH" ? receiptPayment : undefined;
   if (!payment) {
-    const candidates = await db.select({ payment: paymentTransactions, orderNumber: orders.orderNumber }).from(paymentTransactions).innerJoin(orders, eq(orders.id, paymentTransactions.orderId)).where(and(inArray(paymentTransactions.method, ["MPESA_EXPRESS", "MANUAL_MPESA"]), inArray(paymentTransactions.status, ["INITIATED", "PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "FAILED", "CANCELLED"]), gte(paymentTransactions.createdAt, new Date(Date.now() - 24 * 60 * 60_000)))).orderBy(desc(paymentTransactions.createdAt)).limit(200);
-    const amountMatches = candidates.filter((row) => Math.abs(Number(row.payment.amount) - incoming.amount) <= 0.001);
+    const candidates = await db.select({ payment: paymentTransactions, orderNumber: orders.orderNumber }).from(paymentTransactions).innerJoin(orders, eq(orders.id, paymentTransactions.orderId)).where(and(inArray(paymentTransactions.method, ["MPESA_EXPRESS", "MANUAL_MPESA"]), inArray(paymentTransactions.status, ["INITIATED", "PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "PAID", "FAILED", "CANCELLED"]), gte(paymentTransactions.createdAt, new Date(Date.now() - 24 * 60 * 60_000)))).orderBy(desc(paymentTransactions.createdAt)).limit(200);
+    const amountMatches = candidates.filter((row) =>
+      Math.abs(Number(row.payment.amount) - incoming.amount) <= 0.001 &&
+      (row.payment.status !== "PAID" || row.payment.receiptNumber?.startsWith("STK-")),
+    );
     const referenceMatches = amountMatches.filter((row) => paymentReferenceMatchesOrder(incoming.accountReference, row.orderNumber));
     const selected = referenceMatches.length === 1 ? referenceMatches[0] : null;
     payment = selected?.payment;

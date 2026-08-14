@@ -174,6 +174,16 @@ export function CheckoutForm({
                 }
               : current,
           );
+      } else if (data.providerConfirmed || (data.payment?.status === "REQUIRES_REVIEW" && data.payment?.resultCode === "0")) {
+        if (!cancelled)
+          setResult((current) =>
+            current
+              ? {
+                  ...current,
+                  message: data.message || "Safaricom confirms payment. Healthfield is completing the order.",
+                }
+              : current,
+          );
       } else if (data.failed || data.order?.paymentStatus === "FAILED") {
         if (!cancelled)
           setResult((current) =>

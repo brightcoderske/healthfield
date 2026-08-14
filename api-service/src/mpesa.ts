@@ -170,6 +170,20 @@ export function classifyStkQueryResult(payload: JsonRecord): StkQueryOutcome {
   return { state: terminalCodes.has(resultCode) ? "FAILED" : "PENDING", resultCode, resultDescription };
 }
 
+export function stkReconciliationReference(checkoutRequestId: string, receiptNumber?: unknown) {
+  const receipt = String(receiptNumber || "").trim().toUpperCase();
+  if (receipt) return receipt;
+  const checkout = checkoutRequestId.trim();
+  if (!checkout) throw new Error("The STK payment has no CheckoutRequestID.");
+  return `STK-${checkout.slice(-96)}`;
+}
+
+export function stkBackgroundReconcileDelay(ageMs: number) {
+  if (ageMs < 2 * 60_000) return 30_000;
+  if (ageMs < 15 * 60_000) return 60_000;
+  return 5 * 60_000;
+}
+
 export function buildStkPushPayload(config: MpesaConfiguration, input: { orderNumber: string; phone: string; amount: number }, timestamp: string) {
   const accountReference = input.orderNumber.replace(/[^a-z0-9]/gi, "").slice(0, 12) || "Healthfield";
   return {

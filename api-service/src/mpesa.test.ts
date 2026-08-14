@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildC2bCallbackUrls, buildPaymentRecoveryCallbackUrls, buildPullTransactionsQueryPayload, buildStkNotificationUrl, buildStkPushPayload, buildTransactionStatusPayload, classifyStkQueryResult, extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, selectIncomingPaymentCandidate, type MpesaConfiguration } from "./mpesa.ts";
+import { buildC2bCallbackUrls, buildPaymentRecoveryCallbackUrls, buildPullTransactionsQueryPayload, buildStkNotificationUrl, buildStkPushPayload, buildTransactionStatusPayload, classifyStkQueryResult, extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, selectIncomingPaymentCandidate, stkBackgroundReconcileDelay, stkReconciliationReference, type MpesaConfiguration } from "./mpesa.ts";
 
 test("normalizes supported Kenyan mobile number formats", () => {
   assert.equal(normalizeKenyanPhone("0712 345 678"), "254712345678");
@@ -128,6 +128,30 @@ test("only finalizes known terminal STK query outcomes", () => {
   assert.equal(classifyStkQueryResult({ ResultCode: 0, ResultDesc: "Success" }).state, "PAID");
   assert.equal(classifyStkQueryResult({ ResultCode: 1032, ResultDesc: "Request cancelled by user" }).state, "FAILED");
   assert.equal(classifyStkQueryResult({ ResultCode: 7777, ResultDesc: "Unknown provider state" }).state, "PENDING");
+});
+
+test("uses the provider receipt or a bounded CheckoutRequestID reference for successful STK reconciliation", () => {
+  assert.equal(stkReconciliationReference("ws_CO_140820260618123456", "uhebd338cw"), "UHEBD338CW");
+  assert.equal(stkReconciliationReference("ws_CO_140820260618123456"), "STK-ws_CO_140820260618123456");
+  assert.equal(stkReconciliationReference("x".repeat(140)).length, 100);
+});
+
+test("STK callback matching is independent of the customer or payer phone", () => {
+  const parsed = parseStkCallback({ Body: { stkCallback: { MerchantRequestID: "merchant-1", CheckoutRequestID: "checkout-1", ResultCode: 0, ResultDesc: "Success", CallbackMetadata: { Item: [
+    { Name: "Amount", Value: 5 },
+    { Name: "MpesaReceiptNumber", Value: "UHEBD338CW" },
+    { Name: "PhoneNumber", Value: 254799999999 },
+  ] } } } });
+  assert.equal(parsed.checkoutRequestId, "checkout-1");
+  assert.equal(parsed.amount, 5);
+  assert.equal(parsed.receiptNumber, "UHEBD338CW");
+  assert.equal(parsed.phone, "254799999999");
+});
+
+test("backs off background STK reconciliation as a payment ages", () => {
+  assert.equal(stkBackgroundReconcileDelay(30_000), 30_000);
+  assert.equal(stkBackgroundReconcileDelay(5 * 60_000), 60_000);
+  assert.equal(stkBackgroundReconcileDelay(30 * 60_000), 5 * 60_000);
 });
 
 test("extracts receipts and parses successful callbacks", () => {
