@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildC2bCallbackUrls, buildPaymentRecoveryCallbackUrls, buildPullTransactionsQueryPayload, buildStkNotificationUrl, buildStkPushPayload, buildTransactionStatusPayload, classifyStkQueryResult, extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, selectIncomingPaymentCandidate, stkBackgroundReconcileDelay, stkReconciliationReference, type MpesaConfiguration } from "./mpesa.ts";
+import { buildC2bCallbackUrls, buildPaymentRecoveryCallbackUrls, buildPullTransactionsQueryPayload, buildStkNotificationUrl, buildStkPushPayload, buildTransactionStatusPayload, classifyStkQueryResult, extractMpesaReceipt, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, selectIncomingPaymentCandidate, stkBackgroundReconcileDelay, stkReconciliationReference, validDateOrNull, type MpesaConfiguration } from "./mpesa.ts";
 
 test("normalizes supported Kenyan mobile number formats", () => {
   assert.equal(normalizeKenyanPhone("0712 345 678"), "254712345678");
@@ -152,6 +152,13 @@ test("backs off background STK reconciliation as a payment ages", () => {
   assert.equal(stkBackgroundReconcileDelay(30_000), 30_000);
   assert.equal(stkBackgroundReconcileDelay(5 * 60_000), 60_000);
   assert.equal(stkBackgroundReconcileDelay(30 * 60_000), 5 * 60_000);
+});
+
+test("drops legacy MySQL zero-date values before an automatic payment update", () => {
+  const valid = new Date("2026-08-14T00:00:00.000Z");
+  assert.equal(validDateOrNull(valid), valid);
+  assert.equal(validDateOrNull(new Date(Number.NaN)), null);
+  assert.equal(validDateOrNull(null), null);
 });
 
 test("extracts receipts and parses successful callbacks", () => {

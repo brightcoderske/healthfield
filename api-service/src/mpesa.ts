@@ -184,6 +184,10 @@ export function stkBackgroundReconcileDelay(ageMs: number) {
   return 5 * 60_000;
 }
 
+export function validDateOrNull(value: Date | null | undefined) {
+  return value instanceof Date && Number.isFinite(value.getTime()) ? value : null;
+}
+
 export function buildStkPushPayload(config: MpesaConfiguration, input: { orderNumber: string; phone: string; amount: number }, timestamp: string) {
   const accountReference = input.orderNumber.replace(/[^a-z0-9]/gi, "").slice(0, 12) || "Healthfield";
   return {

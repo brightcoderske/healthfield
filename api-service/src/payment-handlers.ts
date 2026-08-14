@@ -6,7 +6,7 @@ import { sendEmail } from "./email";
 import { requireTeamPermission } from "./staff-permissions";
 import { getDb } from "./db";
 import { json } from "./http";
-import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, selectIncomingPaymentCandidate, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, type IncomingMpesaPayment } from "./mpesa";
+import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, selectIncomingPaymentCandidate, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, validDateOrNull, type IncomingMpesaPayment } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -90,7 +90,7 @@ async function markPaymentPaid(transactionId: number, details: { receiptNumber: 
     }
     const inventoryFinalized = payment.channel !== "POS" || await finalizePosInventory(tx, order.id, details.actorId ?? null);
     const paidAt = new Date();
-    await tx.update(paymentTransactions).set({ status: "PAID", receiptNumber: details.receiptNumber, phone: details.phone || payment.phone, verifiedAt: paidAt, reviewedBy: details.actorId ?? payment.reviewedBy, reviewedAt: details.actorId ? paidAt : payment.reviewedAt, resultCode: "0", resultDescription: inventoryFinalized ? "Payment confirmed" : "Payment confirmed after stock was released; fulfilment requires review.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
+    await tx.update(paymentTransactions).set({ status: "PAID", receiptNumber: details.receiptNumber, phone: details.phone || payment.phone, verifiedAt: paidAt, reviewedBy: details.actorId ?? payment.reviewedBy, reviewedAt: details.actorId ? paidAt : validDateOrNull(payment.reviewedAt), resultCode: "0", resultDescription: inventoryFinalized ? "Payment confirmed" : "Payment confirmed after stock was released; fulfilment requires review.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
     if (details.incomingPaymentId) await tx.update(mpesaIncomingPayments).set({ matchedTransactionId: payment.id }).where(and(eq(mpesaIncomingPayments.id, details.incomingPaymentId), isNull(mpesaIncomingPayments.matchedTransactionId)));
     const paidOrderStatus = payment.channel === "POS" ? inventoryFinalized ? "COMPLETED" : "UNDER_REVIEW" : ["NEW", "AWAITING_PAYMENT", "CANCELLED"].includes(order.status) ? "CONFIRMED" : order.status;
     await tx.update(orders).set({ paymentStatus: "PAID", paymentReference: details.receiptNumber, amountPaid: details.amount.toFixed(2), status: paidOrderStatus }).where(eq(orders.id, order.id));
@@ -459,9 +459,10 @@ export async function handleStkNotification(request: Request) {
   if (payment.merchantRequestId && payment.merchantRequestId !== parsed.merchantRequestId) {
     console.warn("STK notification MerchantRequestID differs; CheckoutRequestID remains authoritative", { transactionId: payment.id, checkoutRequestId: parsed.checkoutRequestId });
   }
+  let processed = true;
   if (parsed.resultCode === "0" && parsed.receiptNumber && parsed.amount !== null) {
     try { await markPaymentPaid(payment.id, { receiptNumber: parsed.receiptNumber, amount: parsed.amount, phone: parsed.phone, providerPayload: payload }); }
-    catch (error) { console.error("Mobile-money notification requires review", { transactionId: payment.id, error }); }
+    catch (error) { processed = false; console.error("Mobile-money notification requires review", { transactionId: payment.id, error }); }
   } else {
     if (payment.status === "CANCEL_REQUESTED") await finalizeCancellation(payment.orderId, payment.id, payment.reviewedBy);
     else {
@@ -469,7 +470,7 @@ export async function handleStkNotification(request: Request) {
       await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
     }
   }
-  if (callbackId) await db.update(mpesaStkCallbacks).set({ processedTransactionId: payment.id }).where(eq(mpesaStkCallbacks.id, callbackId));
+  if (callbackId && processed) await db.update(mpesaStkCallbacks).set({ processedTransactionId: payment.id }).where(eq(mpesaStkCallbacks.id, callbackId));
   return json({ ResultCode: 0, ResultDesc: "Accepted" });
 }
 
