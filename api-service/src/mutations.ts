@@ -10,11 +10,13 @@ import {
   activityLogs, authSessions, blogPostProducts, blogPosts, categories, offerItems, offers, emailVerificationTokens, healthConditions, prescriptionRequestItems, prescriptions, productHealthConditions, productReviews, products, promotionalBanners, siteSettings, staffPermissions, twoFactorChallenges, users,
 } from "../../db/schema";
 import { DEFAULT_STAFF_PERMISSIONS, normalizeStaffPermissions } from "../../lib/staff-permissions";
+import { healthfieldOrderNumber } from "../../lib/order-number";
+import { allowedOrderStatuses, canTransitionOrderStatus, isStockFinalizedOrderStatus, orderDetailsAreEditable, orderStatuses, orderTransitionChangesAllocation } from "../../lib/order-status-transitions";
 import { canApplyPrescriptionAction, prescriptionReviewActions, type PrescriptionReviewAction, type PrescriptionStatus } from "../../lib/prescription-workflow";
 import { createPasswordResetToken, createSessionToken, createUploadToken, hasStoredTimestamp, requireSession, requestSession, revokeSession, revokeUserSessions, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
 import { apportionBundle, isBundle, loadLiveOffers, offerPriceMap, offerTotal } from "./offers";
-import { orderEmailHtml, sendBulkEmail, sendEmail } from "./email";
+import { orderEmailHtml, orderStatusEmailContent, sendBulkEmail, sendEmail } from "./email";
 import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, emailVerificationTiming } from "./email-verification";
 import { json, publicImageUrl, safeFilename } from "./http";
 import { extractMpesaReceipt, initiateStkPush, mpesaConfiguration } from "./mpesa";
@@ -26,8 +28,6 @@ import { requireTeamPermission, sessionHasPermission } from "./staff-permissions
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
-const orderStatuses = ["NEW", "AWAITING_PAYMENT", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"] as const;
-
 function storefrontOrigin() {
   return (process.env.APP_URL || process.env.STOREFRONT_URL || "https://healthfieldpharmacy.co.ke").replace(/\/$/, "");
 }
@@ -380,13 +380,16 @@ export async function handleOrders(request: Request, id?: number) {
     const db = getDb();
     const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
     if (!order) return json({ error: "Order not found." }, { status: 404 });
-    const editable=!['READY_FOR_DISPATCH','OUT_FOR_DELIVERY','READY_FOR_PICKUP','COMPLETED','CANCELLED'].includes(order.status);
+    const detailsEditable = orderDetailsAreEditable(order.status);
     const {status,fulfilments,...details}=parsed.data;
     if(order.status==="AWAITING_PAYMENT"&&order.paymentStatus!=="PAID"&&status!=="AWAITING_PAYMENT")return json({error:"A frozen prescription proposal cannot enter fulfilment before customer payment. Manage it from the prescription request."},{status:409});
     if (["BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED"].includes(status) && order.prescriptionStatus !== "NOT_REQUIRED" && order.prescriptionStatus !== "APPROVED") return json({ error: "Approve the linked prescription before fulfilling or dispatching this order." }, { status: 409 });
     if (["CONFIRMED","BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED"].includes(status) && order.paymentStatus !== "PAID") return json({ error: "Confirm payment before approving, processing or dispatching this order." }, { status: 409 });
-    if (!editable && status !== order.status) return json({ error: "A dispatched, completed or cancelled order cannot move to another status." }, { status: 409 });
-    if (!editable && fulfilments) return json({ error: "Serving-store assignments lock after packaging." }, { status: 400 });
+    if (!canTransitionOrderStatus(order.status, status, order.fulfilmentMethod)) {
+      const next = allowedOrderStatuses(order.status, order.fulfilmentMethod).filter((entry) => entry !== order.status).map((entry) => entry.replaceAll("_", " ").toLowerCase());
+      return json({ error: next.length ? `An order marked ${order.status.replaceAll("_", " ").toLowerCase()} can only move to ${next.join(" or ")}.` : `An order marked ${order.status.replaceAll("_", " ").toLowerCase()} cannot move to another status.` }, { status: 409 });
+    }
+    if (!detailsEditable && fulfilments) return json({ error: "Serving-store assignments lock after packaging." }, { status: 400 });
     try {
       await db.transaction(async (tx) => {
         const items = await tx.select({ id: orderItems.id, productId: orderItems.productId, productName: orderItems.productName, quantity: orderItems.quantity }).from(orderItems).where(eq(orderItems.orderId, id));
@@ -404,7 +407,8 @@ export async function handleOrders(request: Request, id?: number) {
         const productIds = items.flatMap((item) => item.productId === null ? [] : [item.productId]);
         const inventory = productIds.length ? await tx.select().from(branchInventory).where(inArray(branchInventory.productId, productIds)).for("update") : [];
         const index = new Map(inventory.map((row) => [`${row.branchId}:${row.productId}`, { ...row }]));
-        const changingAllocation = fulfilments !== undefined || status === "CANCELLED" || ["READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED"].includes(status);
+        const finalStatus = isStockFinalizedOrderStatus(status);
+        const changingAllocation = orderTransitionChangesAllocation(order.status, status, fulfilments !== undefined);
         if (changingAllocation) {
           for (const row of previous) {
             const item = byId.get(row.orderItemId);
@@ -412,7 +416,6 @@ export async function handleOrders(request: Request, id?: number) {
             if (record) record.quantityReserved = Math.max(0, record.quantityReserved - row.quantityReserved);
           }
         }
-        const finalStatus = ["READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED"].includes(status);
         if (status !== "CANCELLED" && changingAllocation) {
           if (finalStatus && !target.length) throw new Error("Assign a serving store before dispatching this order.");
           for (const row of target) {
@@ -429,14 +432,18 @@ export async function handleOrders(request: Request, id?: number) {
           await tx.delete(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map((item) => item.id)));
           if (status !== "CANCELLED" && target.length) await tx.insert(orderItemFulfilments).values(target.map((row) => ({ ...row, quantityPacked: finalStatus ? row.quantityReserved : row.quantityPacked, status: finalStatus ? "READY" as const : row.status, handledBy: auth.session.userId })));
         }
-        await tx.update(orders).set({ status, ...(editable ? details : {}) }).where(eq(orders.id, id));
+        await tx.update(orders).set({ status, ...(detailsEditable ? details : {}) }).where(eq(orders.id, id));
         await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_UPDATED", entityType: "order", entityId: String(id), metadata: { orderNumber: order.orderNumber, fromStatus: order.status, toStatus: status, fulfilmentBranches: target.map((row) => row.branchId), actorRole: auth.session.role } });
       });
     } catch(error) { return json({ error:error instanceof Error?error.message:"Order could not be updated." },{status:400}); }
     if(order.status===status)return json({ok:true,status});
-    const label = status==="READY_FOR_DISPATCH"?"packaged and ready for dispatch":status.replaceAll("_", " ").toLowerCase();
     const notificationEmail=details.email===undefined?order.email:details.email,notificationName=details.customerName||order.customerName;
-    if (notificationEmail) void sendEmail({ to: notificationEmail, subject: `Order ${order.orderNumber} update`, message: `Hello ${notificationName},\n\nYour order ${order.orderNumber} is now ${label}.\n\nThank you for choosing Healthfield Pharmacy.`, action:{label:"Track my order",url:`${storefrontOrigin()}/account#orders`}, channel:"orders" });
+    if (status === "COMPLETED") {
+      queuePaidOrderNotification(id, "ORDER_COMPLETED");
+    } else if (notificationEmail) {
+      const update = orderStatusEmailContent({ name: notificationName, orderId: id, orderNumber: order.orderNumber, status, fulfilmentMethod: order.fulfilmentMethod, storefrontOrigin: storefrontOrigin() });
+      void sendEmail({ to: notificationEmail, ...update, channel: "orders" });
+    }
     if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.`, channel:"orders" });
     return json({ok:true,status});
   }
@@ -497,16 +504,19 @@ export async function handleOrders(request: Request, id?: number) {
   const requiresPrescription = catalog.some(product => product.prescriptionRequired) || (parsed.data.offerItems || []).some((requested) => liveOffers.find((offer) => offer.id === requested.offerId)?.items.some((item) => item.prescriptionRequired));
   if (requiresPrescription) return json({ error: "Prescription medicines must be submitted for pharmacist review before they can be priced or paid for.", code: "PRESCRIPTION_REVIEW_REQUIRED" }, { status: 409 });
   const orderEmail = customerSession ? customerSession.email.trim().toLowerCase() : (parsed.data.email || "").trim().toLowerCase();
-  const orderNumber = `HF-${Date.now().toString().slice(-8)}`;
   const result = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, paymentMethod: parsed.data.paymentMethod, paymentReference: manualReceipt, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: "NEW", prescriptionStatus: "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
+    const temporaryOrderNumber = `TMP-${randomUUID().replaceAll("-", "").slice(0, 20).toUpperCase()}`;
+    const [created] = await tx.insert(orders).values({ orderNumber: temporaryOrderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, paymentMethod: parsed.data.paymentMethod, paymentReference: manualReceipt, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: "NEW", prescriptionStatus: "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString() });
+    const orderNumber = healthfieldOrderNumber("WEB", created.insertId);
+    await tx.update(orders).set({ orderNumber }).where(eq(orders.id, created.insertId));
     await tx.insert(orderItems).values([
       ...lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })),
       ...bundleLines.map((line) => ({ orderId: created.insertId, productId: line.productId, productName: line.productName, quantity: line.quantity, unitPrice: line.unitPrice.toString(), lineTotal: line.total.toString(), offerId: line.offerId, offerTitle: line.offerTitle })),
     ]);
     const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: (subtotal + deliveryFee).toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
-    return { orderId: created.insertId, paymentId: payment.insertId };
+    return { orderId: created.insertId, paymentId: payment.insertId, orderNumber };
   });
+  const orderNumber = result.orderNumber;
   let paymentStatus: "PENDING" | "FAILED" | "PAID" = "PENDING";
   let paymentMessage = parsed.data.paymentMethod === "MANUAL_MPESA" ? "Receipt extracted. Healthfield is checking Safaricom before sending it for review." : "Check your phone and enter your M-Pesa PIN.";
   if (parsed.data.paymentMethod === "MPESA_EXPRESS") {
@@ -535,6 +545,27 @@ export async function handleOrders(request: Request, id?: number) {
   return json({ ok: true, id: result.orderId, orderNumber, total: subtotal + deliveryFee, paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
 }
 
+export async function handleCustomerOrderReceived(request: Request, id: number) {
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  const auth = await requireSession(request, ["CUSTOMER"]);
+  if ("response" in auth) return auth.response;
+  const db = getDb();
+  const [order] = await db.select().from(orders).where(and(eq(orders.id, id), eq(orders.customerId, auth.session.userId))).limit(1);
+  if (!order) return json({ error: "Order not found." }, { status: 404 });
+  if (order.fulfilmentMethod !== "DELIVERY") return json({ error: "Only delivered orders can be marked as received." }, { status: 409 });
+  if (order.paymentStatus !== "PAID") return json({ error: "Payment must be confirmed before delivery can be completed." }, { status: 409 });
+  if (order.status === "COMPLETED") return json({ ok: true, status: "COMPLETED", message: "This order is already marked as received." });
+  if (order.status !== "OUT_FOR_DELIVERY") return json({ error: "This order can be marked as received after it is dispatched." }, { status: 409 });
+  await db.transaction(async (tx) => {
+    const [updated] = await tx.update(orders).set({ status: "COMPLETED" }).where(and(eq(orders.id, order.id), eq(orders.customerId, auth.session.userId), eq(orders.status, "OUT_FOR_DELIVERY")));
+    if (updated.affectedRows !== 1) throw new Error("The order status changed before delivery confirmation.");
+    await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_RECEIVED_BY_CUSTOMER", entityType: "order", entityId: String(order.id), metadata: { orderNumber: order.orderNumber, fromStatus: "OUT_FOR_DELIVERY", toStatus: "COMPLETED" } });
+  });
+  queuePaidOrderNotification(order.id, "ORDER_COMPLETED");
+  if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Customer received ${order.orderNumber}`, message: `${order.customerName} confirmed that delivery order ${order.orderNumber} was received. The order is now completed.`, channel: "orders" });
+  return json({ ok: true, status: "COMPLETED", message: "Thank you. The pharmacy has been notified that you received the order." });
+}
+
 export async function handleWalkInSales(request: Request) {
   const auth = await requireTeamPermission(request, "POS_USE");
   if ("response" in auth) return auth.response;
@@ -550,7 +581,7 @@ export async function handleWalkInSales(request: Request) {
   const db = getDb();
   const [duplicate] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, total: orders.total, paymentStatus: orders.paymentStatus }).from(orders).where(eq(orders.checkoutToken, parsed.data.checkoutToken)).limit(1);
   if (duplicate) return json({ ok: true, id: duplicate.id, orderNumber: duplicate.orderNumber, total: Number(duplicate.total), paymentStatus: duplicate.paymentStatus, duplicate: true });
-  const [branch] = await db.select({ id: branches.id }).from(branches).where(and(eq(branches.id, parsed.data.branchId), eq(branches.isActive, true))).limit(1);
+  const [branch] = await db.select({ id: branches.id, code: branches.code }).from(branches).where(and(eq(branches.id, parsed.data.branchId), eq(branches.isActive, true))).limit(1);
   if (!branch) return json({ error: "Choose an active branch." }, { status: 400 });
   if (auth.session.role === "STAFF" && auth.session.homeBranchId !== branch.id) return json({ error: "POS is limited to your assigned shop." }, { status: 403 });
   const grouped = new Map<number, number>();
@@ -565,7 +596,6 @@ export async function handleWalkInSales(request: Request) {
   if (parsed.data.paymentMethod === "MPESA_EXPRESS" && (!paymentSettings?.posMpesaEnabled || !mpesaConfiguration())) return json({ error: "M-Pesa Express is unavailable. Choose cash or manual M-Pesa." }, { status: 409 });
   if (parsed.data.paymentMethod === "MANUAL_MPESA" && (!paymentSettings?.posManualEnabled || !paymentSettings.mpesaTillNumber)) return json({ error: "Manual M-Pesa is unavailable." }, { status: 409 });
   const manualReceipt = null;
-  const orderNumber = `POS-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 5).toUpperCase()}`;
   try {
     const result = await db.transaction(async (tx) => {
       const stock = await tx.select().from(branchInventory).where(and(eq(branchInventory.branchId, branch.id), inArray(branchInventory.productId, itemList.map((item) => item.productId)))).for("update");
@@ -577,8 +607,11 @@ export async function handleWalkInSales(request: Request) {
         }
       }
       const paidCash = parsed.data.paymentMethod === "CASH";
+      const temporaryOrderNumber = `TMP-${randomUUID().replaceAll("-", "").slice(0, 20).toUpperCase()}`;
+      const [created] = await tx.insert(orders).values({ orderNumber: temporaryOrderNumber, checkoutToken: parsed.data.checkoutToken, customerName: parsed.data.customerName || "Walk-in customer", phone: parsed.data.phone || parsed.data.billingPhone || "Walk-in", email: parsed.data.email || null, fulfilmentMethod: "PICKUP", status: paidCash ? "COMPLETED" : "NEW", paymentStatus: paidCash ? "PAID" : "PENDING", paymentMethod: parsed.data.paymentMethod, paymentReference: null, amountPaid: paidCash ? subtotal.toFixed(2) : "0", subtotal: subtotal.toFixed(2), deliveryFee: "0", discount: "0", total: subtotal.toFixed(2), suggestedBranchId: branch.id });
+      const orderNumber = healthfieldOrderNumber(branch.code, created.insertId);
       const cashReference = paidCash ? `CASH-${orderNumber}` : null;
-      const [created] = await tx.insert(orders).values({ orderNumber, checkoutToken: parsed.data.checkoutToken, customerName: parsed.data.customerName || "Walk-in customer", phone: parsed.data.phone || parsed.data.billingPhone || "Walk-in", email: parsed.data.email || null, fulfilmentMethod: "PICKUP", status: paidCash ? "COMPLETED" : "NEW", paymentStatus: paidCash ? "PAID" : "PENDING", paymentMethod: parsed.data.paymentMethod, paymentReference: manualReceipt || cashReference, amountPaid: paidCash ? subtotal.toFixed(2) : "0", subtotal: subtotal.toFixed(2), deliveryFee: "0", discount: "0", total: subtotal.toFixed(2), suggestedBranchId: branch.id });
+      await tx.update(orders).set({ orderNumber, paymentReference: manualReceipt || cashReference }).where(eq(orders.id, created.insertId));
       const insertedItems: Array<{ id: number; productId: number; quantity: number }> = [];
       for (const item of itemList) {
         const product = catalog.find((entry) => entry.id === item.productId)!;
@@ -593,8 +626,9 @@ export async function handleWalkInSales(request: Request) {
       }
       const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "POS", status: paidCash ? "PAID" : parsed.data.paymentMethod === "MANUAL_MPESA" ? "PENDING" : "INITIATED", amount: subtotal.toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone || null, receiptNumber: cashReference, manualMessage: null, verifiedAt: paidCash ? new Date() : null, reviewedBy: paidCash ? auth.session.userId : null, reviewedAt: paidCash ? new Date() : null });
       await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: paidCash ? "WALK_IN_SALE" : "WALK_IN_PAYMENT_STARTED", entityType: "order", entityId: String(created.insertId), metadata: { branchId: branch.id, total: subtotal, itemCount: itemList.length, paymentMethod: parsed.data.paymentMethod } });
-      return { orderId: created.insertId, paymentId: payment.insertId };
+      return { orderId: created.insertId, paymentId: payment.insertId, orderNumber };
     });
+    const orderNumber = result.orderNumber;
     if (parsed.data.paymentMethod === "CASH") {
       queuePaidOrderNotification(result.orderId);
       return json({ ok: true, paid: true, paymentStatus: "PAID", id: result.orderId, orderNumber, total: subtotal }, { status: 201 });
@@ -1068,8 +1102,10 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
                 await tx.update(orders).set({checkoutToken:null,customerName:`${customer.firstName} ${customer.lastName}`.trim(),phone:customer.phone||"",email:customer.email,fulfilmentMethod:"PICKUP",deliveryAddress:null,deliveryArea:null,deliveryLatitude:null,deliveryLongitude:null,status:"AWAITING_PAYMENT",paymentStatus:"PENDING",paymentMethod:"PENDING",paymentReference:null,amountPaid:"0",prescriptionStatus:"APPROVED",subtotal:subtotal.toFixed(2),deliveryFee:"0",discount:"0",total:subtotal.toFixed(2)}).where(eq(orders.id,linkedOrder.id));
                 orderId=linkedOrder.id;orderNumber=linkedOrder.orderNumber;
               }else{
-                orderNumber=`HF-RX-${Date.now().toString().slice(-8)}-${downloadId}`;
-                const [created]=await tx.insert(orders).values({orderNumber,customerId:customer.id,customerName:`${customer.firstName} ${customer.lastName}`.trim(),phone:customer.phone||"",email:customer.email,fulfilmentMethod:"PICKUP",status:"AWAITING_PAYMENT",paymentStatus:"PENDING",paymentMethod:"PENDING",prescriptionStatus:"APPROVED",subtotal:subtotal.toFixed(2),deliveryFee:"0",discount:"0",total:subtotal.toFixed(2)});
+                const temporaryOrderNumber=`TMP-${randomUUID().replaceAll("-","").slice(0,20).toUpperCase()}`;
+                const [created]=await tx.insert(orders).values({orderNumber:temporaryOrderNumber,customerId:customer.id,customerName:`${customer.firstName} ${customer.lastName}`.trim(),phone:customer.phone||"",email:customer.email,fulfilmentMethod:"PICKUP",status:"AWAITING_PAYMENT",paymentStatus:"PENDING",paymentMethod:"PENDING",prescriptionStatus:"APPROVED",subtotal:subtotal.toFixed(2),deliveryFee:"0",discount:"0",total:subtotal.toFixed(2)});
+                orderNumber=healthfieldOrderNumber("RX",created.insertId);
+                await tx.update(orders).set({orderNumber}).where(eq(orders.id,created.insertId));
                 orderId=created.insertId;
               }
               await tx.insert(orderItems).values(approvedLines.map((item)=>({orderId:orderId!,productId:item.productId,productName:item.productName,quantity:item.approvedQuantity!,unitPrice:item.unitPrice!,lineTotal:(Number(item.unitPrice)*Number(item.approvedQuantity)).toFixed(2)})));

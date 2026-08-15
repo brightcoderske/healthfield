@@ -1,7 +1,12 @@
 import nodemailer from "nodemailer";
 
 export type EmailChannel = "general" | "orders" | "security";
-type EmailInput = { to: string | string[]; subject: string; message: string; html?: string; action?: { label: string; url: string }; channel?: EmailChannel };
+export type EmailAttachment = { filename: string; content: Buffer; contentType: string };
+type EmailInput = { to: string | string[]; subject: string; message: string; html?: string; action?: { label: string; url: string }; channel?: EmailChannel; attachments?: EmailAttachment[] };
+
+export function shouldAttachOfficialReceipt(input: { paymentChannel: string | null | undefined; orderStatus: string; trigger: "PAYMENT_CONFIRMED" | "ORDER_COMPLETED" }) {
+  return input.paymentChannel === "POS" || input.orderStatus === "COMPLETED" || input.trigger === "ORDER_COMPLETED";
+}
 
 function mailbox(channel: EmailChannel) {
   const fallbackUser = process.env.SMTP_USER;
@@ -28,12 +33,33 @@ function messageHtml(subject: string, message: string, action?: EmailInput["acti
 
 export function orderEmailHtml(input: { name: string; orderNumber: string; items: Array<{ productName: string; quantity: number; lineTotal: string }>; subtotal: number; deliveryFee: number; total: number; status: string }) { const rows = input.items.map((item) => `<tr><td style="padding:10px 0;border-bottom:1px solid #eee;color:#302b33">${escapeHtml(item.productName)}<br><small style="color:#7a7180">Qty ${item.quantity}</small></td><td align="right" style="padding:10px 0;border-bottom:1px solid #eee;font-weight:700">KES ${Number(item.lineTotal).toLocaleString()}</td></tr>`).join(""); const origin = (process.env.APP_URL || "https://healthfieldpharmacy.co.ke").replace(/\/$/, ""); return `<!doctype html><html><body style="margin:0;background:#f6f3f7;font-family:Arial,sans-serif"><table role="presentation" width="100%"><tr><td style="padding:28px 12px"><table role="presentation" width="100%" style="max-width:620px;margin:auto;background:#fff;border-radius:14px;overflow:hidden"><tr><td style="padding:22px 28px;color:#fff;background:#70227e"><b style="font-size:12px;letter-spacing:.08em">HEALTHFIELD PHARMACY</b><h1 style="margin:8px 0 0;font-size:24px">Order ${escapeHtml(input.orderNumber)}</h1></td></tr><tr><td style="padding:28px"><p style="color:#4c4650;line-height:1.6">Hello ${escapeHtml(input.name)},<br>Thank you. We have received your order.</p><p>Current status: <b>${escapeHtml(input.status.replaceAll("_", " "))}</b></p><table role="presentation" width="100%">${rows}<tr><td style="padding:12px 0">Subtotal</td><td align="right">KES ${input.subtotal.toLocaleString()}</td></tr><tr><td style="padding:0 0 12px">Delivery</td><td align="right">KES ${input.deliveryFee.toLocaleString()}</td></tr><tr><td style="padding:14px 0;border-top:2px solid #70227e;font-size:18px;font-weight:700">Total</td><td align="right" style="padding:14px 0;border-top:2px solid #70227e;font-size:18px;font-weight:700">KES ${input.total.toLocaleString()}</td></tr></table><p><a href="${origin}/account#orders" style="display:inline-block;background:#70227e;color:#fff;text-decoration:none;padding:12px 18px;border-radius:7px;font-weight:700">Check order status</a></p></td></tr><tr><td style="padding:16px 28px;color:#817985;background:#faf8fb;font-size:11px">Healthfield Pharmacy · Care you can trust</td></tr></table></td></tr></table></body></html>`; }
 
+export function posReceiptEmailHtml(input: { name: string; orderNumber: string; receiptNumber: string; items: Array<{ productName: string; quantity: number; lineTotal: string }>; subtotal: number; total: number; attachmentIncluded: boolean }) {
+  const rows = input.items.map((item) => `<tr><td style="padding:9px 0;border-bottom:1px solid #eee;color:#302b33">${escapeHtml(item.productName)} <small style="color:#7a7180">× ${item.quantity}</small></td><td align="right" style="padding:9px 0;border-bottom:1px solid #eee;font-weight:700">KES ${Number(item.lineTotal).toLocaleString()}</td></tr>`).join("");
+  const receiptNote = input.attachmentIncluded ? "Your PDF receipt is attached to this email for your records." : "Your receipt details are included below for your records.";
+  return `<!doctype html><html><body style="margin:0;background:#f6f3f7;font-family:Arial,sans-serif"><table role="presentation" width="100%"><tr><td style="padding:28px 12px"><table role="presentation" width="100%" style="max-width:620px;margin:auto;background:#fff;border-radius:14px;overflow:hidden"><tr><td style="padding:22px 28px;color:#fff;background:#70227e"><b style="font-size:12px;letter-spacing:.08em">HEALTHFIELD PHARMACY</b><h1 style="margin:8px 0 0;font-size:24px">Your receipt</h1></td></tr><tr><td style="padding:28px"><p style="color:#4c4650;line-height:1.6">Hello ${escapeHtml(input.name)},<br><br>Thank you for shopping with Healthfield Pharmacy. ${receiptNote}</p><p style="color:#4c4650">Receipt: <b>${escapeHtml(input.receiptNumber)}</b><br>Sale: <b>${escapeHtml(input.orderNumber)}</b></p><table role="presentation" width="100%">${rows}<tr><td style="padding:12px 0">Subtotal</td><td align="right">KES ${input.subtotal.toLocaleString()}</td></tr><tr><td style="padding:14px 0;border-top:2px solid #70227e;font-size:18px;font-weight:700">Total paid</td><td align="right" style="padding:14px 0;border-top:2px solid #70227e;font-size:18px;font-weight:700">KES ${input.total.toLocaleString()}</td></tr></table><p style="margin:20px 0 0;color:#4c4650">We appreciate your business.<br><b>Your Health. Our Priority.</b></p></td></tr><tr><td style="padding:16px 28px;color:#817985;background:#faf8fb;font-size:11px">Healthfield Pharmacy · healthfieldpharmacy.co.ke</td></tr></table></td></tr></table></body></html>`;
+}
+
+export function orderStatusEmailContent(input: { name: string; orderId: number; orderNumber: string; status: string; fulfilmentMethod: "DELIVERY" | "PICKUP"; storefrontOrigin: string }) {
+  const dispatched = input.status === "OUT_FOR_DELIVERY" && input.fulfilmentMethod === "DELIVERY";
+  if (dispatched) return {
+    subject: `Order ${input.orderNumber} has been dispatched`,
+    message: `Hello ${input.name},\n\nYour Healthfield order ${input.orderNumber} has been dispatched and is on its way.\n\nAfter you receive it, open the order and select Mark as received. This lets the pharmacy know the delivery reached you safely.\n\nIf you need help, contact your Healthfield branch.`,
+    action: { label: "Mark order as received", url: `${input.storefrontOrigin}/account/orders/${input.orderId}` },
+  };
+  const label = input.status === "READY_FOR_DISPATCH" ? "packaged and ready for dispatch" : input.status.replaceAll("_", " ").toLowerCase();
+  return {
+    subject: `Order ${input.orderNumber} update`,
+    message: `Hello ${input.name},\n\nYour order ${input.orderNumber} is now ${label}.\n\nThank you for choosing Healthfield Pharmacy.`,
+    action: { label: "Track my order", url: `${input.storefrontOrigin}/account#orders` },
+  };
+}
+
 export async function sendEmail(input: EmailInput) {
   const channel = input.channel || "general";
   const config = configuration(channel);
   if (!config) { console.error(`[email:${channel}] SMTP is not configured.`); return { sent: false, reason: "not-configured" } as const; }
   try {
-    const delivery = await config.transport.sendMail({ from: config.from, to: Array.isArray(input.to) ? input.to.join(",") : input.to, subject: input.subject, text: input.message, html: input.html || messageHtml(input.subject, input.message, input.action) });
+    const delivery = await config.transport.sendMail({ from: config.from, to: Array.isArray(input.to) ? input.to.join(",") : input.to, subject: input.subject, text: input.message, html: input.html || messageHtml(input.subject, input.message, input.action), attachments: input.attachments });
     if (!delivery.accepted?.length || delivery.rejected?.length) throw new Error(`SMTP rejected one or more recipients (${delivery.rejected?.length || 0} rejected).`);
     console.info(`[email:${channel}] SMTP accepted message ${delivery.messageId || "without-message-id"}.`);
     config.transport.close();
@@ -45,4 +71,19 @@ export async function sendEmail(input: EmailInput) {
   }
 }
 
-export async function sendBulkEmail(input: { recipients: string[]; subject: string; message: string }) { const config = configuration("general"); if (!config) return { successCount: 0, failureCount: input.recipients.length }; let successCount = 0, failureCount = 0; for (let index = 0; index < input.recipients.length; index += 5) { const batch = input.recipients.slice(index, index + 5); const results = await Promise.all(batch.map((to) => config.transport.sendMail({ from: config.from, to, subject: input.subject, text: input.message, html: messageHtml(input.subject, input.message) }).then(() => true).catch((error) => { console.error("[campaign-email] Send failed:", to, error); return false; }))); for (const sent of results) sent ? successCount++ : failureCount++; } config.transport.close(); return { successCount, failureCount }; }
+export async function sendBulkEmail(input: { recipients: string[]; subject: string; message: string }) {
+  const config = configuration("general");
+  if (!config) return { successCount: 0, failureCount: input.recipients.length };
+  let successCount = 0;
+  let failureCount = 0;
+  for (let index = 0; index < input.recipients.length; index += 5) {
+    const batch = input.recipients.slice(index, index + 5);
+    const results = await Promise.all(batch.map((to) => config.transport.sendMail({ from: config.from, to, subject: input.subject, text: input.message, html: messageHtml(input.subject, input.message) }).then(() => true).catch((error) => { console.error("[campaign-email] Send failed:", to, error); return false; })));
+    for (const sent of results) {
+      if (sent) successCount++;
+      else failureCount++;
+    }
+  }
+  config.transport.close();
+  return { successCount, failureCount };
+}

@@ -160,6 +160,11 @@ function incomingCandidatePayload(incoming: typeof mpesaIncomingPayments.$inferS
   return incoming ? { id:incoming.id, receiptNumber:incoming.receiptNumber, amount:Number(incoming.amount), phone:incoming.phone, payerName:incoming.payerName, accountReference:incoming.accountReference, receivedAt:incoming.createdAt } : null;
 }
 
+async function orderPaymentChannel(orderId: number, orderNumber: string) {
+  const [payment] = await getDb().select({ channel: paymentTransactions.channel }).from(paymentTransactions).where(eq(paymentTransactions.orderId, orderId)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
+  return payment?.channel ?? (orderNumber.startsWith("POS-") ? "POS" : "ONLINE");
+}
+
 export async function reconcileManualPaymentFromIncoming(transactionId: number) {
   const db = getDb();
   const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1);
@@ -216,7 +221,7 @@ export async function handlePaymentRetry(request: Request) {
     : await db.select().from(orders).where(eq(orders.checkoutToken, checkoutToken)).limit(1);
   if (!candidate) return json({ error: "Order not found." }, { status: 404 });
 
-  const isPos = candidate.orderNumber.startsWith("POS-");
+  const isPos = await orderPaymentChannel(candidate.id, candidate.orderNumber) === "POS";
   if (isPos) {
     if (!session || !team.includes(session.role as typeof team[number])) return json({ error: "You are not authorised to retry this counter sale." }, { status: 403 });
   } else if (Number.isInteger(orderId) && orderId > 0 && (!session || session.role !== "CUSTOMER" || candidate.customerId !== session.userId)) {
@@ -273,7 +278,7 @@ export async function handleManualPayment(request: Request) {
   const [order] = await db.select().from(orders).where(eq(orders.checkoutToken, checkoutToken)).limit(1);
   if (!order) return json({ error: "Order not found." }, { status: 404 });
   const [settings] = await db.select({ onlineManualEnabled: siteSettings.onlineManualEnabled, posManualEnabled: siteSettings.posManualEnabled }).from(siteSettings).limit(1);
-  const channel = order.orderNumber.startsWith("POS-") ? "POS" : "ONLINE";
+  const channel = await orderPaymentChannel(order.id, order.orderNumber);
   if (channel === "ONLINE" && message.length < 10) return json({ error: "Paste the complete M-Pesa payment message." }, { status: 400 });
   const receiptNumber = message ? extractMpesaReceipt(message) : null;
   if (channel === "ONLINE" && !receiptNumber) return json({ error: "The M-Pesa receipt code could not be found. Paste the complete confirmation SMS." }, { status: 400 });
@@ -496,10 +501,10 @@ export async function handlePaymentCancel(request: Request) {
   const checkoutToken = input?.checkoutToken || "";
   const db = getDb();
   const [order] = await db.select().from(orders).where(eq(orders.checkoutToken, checkoutToken)).limit(1);
-  if (!order || !order.orderNumber.startsWith("POS-")) return json({ error: "Pending counter sale not found." }, { status: 404 });
-  if (order.paymentStatus === "PAID") return json({ error: "A paid sale cannot be cancelled here." }, { status: 409 });
+  if (!order) return json({ error: "Pending counter sale not found." }, { status: 404 });
   const [latest] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
-  if (!latest) return json({ error: "Payment attempt not found." }, { status: 404 });
+  if (!latest || latest.channel !== "POS") return json({ error: "Pending counter sale not found." }, { status: 404 });
+  if (order.paymentStatus === "PAID") return json({ error: "A paid sale cannot be cancelled here." }, { status: 409 });
   if (latest.status === "REQUIRES_REVIEW" && latest.resultCode === "0") return json({ error: "Safaricom reports this payment as successful. It cannot be cancelled while the receipt is pending." }, { status: 409 });
   const reconciliation = await handlePaymentReconcile(new Request(request.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken }) }));
   const reconciliationData = await reconciliation.clone().json().catch(() => ({})) as { paid?: boolean; providerConfirmed?: boolean; candidatePayment?: unknown; order?: { paymentStatus?: string } };
@@ -727,11 +732,12 @@ export async function handlePosIncomingPaymentConfirm(request: Request, incoming
   const checkoutToken=(input?.checkoutToken||"").trim();
   const db=getDb();
   const [order]=await db.select().from(orders).where(eq(orders.checkoutToken,checkoutToken)).limit(1);
-  if(!order||!order.orderNumber.startsWith("POS-"))return json({error:"Counter sale not found."},{status:404});
+  if(!order)return json({error:"Counter sale not found."},{status:404});
+  const [payment]=await db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId,order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
+  if(!payment||payment.channel!=="POS")return json({error:"Counter sale not found."},{status:404});
   if(auth.session.role==="STAFF"&&auth.session.homeBranchId!==order.suggestedBranchId)return json({error:"This sale belongs to another shop."},{status:403});
   if(order.paymentStatus==="PAID")return json({ok:true,paid:true,orderNumber:order.orderNumber,receiptNumber:order.paymentReference});
-  const [payment]=await db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId,order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
-  if(!payment||payment.method!=="MANUAL_MPESA")return json({error:"This is not a Till payment sale."},{status:409});
+  if(payment.method!=="MANUAL_MPESA")return json({error:"This is not a Till payment sale."},{status:409});
   const [candidateRow]=await db.select({
     ...getTableColumns(mpesaIncomingPayments),
     createdAtUnix:sql<number>`unix_timestamp(${mpesaIncomingPayments.createdAt})`,

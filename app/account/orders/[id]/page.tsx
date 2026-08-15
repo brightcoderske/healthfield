@@ -3,6 +3,7 @@ import Link from "next/link";
 import { BackendError, backendJson } from "@/lib/backend-api";
 import { requireRole } from "@/lib/auth";
 import { OrderRecoveryActions } from "../order-recovery-actions";
+import { ConfirmReceivedButton } from "./confirm-received-button";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +29,7 @@ export default async function CustomerOrderPage({ params }: { params: Promise<{ 
         {items.map((item) => <article key={item.id}><span><strong>{item.productName}</strong><small>KES {Number(item.unitPrice).toLocaleString()} each</small></span><b>{item.quantity}</b><b>KES {Number(item.lineTotal).toLocaleString()}</b></article>)}
       </div>
       <footer><span>Total</span><strong>KES {Number(order.total).toLocaleString()}</strong></footer>
+      {order.fulfilmentMethod === "DELIVERY" && order.status === "OUT_FOR_DELIVERY" ? <ConfirmReceivedButton orderId={order.id}/> : null}
       {order.paymentStatus === "FAILED" && order.status !== "CANCELLED" ? <OrderRecoveryActions orderId={order.id} phone={order.phone} items={items.map((item) => ({ productId: item.productId, quantity: item.quantity }))} mpesaEnabled={data.payment.mpesaEnabled} /> : null}
     </section>
   </main>;

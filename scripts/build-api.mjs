@@ -30,6 +30,8 @@ await build({
   legalComments: "none",
 });
 
+cpSync(resolve(root, "public", "healthfield-logo-clean.png"), resolve(output, "receipt-logo.png"));
+
 rmSync(drizzleOutput, { recursive: true, force: true });
 cpSync(resolve(root, "drizzle"), drizzleOutput, { recursive: true });
 console.log(`Healthfield API bundle created: ${output}`);

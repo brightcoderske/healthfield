@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { BackendError, backendJson } from "@/lib/backend-api";
+import type { OrderFulfilmentMethod, OrderStatus } from "@/lib/order-status-transitions";
 import { OrderStatusManager } from "./order-status-manager";
 import { OrderReceiptActions } from "./order-receipt-actions";
 
@@ -9,11 +10,11 @@ type Data = {
   order: {
     id: number;
     orderNumber: string;
-    status: string;
+    status: OrderStatus;
     customerName: string;
     phone: string;
     email: string | null;
-    fulfilmentMethod: string;
+    fulfilmentMethod: OrderFulfilmentMethod;
     paymentStatus: string;
     paymentMethod: string;
     paymentReference: string | null;

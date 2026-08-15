@@ -573,7 +573,7 @@ async function teamOrder(id: number) {
           )
       : [],
     db
-      .select({ id: branches.id, name: branches.name })
+      .select({ id: branches.id, name: branches.name, code: branches.code, phone: branches.phone, address: branches.address })
       .from(branches)
       .where(eq(branches.isActive, true)),
     items.some((item) => item.productId !== null)
@@ -599,7 +599,41 @@ async function teamOrder(id: number) {
       .where(eq(paymentTransactions.orderId, id))
       .orderBy(desc(paymentTransactions.createdAt)),
   ]);
-  return { order, items, fulfilments, stores, stock, payments };
+  const receipt = await orderReceiptContext(payments);
+  return { order, items, fulfilments, stores, stock, payments, receipt };
+}
+
+async function orderListRows() {
+  const db = getDb();
+  const orderRows = await db
+    .select()
+    .from(orders)
+    .orderBy(
+      sql`case when ${orders.status}='NEW' then 0 when ${orders.status} in ('CONFIRMED','UNDER_REVIEW') then 1 else 2 end`,
+      desc(orders.createdAt),
+    );
+  const paymentRows = orderRows.length
+    ? await db.select({ orderId: paymentTransactions.orderId, channel: paymentTransactions.channel }).from(paymentTransactions).where(inArray(paymentTransactions.orderId, orderRows.map((order) => order.id))).orderBy(desc(paymentTransactions.createdAt))
+    : [];
+  const channels = new Map<number, "ONLINE" | "POS">();
+  for (const payment of paymentRows) if (!channels.has(payment.orderId)) channels.set(payment.orderId, payment.channel);
+  return orderRows.map((order) => ({ ...order, paymentChannel: channels.get(order.id) ?? null }));
+}
+
+async function orderReceiptContext(payments: Array<typeof paymentTransactions.$inferSelect>) {
+  const db = getDb();
+  const payment = payments.find((entry) => entry.status === "PAID") ?? payments[0] ?? null;
+  const [settingsRows, servedByRows] = await Promise.all([
+    db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone, address: siteSettings.address, licenceNumber: siteSettings.licenceNumber }).from(siteSettings).limit(1),
+    payment?.reviewedBy
+      ? db.select({ firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.id, payment.reviewedBy)).limit(1)
+      : Promise.resolve([]),
+  ]);
+  const servedBy = servedByRows[0];
+  return {
+    settings: settingsRows[0] ?? null,
+    servedBy: servedBy ? `${servedBy.firstName} ${servedBy.lastName}`.trim() : null,
+  };
 }
 
 async function contentOfferView() {
@@ -1282,16 +1316,7 @@ export async function handleView(request: Request, path: string) {
         analytics,
       });
     }
-    if (view === "orders")
-      return json({
-        orders: await db
-          .select()
-          .from(orders)
-          .orderBy(
-            sql`case when ${orders.status}='NEW' then 0 when ${orders.status} in ('CONFIRMED','UNDER_REVIEW') then 1 else 2 end`,
-            desc(orders.createdAt),
-          ),
-      });
+    if (view === "orders") return json({ orders: await orderListRows() });
     const orderMatch = view.match(/^orders\/(\d+)$/);
     if (orderMatch) {
       const id = Number(orderMatch[1]);
@@ -1318,7 +1343,7 @@ export async function handleView(request: Request, path: string) {
               )
           : [],
         db
-          .select({ id: branches.id, name: branches.name })
+          .select({ id: branches.id, name: branches.name, code: branches.code, phone: branches.phone, address: branches.address })
           .from(branches)
           .where(eq(branches.isActive, true)),
         items.some((item) => item.productId !== null)
@@ -1344,7 +1369,8 @@ export async function handleView(request: Request, path: string) {
           .where(eq(paymentTransactions.orderId, id))
           .orderBy(desc(paymentTransactions.createdAt)),
       ]);
-      return json({ order, items, fulfilments, stores, stock, payments });
+      const receipt = await orderReceiptContext(payments);
+      return json({ order, items, fulfilments, stores, stock, payments, receipt });
     }
     if (view === "customers")
       return json({
@@ -1936,25 +1962,12 @@ export async function handleView(request: Request, path: string) {
   if (path === "staff/orders") {
     const auth = await requireTeamPermission(request, "ORDERS_VIEW");
     if ("response" in auth) return auth.response;
-    return json({
-      orders: await getDb()
-        .select()
-        .from(orders)
-        .orderBy(
-          sql`case when ${orders.status}='NEW' then 0 when ${orders.status} in ('CONFIRMED','UNDER_REVIEW') then 1 else 2 end`,
-          desc(orders.createdAt),
-        ),
-    });
+    return json({ orders: await orderListRows() });
   }
   if (path === "staff/past-orders") {
     const auth = await requireTeamPermission(request, "PAST_ORDERS_VIEW");
     if ("response" in auth) return auth.response;
-    return json({
-      orders: await getDb()
-        .select()
-        .from(orders)
-        .orderBy(desc(orders.createdAt)),
-    });
+    return json({ orders: await orderListRows() });
   }
   const staffOrderMatch = path.match(/^staff\/orders\/(\d+)$/);
   if (staffOrderMatch) {

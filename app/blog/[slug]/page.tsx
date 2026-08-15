@@ -8,6 +8,7 @@ import { ShareArticle } from "../share-article";
 import { PublicFooter, type PublicContact } from "@/app/public-footer";
 import { getSession } from "@/lib/auth";
 import { ArrowLeft, MessageCircle } from "lucide-react";
+import { richTextBlocks } from "@/lib/rich-text-content";
 
 type Post = { title:string; excerpt:string; content:string; imageUrl:string|null; metaTitle:string|null; metaDescription:string|null; publishedAt:string|null; category:string|null };
 type Article = { post: Post; products?: PromoProduct[] };
@@ -20,7 +21,7 @@ async function get(slug: string): Promise<Article | null> {
 // Spreads the promoted products through the body instead of stacking them at the
 // end, so each one appears at a natural break in the reading flow.
 function layout(content: string, promoCount: number) {
-  const blocks = content.split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean);
+  const blocks = richTextBlocks(content);
   if (promoCount < 1 || blocks.length < 2) return { blocks, slots: [] as number[] };
   const step = Math.max(1, Math.floor(blocks.length / (promoCount + 1)));
   const slots: number[] = [];

@@ -11,7 +11,7 @@ import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
 import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, reconcilePendingStkPayments, recoverMissedMpesaPayments } from "./payment-handlers";
 import {
-  handleAuth, handleBlogs, handleCampaigns, handleChats, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
+  handleAuth, handleBlogs, handleCampaigns, handleChats, handleCustomerOrderReceived, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
 } from "./mutations";
 
@@ -104,6 +104,8 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (authMatch) return responseOf(handleAuth(request, authMatch[1]));
   if (url.pathname === "/v1/chats") return responseOf(handleChats(request));
   if (url.pathname === "/v1/orders") return responseOf(handleOrders(request));
+  const receivedOrderMatch = url.pathname.match(/^\/v1\/orders\/(\d+)\/received$/);
+  if (receivedOrderMatch) return responseOf(handleCustomerOrderReceived(request, Number(receivedOrderMatch[1])));
   const orderMatch = url.pathname.match(/^\/v1\/orders\/(\d+)$/);
   if (orderMatch) return responseOf(handleOrders(request, Number(orderMatch[1])));
   if (url.pathname === "/v1/payments/status") return responseOf(handlePaymentStatus(request));

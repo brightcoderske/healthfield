@@ -21,6 +21,7 @@ import "./product-grid.css";
 import "./offers-ui.css";
 import "./catalogue-breaks.css";
 import "./blog-index.css";
+import "./thermal-receipt.css";
 
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 

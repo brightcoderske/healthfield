@@ -4,7 +4,7 @@ import { OrderList } from "../orders/order-list";
 
 export const dynamic = "force-dynamic";
 
-type Order={id:number;orderNumber:string;customerName:string;phone:string;status:string;createdAt:string;paymentStatus:string;paymentMethod:string;amountPaid:string;fulfilmentMethod:string;total:string;deliveryArea:string|null};
+type Order={id:number;orderNumber:string;customerName:string;phone:string;status:string;createdAt:string;paymentStatus:string;paymentMethod:string;paymentChannel:"ONLINE"|"POS"|null;amountPaid:string;fulfilmentMethod:"DELIVERY"|"PICKUP";total:string;deliveryArea:string|null};
 export default async function PastOrdersPage(){
   const {orders}=await backendJson<{orders:Order[]}>("/v1/views/admin/orders");
   const past=orders.filter((order)=>isPastOrder(order.status));
@@ -14,7 +14,7 @@ export default async function PastOrdersPage(){
       statuses={pastOrderStatuses}
       filterKey="healthfield-past-order-status-filters"
       pageSize={50}
-      emptyHint="Orders appear here once they are dispatched or marked complete."
+      emptyHint="Dispatched, completed and cancelled orders appear here."
     />
   </main>
 }

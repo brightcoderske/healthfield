@@ -1,0 +1,63 @@
+.thermal-receipt-page{min-height:100vh;padding:26px 12px 48px;background:#ebe9e7;display:flex;flex-direction:column;align-items:center}
+.thermal-receipt-actions{width:min(80mm,calc(100vw - 24px));margin:0 auto 12px;display:flex;justify-content:flex-end;gap:7px;font-family:Arial,sans-serif}
+.thermal-receipt-actions a,.thermal-receipt-actions button{min-height:38px;padding:0 12px;border:1px solid #222;border-radius:5px;color:#fff;background:#222;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:10px;font-weight:800;cursor:pointer}
+.thermal-receipt-actions a{background:#5f246b;border-color:#5f246b}
+.thermal-receipt-actions svg{width:15px;height:15px}
+.thermal-receipt{position:relative;width:80mm;max-width:calc(100vw - 24px);padding:9mm 5mm 8mm;box-sizing:border-box;color:#111;background:#fffefb;box-shadow:0 10px 30px rgba(26,20,17,.16);font-family:"Courier New",Courier,monospace;font-size:9.5px;line-height:1.28;font-variant-numeric:tabular-nums}
+.thermal-receipt:before,.thermal-receipt:after{content:"";position:absolute;left:0;width:100%;height:4mm;background:linear-gradient(135deg,#ebe9e7 2mm,transparent 0) 0 0/4mm 4mm repeat-x}
+.thermal-receipt:before{top:0;transform:rotate(180deg)}
+.thermal-receipt:after{bottom:0}
+.thermal-receipt-header{text-align:center}
+.thermal-receipt-logo{width:92px;height:auto;margin:0 auto 2px;object-fit:contain;filter:grayscale(.7) contrast(1.2)}
+.thermal-receipt h1{margin:2px 0 0;color:#111;font-family:inherit;font-size:15px;line-height:1.15;letter-spacing:.04em;text-transform:uppercase}
+.thermal-receipt-header>p{margin:2px 0 5px;font-size:9px;font-style:italic}
+.thermal-business-details{display:grid;grid-template-columns:1fr;gap:2px;text-align:left}
+.thermal-business-details span{min-width:0;display:flex;gap:4px;overflow-wrap:anywhere}
+.thermal-business-details .thermal-business-wide{grid-column:1/-1;white-space:nowrap;overflow-wrap:normal}
+.thermal-business-details b{flex:none;text-transform:uppercase}
+.thermal-business-details b:after{content:":"}
+.thermal-separator{height:0;margin:7px 0;border-top:1px dashed #111}
+.thermal-separator-strong{border-top:3px double #111}
+.thermal-receipt h2{margin:0;text-align:center;font-family:inherit;font-size:12px;line-height:1.1;letter-spacing:.12em}
+.thermal-transaction-grid{margin:6px 0 0;display:grid;grid-template-columns:1fr 1fr;gap:3px 10px}
+.thermal-transaction-grid>div{min-width:0;display:grid;grid-template-columns:auto 1fr;gap:4px}
+.thermal-transaction-grid .thermal-wide{grid-column:1/-1}
+.thermal-transaction-grid dt{font-weight:700;white-space:nowrap}
+.thermal-transaction-grid dt:after{content:":"}
+.thermal-transaction-grid dd{min-width:0;margin:0;text-align:right;overflow-wrap:anywhere}
+.thermal-items{width:100%;border-collapse:collapse;table-layout:fixed}
+.thermal-items th{padding:0 1px 4px;border:0;color:#111;background:transparent;font:700 8px/1.1 "Courier New",Courier,monospace;text-align:right}
+.thermal-items th:first-child{text-align:left}
+.thermal-items th:nth-child(1){width:45%}.thermal-items th:nth-child(2){width:10%}.thermal-items th:nth-child(3){width:21%}.thermal-items th:nth-child(4){width:24%}
+.thermal-items td{padding:4px 1px;border:0;border-top:1px dotted #aaa;text-align:right;vertical-align:top;font-size:8.5px;overflow-wrap:anywhere}
+.thermal-items tbody tr:first-child td{border-top:0}
+.thermal-items td:first-child{text-align:left}
+.thermal-items td strong{display:block;font-size:9.5px;line-height:1.2}
+.thermal-items td small{display:block;margin-top:1px;color:#333;font-size:8px}
+.thermal-totals{margin:0}
+.thermal-totals>div{min-height:16px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.thermal-totals dt,.thermal-totals dd{margin:0}
+.thermal-totals dd{text-align:right}
+.thermal-grand-total{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:13px;font-weight:900;letter-spacing:.01em}
+.thermal-grand-total b{display:flex;align-items:baseline;gap:6px;font-size:15px;text-align:right}
+.thermal-grand-total small{font-size:9px}
+.thermal-payment-status{margin:0;text-align:center;font-size:8.5px;text-transform:uppercase}
+.thermal-receipt-footer{margin-top:7px;text-align:center}
+.thermal-receipt-footer h3{margin:0 0 3px;font-family:inherit;font-size:13px;letter-spacing:.08em}
+.thermal-receipt-footer p{margin:3px 0;line-height:1.2}
+.thermal-receipt-footer .thermal-footer-brand{font-size:8px;white-space:nowrap}
+.thermal-barcode{margin:5px auto 1px;display:flex;justify-content:center}
+.thermal-barcode img{width:min(210px,100%);height:42px;object-fit:fill;image-rendering:pixelated}
+.thermal-receipt-number{display:block;margin-top:2px;font-size:9px;letter-spacing:.08em;overflow-wrap:anywhere}
+@media(max-width:430px){.thermal-receipt-page{padding:12px 0 36px}.thermal-receipt-actions{padding:0 12px}.thermal-receipt-actions a,.thermal-receipt-actions button{flex:1;padding:0 8px}.thermal-receipt{max-width:calc(100vw - 12px);padding-left:4mm;padding-right:4mm}.thermal-business-details{grid-template-columns:1fr}}
+@page{size:80mm auto;margin:0}
+@media print{
+  html,body{width:80mm!important;min-width:80mm!important;margin:0!important;padding:0!important;background:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body *{visibility:hidden!important}
+  .thermal-receipt-print-area,.thermal-receipt-print-area *{visibility:visible!important}
+  .thermal-receipt-actions,.receipt-actions,.order-receipt-actions,.admin-sidebar,.admin-mobile-nav,.admin-mobile-drawer,.admin-back-to-top,.back-to-top{display:none!important}
+  .thermal-receipt-page{position:static!important;width:80mm!important;min-height:0!important;margin:0!important;padding:0!important;background:#fff!important;display:block!important}
+  .thermal-receipt{position:absolute!important;top:0!important;left:0!important;width:80mm!important;max-width:none!important;margin:0!important;padding:7mm 4mm 7mm!important;box-shadow:none!important;background:#fff!important}
+  .thermal-receipt:before,.thermal-receipt:after{display:none!important}
+  .thermal-items tr{break-inside:avoid;page-break-inside:avoid}
+}

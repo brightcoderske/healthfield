@@ -13,6 +13,7 @@ import { PublicFooter, type PublicContact } from "@/app/public-footer";
 import { getSession } from "@/lib/auth";
 import { CART_COOKIE, parseCart } from "@/lib/shopping-state";
 import { ProductCartLink } from "./product-cart-link";
+import { richTextToPlainText } from "@/lib/rich-text-content";
 
 export const dynamic = "force-dynamic";
 
@@ -89,8 +90,9 @@ export async function generateMetadata({
   const data = await dataFor(Number((await params).id));
   if (!data) return { title: "Product not found" };
   const { product } = data;
-  const description =
-    product.description || `Buy ${product.name} from Healthfield Pharmacy.`;
+  const description = product.description
+    ? richTextToPlainText(product.description)
+    : `Buy ${product.name} from Healthfield Pharmacy.`;
   const origin = await currentOrigin();
   const previewImage =
     product.imageUrl || `${origin}/healthfield-logo-clean.png`;
@@ -177,8 +179,9 @@ export default async function ProductPage({
     "@context": "https://schema.org",
     "@type": "Product",
     name: product.name,
-    description:
-      product.description || `Buy ${product.name} from Healthfield Pharmacy.`,
+    description: product.description
+      ? richTextToPlainText(product.description)
+      : `Buy ${product.name} from Healthfield Pharmacy.`,
     image: product.imageUrl ? [product.imageUrl] : undefined,
     brand: { "@type": "Brand", name: product.brand || "Healthfield Pharmacy" },
     offers: {

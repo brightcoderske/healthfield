@@ -1,294 +1,326 @@
 "use client";
 
+import CharacterCount from "@tiptap/extension-character-count";
+import Highlight from "@tiptap/extension-highlight";
+import Placeholder from "@tiptap/extension-placeholder";
+import TextAlign from "@tiptap/extension-text-align";
+import { TextStyleKit } from "@tiptap/extension-text-style";
+import { AllSelection, TextSelection } from "@tiptap/pm/state";
+import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
 import {
+  AlignCenter,
+  AlignJustify,
+  AlignLeft,
+  AlignRight,
   Bold,
-  CaseSensitive,
-  Heading2,
   Highlighter,
   Italic,
   Link2,
   List,
   ListOrdered,
-  Palette,
-  Pilcrow,
+  Redo2,
   RemoveFormatting,
+  Strikethrough,
   Underline,
+  Undo2,
+  Unlink,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type FocusEvent, type MouseEvent } from "react";
-import { RichText } from "@/app/products/rich-text";
+import { useMemo, useRef } from "react";
+import { richTextToPlainText, richTextToSafeHtml } from "@/lib/rich-text-content";
 
-const swatches = [
-  { value: "#c2185b", label: "Pink" },
-  { value: "#7c2382", label: "Purple" },
-  { value: "#15803d", label: "Green" },
-  { value: "#1d4ed8", label: "Blue" },
-  { value: "#b45309", label: "Orange" },
-  { value: "#2a1730", label: "Dark" },
+const TEXT_COLOURS = ["#2a1730", "#7c2382", "#c2185b", "#15803d", "#1d4ed8", "#b45309"];
+const HIGHLIGHT_COLOURS = ["#fff0a6", "#ffd8e8", "#e2d4f0", "#d5f5df", "#dbeafe"];
+const FONT_SIZES = [
+  { label: "2", value: "12px", title: "Small" },
+  { label: "3", value: "16px", title: "Normal" },
+  { label: "5", value: "24px", title: "Large" },
+  { label: "7", value: "32px", title: "Display" },
 ] as const;
+const FONT_FAMILIES = ["Arial", "Georgia", "Times New Roman", "Verdana", "Trebuchet MS", "Courier New"] as const;
 
-const sizes = [
-  { value: "2", label: "Small" },
-  { value: "3", label: "Normal" },
-  { value: "5", label: "Large" },
-  { value: "7", label: "Extra large" },
-] as const;
+type TiptapEditor = NonNullable<ReturnType<typeof useEditor>>;
 
-function colourToHex(value: string) {
-  const colour = value.trim();
-  if (/^#[0-9a-f]{6}$/i.test(colour)) return colour.toLowerCase();
-  const match = colour.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
-  if (!match) return null;
-  return `#${[match[1], match[2], match[3]].map((part) => Number(part).toString(16).padStart(2, "0")).join("")}`;
+function validLink(value: string) {
+  const href = value.trim();
+  if (/^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href)) return href;
+  if (href.startsWith("/") && !href.startsWith("//")) return href;
+  return null;
 }
 
-function serializeInline(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) return node.textContent?.replaceAll("\u00a0", " ") ?? "";
-  if (!(node instanceof HTMLElement)) return "";
-  if (node.tagName === "BR") return "\n";
+type EditorButtonProps = {
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+};
 
-  // Enter and multiline paste can create block elements inside the current
-  // contenteditable block. Preserve those visual line boundaries in storage.
-  if (node.tagName === "DIV" || node.tagName === "P") {
-    const line = Array.from(node.childNodes).map(serializeInline).join("").replace(/\n+$/g, "");
-    return line ? `${line}\n` : "\n";
-  }
-
-  const content = Array.from(node.childNodes).map(serializeInline).join("");
-  if (!content) return "";
-  const tag = node.tagName;
-  if (tag === "STRONG" || tag === "B") return `{b|${content}}`;
-  if (tag === "EM" || tag === "I") return `{i|${content}}`;
-  if (tag === "U") return `{u|${content}}`;
-  if (tag === "MARK") return `{mark|${content}}`;
-  if (tag === "A") {
-    const href = node.getAttribute("href")?.trim() ?? "";
-    return href ? `[${content}](${href})` : content;
-  }
-
-  const colour = colourToHex(node.style.color || node.getAttribute("color") || "");
-  const background = colourToHex(node.style.backgroundColor || "");
-  const size = node.classList.contains("rt-sm") || node.getAttribute("size") === "2"
-    ? "sm"
-    : node.classList.contains("rt-lg") || node.getAttribute("size") === "5"
-      ? "lg"
-      : node.classList.contains("rt-xl") || node.getAttribute("size") === "7"
-        ? "xl"
-        : null;
-
-  let formatted = content;
-  if (size) formatted = `{size:${size}|${formatted}}`;
-  if (background && background !== "#ffffff") formatted = `{mark|${formatted}}`;
-  if (colour) formatted = `{color:${colour}|${formatted}}`;
-  return formatted;
+function EditorButton({ label, active, disabled = false, onClick, children }: EditorButtonProps) {
+  return <button
+    type="button"
+    className={active ? "is-active" : undefined}
+    aria-label={label}
+    title={label}
+    aria-pressed={active === undefined ? undefined : active}
+    disabled={disabled}
+    onMouseDown={(event) => event.preventDefault()}
+    onClick={onClick}
+  >{children}</button>;
 }
 
-function serializeBlock(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) return node.textContent?.replaceAll("\u00a0", " ") ?? "";
-  if (!(node instanceof HTMLElement)) return "";
-  const tag = node.tagName;
-  if (tag === "H2" || tag === "H3") return `${tag === "H2" ? "##" : "###"} ${Array.from(node.childNodes).map(serializeInline).join("")}\n`;
-  if (tag === "UL" || tag === "OL") return Array.from(node.children).map((item, index) => `${tag === "UL" ? "-" : `${index + 1}.`} ${Array.from(item.childNodes).map(serializeInline).join("").replace(/\s*\n\s*/g, " ")}`).join("\n") + "\n";
-  if (tag === "P" || tag === "DIV") {
-    const children = Array.from(node.childNodes);
-    const hasNestedBlock = children.some((child) => child instanceof HTMLElement && /^(DIV|P|H2|H3|UL|OL)$/.test(child.tagName));
-    if (!hasNestedBlock) return `${children.map(serializeInline).join("")}\n`;
+function RichTextToolbar({ editor }: { editor: TiptapEditor | null }) {
+  const state = useEditorState({
+    editor,
+    selector: ({ editor: current }) => {
+      if (!current) return null;
+      const textStyle = current.getAttributes("textStyle");
+      return {
+        block: current.isActive("heading", { level: 2 }) ? "h2" : current.isActive("heading", { level: 3 }) ? "h3" : "p",
+        bold: current.isActive("bold"),
+        italic: current.isActive("italic"),
+        underline: current.isActive("underline"),
+        strike: current.isActive("strike"),
+        bulletList: current.isActive("bulletList"),
+        orderedList: current.isActive("orderedList"),
+        link: current.isActive("link"),
+        alignment: current.isActive({ textAlign: "center" }) ? "center" : current.isActive({ textAlign: "right" }) ? "right" : current.isActive({ textAlign: "justify" }) ? "justify" : "left",
+        colour: String(textStyle.color || "").toLowerCase(),
+        fontSize: String(textStyle.fontSize || ""),
+        fontFamily: String(textStyle.fontFamily || "").replaceAll('"', ""),
+        highlight: String(current.getAttributes("highlight").color || "").toLowerCase(),
+        canUndo: current.can().undo(),
+        canRedo: current.can().redo(),
+      };
+    },
+  });
 
-    let inlineRun: Node[] = [];
-    let result = "";
-    const flushInlineRun = () => {
-      if (!inlineRun.length) return;
-      result += `${inlineRun.map(serializeInline).join("")}\n`;
-      inlineRun = [];
-    };
-    for (const child of children) {
-      if (child instanceof HTMLElement && /^(DIV|P|H2|H3|UL|OL)$/.test(child.tagName)) {
-        flushInlineRun();
-        result += serializeBlock(child);
-      } else {
-        inlineRun.push(child);
-      }
+  const editLink = () => {
+    if (!editor) return;
+    const previous = String(editor.getAttributes("link").href || "");
+    const entered = window.prompt("Enter a website, email, phone or site-page link", previous || "https://");
+    if (entered === null) return;
+    if (!entered.trim()) return void editor.chain().focus().extendMarkRange("link").unsetLink().run();
+    const href = validLink(entered);
+    if (!href) {
+      window.alert("Use https://, http://, mailto:, tel:, or a site page beginning with /.");
+      return;
     }
-    flushInlineRun();
-    return result;
-  }
-  return serializeInline(node);
+    editor.chain().focus().extendMarkRange("link").setLink({ href }).run();
+  };
+
+  return <div className="rich-toolbar" role="toolbar" aria-label="Text formatting">
+    <select
+      className="rich-block-select"
+      aria-label="Text style"
+      value={state?.block || "p"}
+      disabled={!editor}
+      onChange={(event) => {
+        if (event.target.value === "h2") editor?.chain().focus().setHeading({ level: 2 }).run();
+        else if (event.target.value === "h3") editor?.chain().focus().setHeading({ level: 3 }).run();
+        else editor?.chain().focus().setParagraph().run();
+      }}
+    >
+      <option value="p">Paragraph</option>
+      <option value="h2">Heading 2</option>
+      <option value="h3">Heading 3</option>
+    </select>
+
+    <span className="rich-toolbar-group">
+      <EditorButton label="Bold" active={state?.bold} disabled={!editor} onClick={() => void editor?.chain().focus().toggleBold().run()}><Bold/></EditorButton>
+      <EditorButton label="Italic" active={state?.italic} disabled={!editor} onClick={() => void editor?.chain().focus().toggleItalic().run()}><Italic/></EditorButton>
+      <EditorButton label="Underline" active={state?.underline} disabled={!editor} onClick={() => void editor?.chain().focus().toggleUnderline().run()}><Underline/></EditorButton>
+      <EditorButton label="Strikethrough" active={state?.strike} disabled={!editor} onClick={() => void editor?.chain().focus().toggleStrike().run()}><Strikethrough/></EditorButton>
+    </span>
+
+    <span className="rich-toolbar-group rich-palette-group" aria-label="Text colours">
+      {TEXT_COLOURS.map((colour) => <button
+        key={colour}
+        type="button"
+        className={`rich-colour-swatch${state?.colour === colour ? " is-active" : ""}`}
+        style={{ "--swatch": colour } as React.CSSProperties}
+        aria-label={`Text colour ${colour}`}
+        title={`Text colour ${colour}`}
+        disabled={!editor}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => void editor?.chain().focus().setColor(colour).run()}
+      />)}
+      <label
+        className="rich-custom-colour"
+        title="Choose any text colour"
+        style={{ "--current-text-colour": state?.colour || "#2a1730" } as React.CSSProperties}
+      >
+        <span>A</span>
+        <input
+          type="color"
+          aria-label="Choose any text colour"
+          value={/^#[0-9a-f]{6}$/i.test(state?.colour || "") ? state!.colour : "#2a1730"}
+          disabled={!editor}
+          onChange={(event) => void editor?.chain().focus().setColor(event.target.value).run()}
+        />
+      </label>
+      <EditorButton label="Remove text colour" disabled={!editor || !state?.colour} onClick={() => void editor?.chain().focus().unsetColor().run()}><RemoveFormatting/></EditorButton>
+    </span>
+
+    <span className="rich-toolbar-group rich-palette-group" aria-label="Highlight colours">
+      <Highlighter aria-hidden="true" className="rich-toolbar-label-icon"/>
+      {HIGHLIGHT_COLOURS.map((colour) => <button
+        key={colour}
+        type="button"
+        className={`rich-highlight-swatch${state?.highlight === colour ? " is-active" : ""}`}
+        style={{ "--swatch": colour } as React.CSSProperties}
+        aria-label={`Highlight ${colour}`}
+        title={`Highlight ${colour}`}
+        disabled={!editor}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => void editor?.chain().focus().toggleHighlight({ color: colour }).run()}
+      />)}
+      <EditorButton label="Remove highlight" disabled={!editor || !state?.highlight} onClick={() => void editor?.chain().focus().unsetHighlight().run()}><RemoveFormatting/></EditorButton>
+    </span>
+
+    <select
+      className="rich-size-select"
+      aria-label="Font size"
+      title="Font size"
+      value={state?.fontSize || ""}
+      disabled={!editor}
+      onChange={(event) => {
+        if (event.target.value) editor?.chain().focus().setFontSize(event.target.value).run();
+        else editor?.chain().focus().unsetFontSize().run();
+      }}
+    >
+      <option value="">Size</option>
+      {FONT_SIZES.map((size) => <option key={size.value} value={size.value}>{size.label} — {size.title}</option>)}
+    </select>
+
+    <select
+      className="rich-font-select"
+      aria-label="Font style"
+      title="Font style"
+      value={state?.fontFamily || ""}
+      disabled={!editor}
+      onChange={(event) => {
+        if (event.target.value) editor?.chain().focus().setFontFamily(event.target.value).run();
+        else editor?.chain().focus().unsetFontFamily().run();
+      }}
+    >
+      <option value="">Site font</option>
+      {FONT_FAMILIES.map((family) => <option key={family} value={family} style={{ fontFamily: family }}>{family}</option>)}
+    </select>
+
+    <span className="rich-toolbar-group">
+      <EditorButton label="Bulleted list" active={state?.bulletList} disabled={!editor} onClick={() => void editor?.chain().focus().toggleBulletList().run()}><List/></EditorButton>
+      <EditorButton label="Numbered list" active={state?.orderedList} disabled={!editor} onClick={() => void editor?.chain().focus().toggleOrderedList().run()}><ListOrdered/></EditorButton>
+      <EditorButton label="Add or edit link" active={state?.link} disabled={!editor} onClick={editLink}><Link2/></EditorButton>
+      <EditorButton label="Remove link" disabled={!editor || !state?.link} onClick={() => void editor?.chain().focus().extendMarkRange("link").unsetLink().run()}><Unlink/></EditorButton>
+    </span>
+
+    <span className="rich-toolbar-group">
+      <EditorButton label="Align left" active={state?.alignment === "left"} disabled={!editor} onClick={() => void editor?.chain().focus().setTextAlign("left").run()}><AlignLeft/></EditorButton>
+      <EditorButton label="Align centre" active={state?.alignment === "center"} disabled={!editor} onClick={() => void editor?.chain().focus().setTextAlign("center").run()}><AlignCenter/></EditorButton>
+      <EditorButton label="Align right" active={state?.alignment === "right"} disabled={!editor} onClick={() => void editor?.chain().focus().setTextAlign("right").run()}><AlignRight/></EditorButton>
+      <EditorButton label="Justify" active={state?.alignment === "justify"} disabled={!editor} onClick={() => void editor?.chain().focus().setTextAlign("justify").run()}><AlignJustify/></EditorButton>
+    </span>
+
+    <span className="rich-toolbar-group">
+      <EditorButton label="Clear formatting" disabled={!editor} onClick={() => void editor?.chain().focus().unsetAllMarks().clearNodes().run()}><RemoveFormatting/></EditorButton>
+      <EditorButton label="Undo" disabled={!editor || !state?.canUndo} onClick={() => void editor?.chain().focus().undo().run()}><Undo2/></EditorButton>
+      <EditorButton label="Redo" disabled={!editor || !state?.canRedo} onClick={() => void editor?.chain().focus().redo().run()}><Redo2/></EditorButton>
+    </span>
+  </div>;
 }
 
-function normaliseEditorLists(editor: HTMLElement) {
-  // Chromium can leave consecutive one-item lists after applying a list to
-  // several blocks. Merge only directly adjacent lists of the same type so an
-  // ordered list continues 1, 2, 3 while intentional separated lists remain.
-  for (const list of Array.from(editor.querySelectorAll("ol, ul"))) {
-    let adjacent = list.nextElementSibling;
-    while (adjacent instanceof HTMLElement && adjacent.tagName === list.tagName) {
-      const next = adjacent.nextElementSibling;
-      list.append(...Array.from(adjacent.childNodes));
-      adjacent.remove();
-      adjacent = next;
-    }
-  }
-}
-
-function serializeEditor(editor: HTMLElement) {
-  normaliseEditorLists(editor);
-  return Array.from(editor.childNodes)
-    .map(serializeBlock)
-    .join("")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+function RichTextStatus({ editor, helper, maxLength, initialCharacters }: { editor: TiptapEditor | null; helper: string; maxLength: number; initialCharacters: number }) {
+  const status = useEditorState({
+    editor,
+    selector: ({ editor: current }) => current
+      ? { ready: true, characters: current.state.doc.textContent.length }
+      : { ready: false, characters: 0 },
+  });
+  const characters = status?.ready ? status.characters : initialCharacters;
+  return <div className="rich-editor-status" aria-live="polite">
+    <small>{helper}</small>
+    <span className={characters >= maxLength ? "rich-limit-warning" : undefined}>{characters.toLocaleString()} / {maxLength.toLocaleString()}</span>
+  </div>;
 }
 
 export function RichTextEditor({
-  defaultValue = "", name = "description", rows = 7, maxLength = 1000,
-  placeholder = "Detailed product description…", helper = "Maximum 1,000 characters",
-}: { defaultValue?: string; name?: string; rows?: number; maxLength?: number; placeholder?: string; helper?: string }) {
-  const editorRef = useRef<HTMLDivElement>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const templateRef = useRef<HTMLDivElement>(null);
-  const selectionRef = useRef<Range | null>(null);
-  const selectionIsActiveRef = useRef(false);
-  const [value, setValue] = useState(defaultValue);
-  const [showColours, setShowColours] = useState(false);
-  const [showSizes, setShowSizes] = useState(false);
+  defaultValue = "",
+  name = "description",
+  rows = 7,
+  maxLength = 1000,
+  placeholder = "Write a detailed description…",
+  helper = "Maximum 1,000 characters",
+}: {
+  defaultValue?: string;
+  name?: string;
+  rows?: number;
+  maxLength?: number;
+  placeholder?: string;
+  helper?: string;
+}) {
+  const initialHtml = useMemo(() => richTextToSafeHtml(defaultValue), [defaultValue]);
+  const hiddenInputRef = useRef<HTMLInputElement>(null);
+  const editor = useEditor({
+    immediatelyRender: false,
+    shouldRerenderOnTransaction: false,
+    content: initialHtml,
+    extensions: [
+      StarterKit.configure({
+        heading: { levels: [2, 3] },
+        link: {
+          autolink: true,
+          defaultProtocol: "https",
+          openOnClick: false,
+          HTMLAttributes: { rel: "noreferrer noopener", target: "_blank" },
+        },
+      }),
+      Highlight.configure({ multicolor: true }),
+      TextAlign.configure({ types: ["heading", "paragraph"] }),
+      TextStyleKit.configure({ backgroundColor: false, lineHeight: false }),
+      Placeholder.configure({ placeholder }),
+      CharacterCount.configure({ limit: maxLength }),
+    ],
+    editorProps: {
+      attributes: {
+        class: "rich-editor-surface rich-content",
+        role: "textbox",
+        "aria-label": "Formatted text",
+        "aria-multiline": "true",
+        spellcheck: "true",
+      },
+      handleDOMEvents: {
+        mousedown(view, event) {
+          if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.detail > 1) {
+            return false;
+          }
+          const point = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          if (!point) return false;
+          view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(point.pos))));
+          view.focus();
+          return false;
+        },
+      },
+      handleKeyDown(view, event) {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+          event.preventDefault();
+          view.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)));
+          return true;
+        }
+        return false;
+      },
+    },
+    onUpdate: ({ editor: current }) => {
+      if (!hiddenInputRef.current) return;
+      const html = current.getHTML();
+      hiddenInputRef.current.value = html === "<p></p>" ? "" : html;
+    },
+  });
 
-  useLayoutEffect(() => {
-    const editor = editorRef.current;
-    const template = templateRef.current?.querySelector<HTMLElement>(".rich-content");
-    if (!editor || !template) return;
-    editor.innerHTML = template.innerHTML;
-    setValue(serializeEditor(editor));
-  }, [defaultValue]);
-
-  useEffect(() => {
-    function clearSelectionOutsideEditor(event: PointerEvent) {
-      const root = rootRef.current;
-      if (!root || !(event.target instanceof Node) || root.contains(event.target)) return;
-      selectionRef.current = null;
-      selectionIsActiveRef.current = false;
-      setShowColours(false);
-      setShowSizes(false);
-    }
-
-    document.addEventListener("pointerdown", clearSelectionOutsideEditor);
-    return () => document.removeEventListener("pointerdown", clearSelectionOutsideEditor);
-  }, []);
-
-  function syncValue() {
-    if (editorRef.current) setValue(serializeEditor(editorRef.current));
-  }
-
-  function rememberSelection() {
-    const editor = editorRef.current;
-    const selection = window.getSelection();
-    if (!editor || !selection?.rangeCount) return;
-    const range = selection.getRangeAt(0);
-    if (editor.contains(range.commonAncestorContainer)) {
-      selectionRef.current = range.cloneRange();
-      selectionIsActiveRef.current = true;
-    }
-  }
-
-  function restoreSelection() {
-    const editor = editorRef.current;
-    const selection = window.getSelection();
-    const range = selectionRef.current;
-    if (!editor || !selection || !range || !selectionIsActiveRef.current || !range.commonAncestorContainer.isConnected || !editor.contains(range.commonAncestorContainer)) {
-      selectionRef.current = null;
-      return false;
-    }
-    selection.removeAllRanges();
-    selection.addRange(range);
-    return true;
-  }
-
-  function keepSelection(event: MouseEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    if (selectionIsActiveRef.current) rememberSelection();
-  }
-
-  function clearSelectionOnBlur(event: FocusEvent<HTMLDivElement>) {
-    const next = event.relatedTarget;
-    if (next instanceof Node && rootRef.current?.contains(next)) return;
-    selectionRef.current = null;
-    selectionIsActiveRef.current = false;
-  }
-
-  function command(name: string, commandValue?: string) {
-    const editor = editorRef.current;
-    if (!editor) return;
-    if (!restoreSelection()) return;
-    editor.focus();
-    document.execCommand("styleWithCSS", false, "false");
-    document.execCommand(name, false, commandValue);
-    rememberSelection();
-    syncValue();
-  }
-
-  function insertLink() {
-    if (!restoreSelection()) return;
-    const url = window.prompt("Enter a link, for example https://example.com or /contact");
-    if (!url) return;
-    const href = url.trim();
-    if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href) && !/^tel:/i.test(href) && !(href.startsWith("/") && !href.startsWith("//"))) {
-      window.alert("Use a complete website link, email link, phone link or a page beginning with /.");
-      return;
-    }
-    command("createLink", href);
-  }
-
-  function pastePlainText(event: ClipboardEvent<HTMLDivElement>) {
-    event.preventDefault();
-    command("insertText", event.clipboardData.getData("text/plain"));
-  }
-
-  const overLimit = value.length > maxLength;
-
-  return <div ref={rootRef} className={`rich-editor visual-rich-editor${overLimit ? " is-over-limit" : ""}`}>
-    <div className="rich-toolbar" role="toolbar" aria-label="Text formatting">
-      <button type="button" onMouseDown={keepSelection} onClick={() => command("bold")} title="Bold" aria-label="Bold"><Bold/></button>
-      <button type="button" onMouseDown={keepSelection} onClick={() => command("italic")} title="Italic" aria-label="Italic"><Italic/></button>
-      <button type="button" onMouseDown={keepSelection} onClick={() => command("underline")} title="Underline" aria-label="Underline"><Underline/></button>
-      <button type="button" onMouseDown={keepSelection} onClick={() => command("hiliteColor", "#fff0a6")} title="Highlight" aria-label="Highlight"><Highlighter/></button>
-      <button type="button" onMouseDown={keepSelection} onClick={() => command("formatBlock", "p")} title="Normal paragraph" aria-label="Normal paragraph"><Pilcrow/></button>
-      <button type="button" onMouseDown={keepSelection} onClick={() => command("formatBlock", "h2")} title="Heading" aria-label="Heading"><Heading2/></button>
-      <button type="button" onMouseDown={keepSelection} onClick={() => command("insertUnorderedList")} title="Bulleted list" aria-label="Bulleted list"><List/></button>
-      <button type="button" onMouseDown={keepSelection} onClick={() => command("insertOrderedList")} title="Numbered list" aria-label="Numbered list"><ListOrdered/></button>
-      <button type="button" onMouseDown={keepSelection} onClick={insertLink} title="Insert link" aria-label="Insert link"><Link2/></button>
-      <button type="button" onMouseDown={keepSelection} onClick={() => command("removeFormat")} title="Clear formatting" aria-label="Clear formatting"><RemoveFormatting/></button>
-      <span className="rich-colour">
-        <button type="button" onMouseDown={keepSelection} onClick={() => { setShowSizes((open) => !open); setShowColours(false); }} title="Text size" aria-label="Text size" aria-expanded={showSizes}><CaseSensitive/></button>
-        {showSizes ? <span className="rich-swatches rich-sizes">
-          {sizes.map((size) => <button key={size.value} type="button" onMouseDown={keepSelection} onClick={() => { setShowSizes(false); command("fontSize", size.value); }}>{size.label}</button>)}
-        </span> : null}
-      </span>
-      <span className="rich-colour">
-        <button type="button" onMouseDown={keepSelection} onClick={() => { setShowColours((open) => !open); setShowSizes(false); }} title="Text colour" aria-label="Text colour" aria-expanded={showColours}><Palette/></button>
-        {showColours ? <span className="rich-swatches">
-          {swatches.map((swatch) => <button key={swatch.value} type="button" style={{ background: swatch.value }} title={swatch.label} aria-label={`${swatch.label} text`} onMouseDown={keepSelection} onClick={() => { setShowColours(false); command("foreColor", swatch.value); }}/>) }
-        </span> : null}
-      </span>
-      <small className={overLimit ? "rich-limit-warning" : undefined}>{overLimit ? `Shorten this text by ${value.length - maxLength} characters` : helper}</small>
-    </div>
-    <div
-      ref={editorRef}
-      className="rich-editor-surface rich-content"
-      contentEditable
-      suppressContentEditableWarning
-      role="textbox"
-      aria-multiline="true"
-      aria-label="Formatted text"
-      aria-invalid={overLimit}
-      data-placeholder={placeholder}
-      style={{ minHeight: `${Math.max(5, rows) * 22}px` }}
-      spellCheck
-      onInput={syncValue}
-      onBlur={clearSelectionOnBlur}
-      onKeyUp={rememberSelection}
-      onMouseUp={rememberSelection}
-      onPaste={pastePlainText}
-    />
-    <input type="hidden" name={name} value={value}/>
-    <div ref={templateRef} className="rich-editor-template" aria-hidden="true"><RichText value={defaultValue}/></div>
+  return <div className="rich-editor tiptap-rich-editor">
+    <RichTextToolbar editor={editor}/>
+    <EditorContent editor={editor} style={{ minHeight: `${Math.max(5, rows) * 22}px` }}/>
+    <input ref={hiddenInputRef} type="hidden" name={name} defaultValue={initialHtml}/>
+    <RichTextStatus editor={editor} helper={helper} maxLength={maxLength} initialCharacters={richTextToPlainText(initialHtml).length}/>
   </div>;
 }

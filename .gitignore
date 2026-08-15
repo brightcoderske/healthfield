@@ -12,6 +12,9 @@
 
 # testing
 /coverage
+.codex-logs
+.claude
+.openai
 
 # next.js
 /.next/

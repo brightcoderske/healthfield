@@ -32,31 +32,6 @@ function xml(value: string | number) {
     .replaceAll("'", "&apos;");
 }
 
-function decodeCodePoint(value: string, radix: number) {
-  const codePoint = Number.parseInt(value, radix);
-  return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
-    ? String.fromCodePoint(codePoint)
-    : " ";
-}
-
-function plainText(value: string) {
-  return value
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<br\s*\/?>|<\/p>|<\/div>|<\/li>|<\/h[1-6]>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&#(\d+);/g, (_, code: string) => decodeCodePoint(code, 10))
-    .replace(/&#x([\da-f]+);/gi, (_, code: string) => decodeCodePoint(code, 16))
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&apos;|&#39;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function webUrl(value: string | null) {
   if (!value) return null;
   try {
@@ -105,8 +80,8 @@ export function buildGoogleMerchantFeed(rows: MerchantProduct[], origin: string)
       ? possibleSalePrice
       : null;
     const fallbackDescription = `${product.name}${product.packSize ? ` - ${product.packSize}` : ""}, available from Healthfield Pharmacy.`;
-    const title = plainText(product.name).slice(0, 150);
-    const description = (plainText(product.description || "") || fallbackDescription).slice(0, 5000);
+    const title = richTextToPlainText(product.name).slice(0, 150);
+    const description = (richTextToPlainText(product.description || "") || fallbackDescription).slice(0, 5000);
     const id = product.sku?.trim() || `hf-${product.id}`;
     const rating = product.rating === null ? null : Number(product.rating);
     const reviewFields = Number.isFinite(rating) && rating! > 0 && product.reviewCount > 0
@@ -132,3 +107,4 @@ export function buildGoogleMerchantFeed(rows: MerchantProduct[], origin: string)
     invalidPriceCount,
   };
 }
+import { richTextToPlainText } from "./rich-text-content.ts";
