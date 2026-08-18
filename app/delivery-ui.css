@@ -2,21 +2,22 @@
 
 .map-picker{display:flex;flex-direction:column;gap:8px;}
 .map-picker-search-row{display:flex;flex-wrap:wrap;align-items:center;gap:7px;}
-/* The border lives on the host, not on Google's element: the element renders its own
-   internal input and without a frame here the field reads as empty page on a phone. */
-.map-picker-search-host{flex:1 1 100%;min-width:0;border:1px solid #ddd5e0;border-radius:8px;background:#fff;overflow:hidden;}
-.map-picker-search-host > div[hidden]{display:none;}
-.map-picker-search-host:focus-within{outline:2px solid #762584;outline-offset:1px;}
-.map-picker-open{flex:0 0 auto;min-height:32px;padding:0 10px;border:1px solid #ddd5e0;border-radius:7px;color:#542064;background:#fff;display:inline-flex;align-items:center;gap:5px;font-size:9px;font-weight:750;white-space:nowrap;}
-.map-picker-open svg{width:14px;}
-/* Matches both the plain input and the Places web component, which sizes itself.
-   The colour is set explicitly because Google's element otherwise renders what the
-   customer types in a muted grey that reads as placeholder text. */
-.map-picker-search,input.map-picker-search{width:100%;min-height:40px;padding:0 11px;border:0;color:#181529;background:#fff;font-size:11px;}
-gmp-place-autocomplete.map-picker-search{display:block;padding:0;--gmp-mat-color-on-surface:#181529;--gmp-mat-color-on-surface-variant:#5f5866;--gmp-mat-color-primary:#762584;}
-gmp-place-autocomplete.map-picker-search::part(input){width:100%;color:#181529;font-size:11px;}
-gmp-place-autocomplete.map-picker-search::part(prediction-item){color:#181529;}
-input.map-picker-search:focus{outline:none;}
+/* Our own input, so it is a plain text box on every device rather than a web component
+   with a closed shadow root that a phone cannot reliably focus. */
+.map-picker-field{position:relative;flex:1 1 200px;min-width:0;display:flex;align-items:center;gap:7px;padding:0 11px;border:1px solid #ddd5e0;border-radius:9px;background:#fff;}
+.map-picker-field:focus-within{border-color:#762584;outline:2px solid rgba(118,37,132,0.18);}
+.map-picker-field > svg{width:15px;flex:0 0 15px;color:#8b8391;}
+.map-picker-field .spin{animation:map-picker-spin 1s linear infinite;color:#762584;}
+.map-picker-input{flex:1;min-width:0;height:42px;border:0;background:transparent;color:#181529;font-size:12px;font-family:inherit;}
+.map-picker-input:focus{outline:none;}
+.map-picker-input::placeholder{color:#9a939f;}
+.map-picker-suggestions{position:absolute;top:calc(100% + 5px);left:0;right:0;z-index:60;max-height:236px;margin:0;padding:5px;border:1px solid #e0d9e3;border-radius:10px;background:#fff;box-shadow:0 14px 32px rgba(66,28,76,0.16);list-style:none;overflow:auto;}
+.map-picker-suggestions button{width:100%;min-height:42px;padding:7px 9px;border:0;border-radius:7px;background:transparent;display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;cursor:pointer;}
+.map-picker-suggestions button:hover,.map-picker-suggestions button:focus-visible{background:#f6f1f8;}
+.map-picker-suggestions strong{color:#181529;font-size:11.5px;font-weight:700;}
+.map-picker-suggestions small{color:#7a7380;font-size:9.5px;}
+.map-picker-open{flex:0 0 auto;min-height:42px;padding:0 12px;border:1px solid #ddd5e0;border-radius:9px;color:#542064;background:#fff;display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:750;white-space:nowrap;}
+.map-picker-open svg{width:15px;}
 .map-picker-canvas{width:100%;border:1px solid #e0d9e3;border-radius:10px;background:#f2eef4;overflow:hidden;}
 .map-picker-pin svg{width:15px;flex:0 0 15px;}
 .map-picker-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;}

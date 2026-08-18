@@ -1,0 +1,161 @@
+/* The consultation banner, the quick-action pair, and the rotating desktop hero.
+   Colour has one job each: purple is identity, pink is where to act. */
+
+.prescription-hero{position:relative;display:grid;grid-template-columns:1fr minmax(0, 46%);gap:10px;border-radius:14px;border:1px solid #f6dfeb;background:linear-gradient(120deg, #fff 0%, #fff6fa 58%, #fdeaf3 100%);overflow:hidden;}
+.prescription-hero-copy{position:relative;z-index:2;min-width:0;padding:18px 4px 18px 18px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;}
+.prescription-hero h2{margin:0;display:flex;flex-direction:column;line-height:1.02;letter-spacing:-0.035em;}
+.prescription-hero h2 span{color:#181529;font-size:clamp(16.5px, 1.9vw, 26px);font-weight:800;text-transform:uppercase;}
+.prescription-hero h2 em{color:#d92f91;font-size:clamp(26px, 3vw, 44px);font-style:normal;font-weight:800;text-transform:uppercase;}
+.prescription-hero p{margin:9px 0 0;max-width:17em;color:#544f60;font-size:11.5px;line-height:1.4;}
+/* Pink, pill, white label: the single most important action on the page. */
+.prescription-hero-cta{min-height:42px;margin-top:15px;padding:0 22px;border-radius:999px;color:#fff;background:linear-gradient(90deg, #db1d68, #ec346e);display:inline-flex;align-items:center;gap:9px;font-size:11.5px;font-weight:800;box-shadow:0 8px 20px rgba(219,29,104,0.28);}
+.prescription-hero-cta svg{width:16px;}
+
+.prescription-hero-figure{position:relative;align-self:end;justify-self:end;width:100%;height:100%;min-height:0;}
+/* Sized by height, not width: the cut-out is near-square, so width-driven sizing
+   letterboxes it into a small strip instead of filling the panel. */
+.prescription-hero-figure img{position:absolute;right:0;bottom:0;height:100%;width:auto;max-width:none;object-fit:contain;object-position:bottom right;}
+.prescription-hero-availability{position:absolute;right:4px;bottom:14px;z-index:3;padding:6px 10px;border-radius:9px;background:#fff;display:flex;flex-direction:column;gap:1px;box-shadow:0 6px 18px rgba(50,23,58,0.15);}
+.prescription-hero-availability span{display:flex;align-items:center;gap:5px;color:#d92f91;font-size:9px;font-weight:800;}
+.prescription-hero-availability i{width:6px;height:6px;border-radius:50%;background:#d92f91;}
+.prescription-hero-availability b{color:#2f2b38;font-size:10px;font-weight:800;white-space:nowrap;}
+
+/* Have one, or need one. Phone only; the desktop header already offers both. */
+.rx-quick-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0 0;}
+.rx-quick-actions > a{min-width:0;padding:8px 9px;border:1px solid #f6dfeb;border-radius:11px;background:linear-gradient(150deg, #fff 0%, #fff6fa 100%);display:flex;align-items:center;gap:8px;}
+.rx-quick-icon{width:27px;height:27px;flex:0 0 27px;border-radius:9px;background:#fdeaf3;display:grid;place-items:center;}
+.rx-quick-icon svg{width:16px;color:#d92f91;}
+.rx-quick-copy{min-width:0;display:flex;flex-direction:column;gap:1px;}
+.rx-quick-copy strong{color:#181529;font-size:9.5px;font-weight:800;line-height:1.15;}
+.rx-quick-copy small{color:#7a7380;font-size:8px;}
+.rx-quick-actions > a > svg{width:14px;flex:0 0 14px;margin-left:auto;color:#d92f91;}
+@media (min-width: 981px){.rx-quick-actions{display:none;}}
+@media (max-width: 340px){
+.rx-quick-actions{grid-template-columns:1fr;}
+}
+
+/* Mobile placement: a block in the page, since the desktop hero row is hidden there. */
+.prescription-hero-mobile{margin:6px 0 0;min-height:152px;}
+@media (min-width: 981px){.prescription-hero-mobile{display:none;}}
+@media (max-width: 420px){
+.prescription-hero{grid-template-columns:1fr minmax(0, 44%);}
+.prescription-hero-copy{padding:12px 2px 12px 14px;}
+.prescription-hero p{margin-top:5px;max-width:15em;font-size:9.5px;line-height:1.3;}
+.prescription-hero-cta{min-height:34px;margin-top:10px;padding:0 15px;font-size:10px;gap:6px;}
+.prescription-hero-cta svg{width:14px;}
+.prescription-hero-availability{right:3px;bottom:9px;padding:5px 8px;}
+.prescription-hero-availability span{font-size:8px;}
+.prescription-hero-availability b{font-size:9px;}
+}
+
+/* Desktop: the banner becomes a slide in the rotating hero. */
+.hero-rotator{position:relative;min-height:330px;}
+.hero-slide-frame{position:absolute;inset:0;opacity:0;visibility:hidden;transition:opacity 620ms ease;}
+.hero-slide-frame.active{position:relative;opacity:1;visibility:visible;}
+@media (prefers-reduced-motion: reduce){.hero-slide-frame{transition:none;}}
+.hero-slide-frame > *{height:100%;}
+.hero-dots{position:absolute;right:18px;bottom:15px;z-index:5;display:flex;gap:6px;}
+.hero-dots button{width:22px;height:5px;padding:0;border:0;border-radius:3px;background:rgba(88,40,102,0.24);cursor:pointer;transition:background 220ms ease;}
+.hero-dots button.active{background:#d92f91;}
+.hero-dots button:focus-visible{outline:2px solid #762584;outline-offset:2px;}
+
+@media (min-width: 981px){
+.prescription-hero{height:100%;min-height:330px;grid-template-columns:1fr minmax(0, 42%);}
+.prescription-hero-copy{padding:38px 10px 36px 43px;}
+.prescription-hero p{margin-top:12px;font-size:13px;}
+.prescription-hero-cta{min-height:48px;margin-top:20px;padding:0 30px;font-size:12.5px;}
+.prescription-hero-figure img{right:24px;}
+.prescription-hero-availability{right:30px;bottom:30px;padding:9px 13px;}
+.prescription-hero-availability b{font-size:11.5px;}
+}
+
+/* The condition ribbon is a way in, not a destination: trimming the circles and the
+   gaps lifts roughly a product row above the fold on a phone without losing legibility.
+   The subtitle under "Shop Health & Wellness" is gone for the same reason. */
+.approved-categories{margin-top:7px;gap:7px;}
+.approved-categories button{gap:4px;}
+.approved-categories button > span{width:40px;height:40px;}
+.approved-categories svg{width:18px;}
+.approved-categories small{font-size:8.5px;}
+.approved-title + .approved-categories,.approved-section .approved-categories{margin-top:7px;}
+@media (min-width: 981px){
+.approved-categories{margin-top:8px;gap:9px;}
+.approved-categories button > span{width:44px;height:44px;}
+.approved-categories svg{width:20px;}
+}
+
+/* Above the fold on a laptop, the hero was eating the whole viewport and pushing the
+   first product row off screen. Trimming the hero and the trust chips buys that row
+   back without shrinking any type. */
+@media (min-width: 981px){
+.hero-rotator{min-height:296px;}
+.desktop-hero-row .hero-slide{min-height:296px;padding:34px 40px;}
+.desktop-hero-row .hero-slide > div:first-child{width:min(42%, 380px);}
+.desktop-hero-row h1{font-size:40px;}
+.desktop-hero-row .desktop-hero-description{margin:14px 0 16px;font-size:14px;}
+.desktop-hero-row .hero-slide > div:first-child > a{min-height:44px;padding:0 24px;font-size:14px;}
+/* The chips were a full row of their own; smaller and tighter, they sit in the space
+   the artwork already leaves rather than adding height under it. */
+.desktop-hero-trust{left:40px;bottom:14px;gap:9px;}
+.desktop-hero-trust span{min-height:32px;padding:0 9px;gap:6px;font-size:8.5px;}
+.desktop-hero-trust svg{width:15px;}
+.prescription-hero{min-height:296px;}
+.approved-section{margin-top:11px;}
+}
+
+/* Reclaiming the fold on a phone. Every block between the banner and the catalogue was
+   carrying a full-size margin, and together they pushed the first product row under the
+   browser chrome. Nothing here shrinks a font except the section headings. */
+@media (max-width: 980px){
+.approved-section{margin-top:8px;}
+/* The search row sits under a 98px header; its own top margin is pure spacing. */
+.rx-search-row{margin-top:6px;}
+.approved-product{padding-top:5px;padding-bottom:5px;}
+.approved-title h2{font-size:15px;}
+.approved-title{min-height:0;}
+.approved-categories{margin-top:5px;gap:6px;}
+.approved-categories button > span{width:34px;height:34px;}
+.approved-categories svg{width:16px;}
+.approved-categories small{font-size:8px;}
+.approved-products{margin-top:5px;padding-top:0;}
+}
+
+/* Laptop: a little more off the hero and the gaps, so the first row clears the fold
+   with room rather than sitting on its edge. */
+@media (min-width: 981px){
+.hero-rotator{min-height:272px;}
+.desktop-hero-row .hero-slide{min-height:272px;padding:28px 40px;}
+.desktop-hero-row h1{font-size:37px;}
+.desktop-hero-row .desktop-hero-description{margin:11px 0 13px;}
+.desktop-hero-trust{bottom:11px;}
+.prescription-hero{min-height:272px;}
+.prescription-hero-copy{padding:30px 10px 28px 43px;}
+.approved-section{margin-top:9px;}
+.approved-products{margin-top:7px;}
+}
+
+/* The tab bar was 70px of mostly padding. Trimming it returns a usable strip of page
+   on every screen, and the floating button rides down with it. */
+@media (max-width: 980px){
+.approved-nav{height:56px;}
+.approved-nav svg{width:18px;height:18px;}
+.approved-nav a,.approved-nav button{gap:2px;font-size:8.5px;}
+/* The floating button and its panel ride down with the shortened bar. */
+.approved-services{bottom:64px;}
+.approved-services-overlay{inset:auto 12px 123px auto;}
+.health-assistant{bottom:64px;}
+}
+
+/* The category rail ran past the bottom of the hero, so the whole row grew to fit it and
+   the "View all" button sat below everything. The rail is now exactly the height of the
+   hero beside it, with the button pinned to its foot — the two columns end on one line. */
+@media (min-width: 981px){
+/* The header already carries a "Shop by condition" dropdown listing every condition,
+   so repeating five of them on the page only pushed the catalogue down. The phone keeps
+   the row: it has no such dropdown. */
+#conditions{display:none;}
+.desktop-hero-row{align-items:stretch;}
+.desktop-hero-row > aside{height:272px;min-height:0;display:flex;flex-direction:column;overflow-y:auto;scrollbar-width:thin;}
+.desktop-hero-row > aside > a{flex:0 0 auto;}
+.desktop-hero-row > aside > button{position:sticky;bottom:0;flex:0 0 auto;margin-top:auto;background:#faf7fb;}
+}

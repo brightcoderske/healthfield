@@ -1,7 +1,7 @@
 "use client";
 
-import { Check, LoaderCircle, LocateFixed, Map } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Check, LoaderCircle, LocateFixed, Map, Search } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 export type PinnedLocation = {
   latitude: number;
@@ -38,20 +38,24 @@ type MapsPlace = {
   formattedAddress?: string | null;
   displayName?: string | null;
 };
-type MapsAutocompleteElement = HTMLElement & { includedRegionCodes?: string[] };
-type MapsLegacyAutocomplete = {
-  addListener(event: string, handler: () => void): void;
-  getPlace(): { geometry?: { location?: MapsPoint }; formatted_address?: string; name?: string };
+type PlacePrediction = {
+  placeId: string;
+  text: { toString(): string };
+  mainText?: { toString(): string } | null;
+  secondaryText?: { toString(): string } | null;
+  toPlace(): MapsPlace;
 };
-
 type MapsLibraries = {
   Map: new (element: HTMLElement, options: Record<string, unknown>) => MapsMap;
   Marker: new (options: Record<string, unknown>) => MapsMarker;
   Geocoder: new () => MapsGeocoder;
-  /** The current Places search box. Absent on very old projects. */
-  PlaceAutocompleteElement: (new (options?: Record<string, unknown>) => MapsAutocompleteElement) | null;
-  /** The retired one, kept only for projects created before March 2025. */
-  LegacyAutocomplete: (new (input: HTMLInputElement, options?: Record<string, unknown>) => MapsLegacyAutocomplete) | null;
+  /** Data-level autocomplete. Absent only on a project without Places (New). */
+  AutocompleteSuggestion: {
+    fetchAutocompleteSuggestions(request: Record<string, unknown>): Promise<{
+      suggestions: Array<{ placePrediction: PlacePrediction | null }>;
+    }>;
+  } | null;
+  AutocompleteSessionToken: (new () => object) | null;
 };
 
 // Nairobi, used only as the initial camera position before anything is pinned.
@@ -71,8 +75,8 @@ type MapsNamespace = {
   Marker?: MapsLibraries["Marker"];
   Geocoder?: MapsLibraries["Geocoder"];
   places?: {
-    PlaceAutocompleteElement?: MapsLibraries["PlaceAutocompleteElement"];
-    Autocomplete?: MapsLibraries["LegacyAutocomplete"];
+    AutocompleteSuggestion?: MapsLibraries["AutocompleteSuggestion"];
+    AutocompleteSessionToken?: MapsLibraries["AutocompleteSessionToken"];
   };
 };
 
@@ -94,8 +98,8 @@ function loadGoogleMaps(apiKey: string) {
         Map: namespace.Map,
         Marker: namespace.Marker,
         Geocoder: namespace.Geocoder,
-        PlaceAutocompleteElement: namespace.places?.PlaceAutocompleteElement ?? null,
-        LegacyAutocomplete: namespace.places?.Autocomplete ?? null,
+        AutocompleteSuggestion: namespace.places?.AutocompleteSuggestion ?? null,
+        AutocompleteSessionToken: namespace.places?.AutocompleteSessionToken ?? null,
       });
     };
     const globals = window as unknown as Record<string, unknown> & { google?: { maps?: MapsNamespace } };
@@ -106,10 +110,9 @@ function loadGoogleMaps(apiKey: string) {
       window.clearTimeout(timer);
       settle(globals.google?.maps ?? null);
     };
-    const existing = document.querySelector("script[data-healthfield-maps]");
-    if (existing) return;
+    if (document.querySelector("script[data-healthfield-maps]")) return;
     const script = document.createElement("script");
-    // marker and places are requested up front so the callback guarantees all of them;
+    // places and marker are requested up front so the callback guarantees all of them;
     // pulling them in later would reintroduce the readiness problem it solves.
     script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places,marker&callback=${READY_CALLBACK}&loading=async&v=weekly`;
     script.async = true;
@@ -130,18 +133,25 @@ export function googleMapsApiKey() {
   return process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
 }
 
+type Suggestion = { placeId: string; primary: string; secondary: string; prediction: PlacePrediction };
+
 /**
  * Pin-a-location control used at checkout and when saving a branch address.
  *
- * A customer is never asked for coordinates. They either search for where they are and
- * pick from Google's suggestions, tap the map, or hand over their device location — and
- * any of the three produces the precise point the delivery fee is measured from.
+ * The search box is an ordinary input driving the Places Data API, not Google's
+ * `PlaceAutocompleteElement`. That element renders into a closed shadow root, which
+ * makes it unstylable, unmeasurable, and — on a narrow phone — effectively untappable.
+ * Owning the input means the field is a plain text box on every device, and the
+ * suggestion list is ours to lay out.
+ *
+ * A customer is never asked for coordinates. They search and pick, tap the map, or hand
+ * over their device location; each produces the point the delivery fee is measured from.
  */
 export function MapPicker({
   value,
   onChange,
-  height = 260,
-  searchPlaceholder = "Search for your estate, road or landmark",
+  height = 240,
+  searchPlaceholder = "Search your estate, road or landmark",
 }: {
   value: PinnedLocation | null;
   onChange: (location: PinnedLocation | null) => void;
@@ -149,26 +159,32 @@ export function MapPicker({
   searchPlaceholder?: string;
 }) {
   const apiKey = googleMapsApiKey();
+  const listboxId = useId();
   const mapElement = useRef<HTMLDivElement>(null);
-  const searchHost = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapsMap | null>(null);
   const markerRef = useRef<MapsMarker | null>(null);
   const geocoderRef = useRef<MapsGeocoder | null>(null);
-  // The element the map was built on. React mounts effects twice in development, and
-  // the map must not be constructed a second time over the same node.
-  const builtOn = useRef<HTMLElement | null>(null);
   const libraries = useRef<MapsLibraries | null>(null);
-  // Kept in a ref so the map listeners, which are registered once, always call the
-  // current handler rather than the one captured on first render.
+  // One token per search-then-pick cycle: Google bills the whole cycle as a single
+  // session rather than per keystroke, so it is renewed only after a selection.
+  const sessionToken = useRef<object | null>(null);
+  // The element the map was built on. React mounts effects twice in development, and
+  // building a second map over the same node bills twice.
+  const builtOn = useRef<HTMLElement | null>(null);
+  const requestId = useRef(0);
+  // Kept in a ref so the map listeners, registered once, always call the current
+  // handler rather than the one captured on first render.
   const changeRef = useRef(onChange);
   useEffect(() => { changeRef.current = onChange; }, [onChange]);
 
-  const [mapsFailed, setMapsFailed] = useState(!apiKey);
+  const [query, setQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchBroken, setSearchBroken] = useState(false);
   const [mapsAvailable, setMapsAvailable] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
-  const [searchReady, setSearchReady] = useState(false);
   const [locating, setLocating] = useState(false);
-  const [hint, setHint] = useState("Search for your area, or use your current location.");
+  const [hint, setHint] = useState("");
 
   const publish = useCallback(async (latitude: number, longitude: number, address?: string | null) => {
     let resolved = address ?? null;
@@ -183,73 +199,81 @@ export function MapPicker({
     changeRef.current({ latitude, longitude, address: resolved });
   }, []);
 
-  const attachSearch = useCallback((maps: MapsLibraries, host: HTMLDivElement) => {
-    if (host.childElementCount) return true;
-    // The current element first. A key issued today has no access to the retired
-    // Autocomplete, so relying on that alone would leave production with no search.
-    if (maps.PlaceAutocompleteElement) {
-      const element = new maps.PlaceAutocompleteElement({ includedRegionCodes: ["ke"] });
-      element.className = "map-picker-search";
-      element.setAttribute("placeholder", searchPlaceholder);
-      host.append(element);
-      const select = async (event: Event) => {
-        const prediction = (event as Event & { placePrediction?: { toPlace(): MapsPlace } }).placePrediction;
-        const place = prediction?.toPlace();
-        if (!place) return;
-        await place.fetchFields({ fields: ["location", "formattedAddress", "displayName"] }).catch(() => null);
-        const point = place.location;
-        if (!point) return;
-        mapRef.current?.setZoom(16);
-        void publish(point.lat(), point.lng(), place.formattedAddress ?? place.displayName ?? null);
-      };
-      // The event was renamed; both are registered so either library build works.
-      element.addEventListener("gmp-select", (event) => void select(event));
-      element.addEventListener("gmp-placeselect", (event) => void select(event));
-      return true;
-    }
-    if (maps.LegacyAutocomplete) {
-      const input = document.createElement("input");
-      input.type = "text";
-      input.className = "map-picker-search";
-      input.placeholder = searchPlaceholder;
-      input.setAttribute("aria-label", "Search for your location");
-      input.addEventListener("keydown", (event) => { if (event.key === "Enter") event.preventDefault(); });
-      host.append(input);
-      const autocomplete = new maps.LegacyAutocomplete(input, {
-        fields: ["geometry", "formatted_address", "name"],
-        componentRestrictions: { country: ["ke"] },
-      });
-      autocomplete.addListener("place_changed", () => {
-        const place = autocomplete.getPlace();
-        const point = place.geometry?.location;
-        if (!point) return;
-        mapRef.current?.setZoom(16);
-        void publish(point.lat(), point.lng(), place.formatted_address ?? place.name ?? null);
-      });
-      return true;
-    }
-    return false;
-  }, [publish, searchPlaceholder]);
-
-  // The search box is set up on mount, but no map is drawn. Google bills a Dynamic Map
-  // load every time one is instantiated, and most customers find their address from the
-  // suggestions alone — so the map is only built for the few who ask to see it.
   useEffect(() => {
     if (!apiKey) return;
     let cancelled = false;
     void loadGoogleMaps(apiKey).then((maps) => {
-      if (cancelled) return;
-      if (!maps) { setMapsFailed(true); return; }
+      if (cancelled || !maps) { if (!cancelled) setSearchBroken(true); return; }
       libraries.current = maps;
       geocoderRef.current = new maps.Geocoder();
-      if (searchHost.current && attachSearch(maps, searchHost.current)) setSearchReady(true);
       setMapsAvailable(true);
+      if (!maps.AutocompleteSuggestion) setSearchBroken(true);
     });
     return () => { cancelled = true; };
-  }, [apiKey, attachSearch]);
+  }, [apiKey]);
 
-  // Drawn on request only. Guarded by the element it was built on, because React mounts
-  // effects twice in development and a second map over the same node bills twice.
+  // Predictions are debounced so a fast typist is billed for one session, not ten.
+  useEffect(() => {
+    const text = query.trim();
+    // Below three characters there is nothing worth a billed request; the field is
+    // cleared by the change handler rather than here, so this effect only ever fetches.
+    if (text.length < 3) return;
+    const maps = libraries.current;
+    const autocomplete = maps?.AutocompleteSuggestion;
+    if (!maps || !autocomplete) return;
+    const id = (requestId.current += 1);
+    const timer = window.setTimeout(async () => {
+      if (maps.AutocompleteSessionToken && !sessionToken.current) sessionToken.current = new maps.AutocompleteSessionToken();
+      try {
+        const response = await autocomplete.fetchAutocompleteSuggestions({
+          input: text,
+          sessionToken: sessionToken.current ?? undefined,
+          includedRegionCodes: ["ke"],
+        });
+        if (id !== requestId.current) return;
+        setSuggestions(
+          response.suggestions.flatMap((entry) => {
+            const prediction = entry.placePrediction;
+            if (!prediction) return [];
+            return [{
+              placeId: prediction.placeId,
+              primary: prediction.mainText?.toString() ?? prediction.text.toString(),
+              secondary: prediction.secondaryText?.toString() ?? "",
+              prediction,
+            }];
+          }),
+        );
+      } catch {
+        if (id !== requestId.current) return;
+        // Almost always the key's referrer allowlist rather than anything transient, so
+        // the customer is pointed at the controls that still work instead of a retry.
+        setSearchBroken(true);
+        setSuggestions([]);
+      } finally {
+        if (id === requestId.current) setSearching(false);
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  async function choose(suggestion: Suggestion) {
+    setQuery(suggestion.primary);
+    setSuggestions([]);
+    const place = suggestion.prediction.toPlace();
+    await place.fetchFields({ fields: ["location", "formattedAddress", "displayName"] }).catch(() => null);
+    // The session closes with the selection; the next search starts a fresh one.
+    sessionToken.current = null;
+    const point = place.location;
+    if (!point) return;
+    mapRef.current?.setZoom(16);
+    const label = place.formattedAddress ?? suggestion.secondary
+      ? [suggestion.primary, suggestion.secondary].filter(Boolean).join(", ")
+      : suggestion.primary;
+    void publish(point.lat(), point.lng(), place.formattedAddress ?? label);
+  }
+
+  // Drawn on request only, so a customer who found their address by searching never
+  // loads a billed map at all.
   useEffect(() => {
     const maps = libraries.current;
     const host = mapElement.current;
@@ -280,7 +304,7 @@ export function MapPicker({
   }, [mapOpen, publish]);
 
   // Declining location access is a normal choice, not a fault, so it never produces an
-  // error the customer has to clear — the hint simply points back at the search box.
+  // error the customer has to clear — the hint points back at what still works.
   function useMyLocation() {
     if (!navigator.geolocation) { setHint("Search for your area above to set your location."); return; }
     setLocating(true);
@@ -291,31 +315,50 @@ export function MapPicker({
       },
       () => {
         setLocating(false);
-        setHint("Search for your area above to set your location.");
+        setHint("Search for your area above, or open the map to drop a pin.");
       },
       { enableHighAccuracy: true, timeout: 12000 },
     );
   }
 
-  // Nothing here ever shows the customer a fault. A map that will not load, a declined
-  // permission or a project without Places all just leave fewer ways to set the pin —
-  // the remaining ones still work, and the panel reads the same either way.
   return (
     <div className="map-picker">
       <div className="map-picker-search-row">
-        {/* The frame is always on screen. Google's element is appended into it once
-            Places has loaded; until then — and on a project without Places at all —
-            the placeholder below holds the space so the field is never missing. */}
-        <div className="map-picker-search-host">
-          <div ref={searchHost} hidden={!searchReady} />
-          {!searchReady ? (
-            <input
-              type="text"
-              className="map-picker-search"
-              placeholder={searchPlaceholder}
-              aria-label="Search for your location"
-              readOnly
-            />
+        <div className="map-picker-field">
+          <Search />
+          <input
+            type="text"
+            className="map-picker-input"
+            placeholder={searchPlaceholder}
+            value={query}
+            onChange={(event) => {
+              const next = event.target.value;
+              setQuery(next);
+              const searchable = next.trim().length >= 3;
+              setSearching(searchable);
+              if (!searchable) setSuggestions([]);
+            }}
+            onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }}
+            autoComplete="off"
+            role="combobox"
+            aria-expanded={suggestions.length > 0}
+            aria-controls={listboxId}
+            aria-autocomplete="list"
+          />
+          {searching ? <LoaderCircle className="spin" /> : null}
+          {suggestions.length ? (
+            <ul className="map-picker-suggestions" id={listboxId} role="listbox">
+              {suggestions.map((suggestion) => (
+                <li key={suggestion.placeId}>
+                  {/* onMouseDown, not onClick: blurring the input first would close the
+                      list before the tap resolves. */}
+                  <button type="button" role="option" aria-selected="false" onMouseDown={(event) => { event.preventDefault(); void choose(suggestion); }}>
+                    <strong>{suggestion.primary}</strong>
+                    {suggestion.secondary ? <small>{suggestion.secondary}</small> : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
           ) : null}
         </div>
         {mapsAvailable && !mapOpen ? (
@@ -324,17 +367,11 @@ export function MapPicker({
           </button>
         ) : null}
       </div>
-      {/* Mounted only once the customer asks for it: each map costs a billed load. */}
+
       {mapOpen ? (
-        <div
-          className="map-picker-canvas"
-          style={{ height }}
-          ref={mapElement}
-          aria-label="Delivery location map"
-          role="application"
-          hidden={mapsFailed}
-        />
+        <div className="map-picker-canvas" style={{ height }} ref={mapElement} aria-label="Delivery location map" role="application" />
       ) : null}
+
       <div className="map-picker-actions">
         <button type="button" onClick={useMyLocation} disabled={locating}>
           {locating ? <LoaderCircle className="spin" /> : <LocateFixed />}
@@ -344,10 +381,17 @@ export function MapPicker({
           <span className="map-picker-pin">
             <Check /> {value.address || `${value.latitude.toFixed(5)}, ${value.longitude.toFixed(5)}`}
           </span>
-        ) : (
-          <span className="map-picker-hint">{hint}</span>
-        )}
+        ) : null}
       </div>
+
+      {searchBroken && !value ? (
+        <p className="map-picker-hint">
+          Address search is unavailable right now — use your current location, or open the
+          map and drop a pin.
+        </p>
+      ) : hint && !value ? (
+        <p className="map-picker-hint">{hint}</p>
+      ) : null}
     </div>
   );
 }

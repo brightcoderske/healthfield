@@ -26,6 +26,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ConsultBanner } from "./consult-banner";
+import { HeroRotator } from "./hero-rotator";
+import { PrescriptionHero } from "./prescription-hero";
+import { PrescriptionQuickActions } from "./prescription-quick-actions";
 import { ProductCard } from "./product-card";
 import {
   CatalogueInterruption,
@@ -919,7 +922,8 @@ export function Storefront({
                 </button>
               )}
             </aside>
-            <section>
+            <HeroRotator>
+            <section className="hero-slide">
               <div>
                 <h1>
                   Your Health,
@@ -951,6 +955,8 @@ export function Storefront({
                 </span>
               </div>
             </section>
+            <PrescriptionHero />
+            </HeroRotator>
           </div>
         )}
         {query.trim() && (
@@ -1004,8 +1010,12 @@ export function Storefront({
               aria-label="Search products and categories"
             />
           </label>
-          <ConsultBanner />
         </div>
+
+        {!query.trim() && (
+          <PrescriptionHero className="prescription-hero-mobile" priority />
+        )}
+        {!query.trim() && <PrescriptionQuickActions />}
 
         {!query.trim() && (
           <section className="approved-section" id="conditions">
@@ -1022,15 +1032,6 @@ export function Storefront({
               </button>
             </div>
             <div className="approved-categories">
-              <a
-                className="prescription-category-link"
-                href="/prescriptions/upload"
-              >
-                <span className="green">
-                  <Upload />
-                </span>
-                <small>Upload Prescription</small>
-              </a>
               {visibleConditions.map((condition, index) => {
                 const { icon: Icon, color } =
                   conditionPresentation[index % conditionPresentation.length];
@@ -1067,7 +1068,7 @@ export function Storefront({
                   ? "Searching the catalogue…"
                   : normalizedQuery
                     ? `${filtered.length} ${filtered.length === 1 ? "match" : "matches"} across the whole catalogue${activeSearchResults?.capped ? " — refine your words to narrow this down" : ""}`
-                    : "Search by product, brand or health need"}
+                    : null}
               </small>
             </div>
           </div>

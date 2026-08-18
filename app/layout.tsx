@@ -24,6 +24,7 @@ import "./blog-index.css";
 import "./thermal-receipt.css";
 import "./consultations-ui.css";
 import "./delivery-ui.css";
+import "./prescription-hero.css";
 
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 

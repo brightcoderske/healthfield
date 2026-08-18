@@ -771,6 +771,7 @@ body{background:white;padding-bottom:78px;}
 .approved-app{padding-bottom:30px;}
 .approved-nav{display:none;}
 .approved-services{bottom:22px;}
+.approved-services-overlay{inset:auto 12px 81px auto;}
 }
 /*Final card geometry: image, natural-height name, then price with no reserved gap.*/
 .approved-product-main{flex:0 0 auto;overflow:visible;}
@@ -824,13 +825,13 @@ body{background:white;padding-bottom:78px;}
 .desktop-hero-row > aside a svg{width:15px;color:#bc2788;}
 .desktop-hero-row > aside a span{font-size:16px;}
 .desktop-hero-row > aside > button{width:100%;height:35px;margin-top:7px;border:1px solid #eadfeb;border-radius:8px;color:#bd2784;background:white;font-size:10px;font-weight:750;}
-.desktop-hero-row > section{position:relative;min-height:330px;padding:48px 43px;border-radius:13px;overflow:hidden;background:linear-gradient(110deg, #fff7fa, #f9e9f3 58%, #eee8ff);}
-.desktop-hero-row > section > div:first-child{position:relative;z-index:2;}
+.desktop-hero-row .hero-slide{position:relative;min-height:330px;padding:48px 43px;border-radius:13px;overflow:hidden;background:linear-gradient(110deg, #fff7fa, #f9e9f3 58%, #eee8ff);}
+.desktop-hero-row .hero-slide > div:first-child{position:relative;z-index:2;}
 .desktop-hero-row h1{margin:0;font-size:40px;line-height:1.05;letter-spacing:-0.035em;}
 .desktop-hero-row h1 em{color:#df2470;font-style:normal;}
 .desktop-hero-row p{color:#545062;font-size:13px;line-height:1.45;}
-.desktop-hero-row section > div > a{min-height:42px;padding:0 22px;border-radius:7px;color:white;background:linear-gradient(90deg, #db1d68, #ec346e);display:inline-flex;align-items:center;font-size:11px;font-weight:750;}
-.desktop-hero-row section > img{position:absolute;right:75px;top:24px;width:300px;height:250px;object-fit:contain;}
+.desktop-hero-row .hero-slide > div > a{min-height:42px;padding:0 22px;border-radius:7px;color:white;background:linear-gradient(90deg, #db1d68, #ec346e);display:inline-flex;align-items:center;font-size:11px;font-weight:750;}
+.desktop-hero-row .hero-slide > img{position:absolute;right:75px;top:24px;width:300px;height:250px;object-fit:contain;}
 .desktop-hero-trust{position:absolute!important;left:42px;bottom:19px;display:flex;gap:14px;}
 .desktop-hero-trust span{min-height:38px;padding:0 11px;border-radius:8px;background:white;display:flex;align-items:center;gap:7px;font-size:9px;font-weight:700;box-shadow:0 4px 13px rgba(50, 23, 58, 0.06);}
 .desktop-hero-trust svg{width:18px;color:#81258a;}
@@ -1118,8 +1119,8 @@ body{background:white;padding-bottom:78px;}
 }
 .forgot-password{align-self:flex-end;color:#792587;font-size:10px;font-weight:700;}
 @media (min-width: 821px){
-.desktop-hero-row > section{min-height:250px;padding:30px 38px;}
-.desktop-hero-row section > img{top:12px;width:245px;height:220px;}
+.desktop-hero-row .hero-slide{min-height:250px;padding:30px 38px;}
+.desktop-hero-row .hero-slide > img{top:12px;width:245px;height:220px;}
 .desktop-hero-row h1{font-size:34px;}
 .desktop-hero-trust{bottom:12px;}
 .approved-products{gap:8px;}
@@ -1973,14 +1974,14 @@ body:has(.approved-app){padding-bottom:0;}
 .compact-account .account-quick-links a:first-child{padding-left:0;border-left:0;}
 .compact-account .account-quick-links a:hover{color:#c52d82;background:transparent;text-decoration:underline;}
 @media (min-width: 821px){
-.desktop-hero-row > section{min-height:360px;padding:48px 44px;overflow:hidden;}
-.desktop-hero-row > section > div:first-child{position:relative;z-index:3;width:min(37%, 355px);}
+.desktop-hero-row .hero-slide{min-height:360px;padding:48px 44px;overflow:hidden;}
+.desktop-hero-row .hero-slide > div:first-child{position:relative;z-index:3;width:min(37%, 355px);}
 .desktop-hero-row h1{color:#18131b;font-size:48px;line-height:1.02;letter-spacing:-0.045em;white-space:nowrap;}
 .desktop-hero-row h1 em{display:inline;color:#df2470;font-size:inherit;font-style:normal;}
 .desktop-hero-row .desktop-hero-description{max-width:35ch;margin:22px 0 20px;font-size:15px;line-height:1.5;}
-.desktop-hero-row section > div:first-child > a{min-height:50px;padding:0 28px;border-radius:8px;font-size:15px;background:linear-gradient(90deg, #db1d68, #ec346e);}
-.desktop-hero-row section > .hero-pharmacist{position:absolute;z-index:1;top:0;right:0;width:58%;height:100%;object-fit:cover;object-position:60% center;}
-.desktop-hero-row section:after{content:"";position:absolute;z-index:2;inset:0;background:linear-gradient(
+.desktop-hero-row .hero-slide > div:first-child > a{min-height:50px;padding:0 28px;border-radius:8px;font-size:15px;background:linear-gradient(90deg, #db1d68, #ec346e);}
+.desktop-hero-row .hero-slide > .hero-pharmacist{position:absolute;z-index:1;top:0;right:0;width:58%;height:100%;object-fit:cover;object-position:60% center;}
+.desktop-hero-row .hero-slide:after{content:"";position:absolute;z-index:2;inset:0;background:linear-gradient(
       90deg,
       #f7eff9 0%,
       rgba(247, 239, 249, 0.96) 32%,
