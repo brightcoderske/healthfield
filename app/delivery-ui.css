@@ -1,19 +1,22 @@
 /* Distance-based delivery: the checkout map pin, and the admin pricing screen. */
 
 .map-picker{display:flex;flex-direction:column;gap:8px;}
-.map-picker-search-row{display:flex;align-items:stretch;gap:8px;}
-.map-picker-search-host{flex:1;min-width:0;}
-.map-picker-search-host[hidden]{display:none;}
-.map-picker-open{flex:0 0 auto;min-height:38px;padding:0 12px;border:1px solid #ddd5e0;border-radius:8px;color:#542064;background:#fff;display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:750;white-space:nowrap;}
-.map-picker-open svg{width:15px;}
+.map-picker-search-row{display:flex;flex-wrap:wrap;align-items:center;gap:7px;}
+/* The border lives on the host, not on Google's element: the element renders its own
+   internal input and without a frame here the field reads as empty page on a phone. */
+.map-picker-search-host{flex:1 1 100%;min-width:0;border:1px solid #ddd5e0;border-radius:8px;background:#fff;overflow:hidden;}
+.map-picker-search-host > div[hidden]{display:none;}
+.map-picker-search-host:focus-within{outline:2px solid #762584;outline-offset:1px;}
+.map-picker-open{flex:0 0 auto;min-height:32px;padding:0 10px;border:1px solid #ddd5e0;border-radius:7px;color:#542064;background:#fff;display:inline-flex;align-items:center;gap:5px;font-size:9px;font-weight:750;white-space:nowrap;}
+.map-picker-open svg{width:14px;}
 /* Matches both the plain input and the Places web component, which sizes itself.
    The colour is set explicitly because Google's element otherwise renders what the
    customer types in a muted grey that reads as placeholder text. */
-.map-picker-search,input.map-picker-search{width:100%;min-height:38px;padding:0 11px;border:1px solid #ddd5e0;border-radius:8px;color:#181529;background:#fff;font-size:11px;}
-gmp-place-autocomplete.map-picker-search{padding:0;border:0;--gmp-mat-color-on-surface:#181529;--gmp-mat-color-on-surface-variant:#5f5866;--gmp-mat-color-primary:#762584;}
-gmp-place-autocomplete.map-picker-search::part(input){color:#181529;font-size:11px;}
+.map-picker-search,input.map-picker-search{width:100%;min-height:40px;padding:0 11px;border:0;color:#181529;background:#fff;font-size:11px;}
+gmp-place-autocomplete.map-picker-search{display:block;padding:0;--gmp-mat-color-on-surface:#181529;--gmp-mat-color-on-surface-variant:#5f5866;--gmp-mat-color-primary:#762584;}
+gmp-place-autocomplete.map-picker-search::part(input){width:100%;color:#181529;font-size:11px;}
 gmp-place-autocomplete.map-picker-search::part(prediction-item){color:#181529;}
-.map-picker-search:focus,input.map-picker-search:focus{outline:2px solid #762584;outline-offset:1px;}
+input.map-picker-search:focus{outline:none;}
 .map-picker-canvas{width:100%;border:1px solid #e0d9e3;border-radius:10px;background:#f2eef4;overflow:hidden;}
 .map-picker-pin svg{width:15px;flex:0 0 15px;}
 .map-picker-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
@@ -27,7 +30,14 @@ gmp-place-autocomplete.map-picker-search::part(prediction-item){color:#181529;}
 /* Google injects its autocomplete list at the end of <body>, outside any modal. */
 .pac-container{z-index:2147483647;}
 
-.checkout-location{display:flex;flex-direction:column;gap:9px;}
+/* globals.css spans only `label.full` across the two-column field grid, so the location
+   block — a div — was being squeezed into a single column at every width. */
+.checkout-fields > .full{grid-column:1/-1;}
+.checkout-location{display:flex;flex-direction:column;gap:9px;align-items:stretch;}
+/* globals.css styles every button inside .checkout-location; these are more specific so
+   the picker's own controls keep their own sizing. */
+.checkout-location .map-picker-open,.checkout-location .map-picker-actions > button{border-color:#ddd5e0;}
+.checkout-location .map-picker-open{min-height:32px;padding:0 10px;font-size:9px;}
 .checkout-location-title{color:#181529;display:flex;align-items:center;gap:6px;font-size:11px;font-weight:800;}
 .checkout-location-title svg{width:16px;}
 .checkout-location-note{margin:0;color:#756e79;font-size:9px;line-height:1.5;}
@@ -89,3 +99,15 @@ gmp-place-autocomplete.map-picker-search::part(prediction-item){color:#181529;}
 
 /* The prompt-phone field explains where its value came from without shouting. */
 .billing-phone > small{margin-top:4px;color:#7a7380;font-size:8px;font-weight:500;}
+
+/* Phones: the delivery block is the tallest part of checkout, so it is tightened rather
+   than allowed to push the payment options off the first screen. */
+@media (max-width: 620px){
+.map-picker{gap:6px;}
+.map-picker-actions{gap:6px;}
+.map-picker-actions > button{width:100%;justify-content:center;}
+.map-picker-pin,.map-picker-hint{width:100%;}
+.checkout-location{gap:7px;}
+.checkout-location-title{font-size:10px;}
+.map-picker-canvas{border-radius:9px;}
+}

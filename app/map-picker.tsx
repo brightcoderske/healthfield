@@ -303,7 +303,21 @@ export function MapPicker({
   return (
     <div className="map-picker">
       <div className="map-picker-search-row">
-        <div ref={searchHost} className="map-picker-search-host" hidden={!searchReady} />
+        {/* The frame is always on screen. Google's element is appended into it once
+            Places has loaded; until then — and on a project without Places at all —
+            the placeholder below holds the space so the field is never missing. */}
+        <div className="map-picker-search-host">
+          <div ref={searchHost} hidden={!searchReady} />
+          {!searchReady ? (
+            <input
+              type="text"
+              className="map-picker-search"
+              placeholder={searchPlaceholder}
+              aria-label="Search for your location"
+              readOnly
+            />
+          ) : null}
+        </div>
         {mapsAvailable && !mapOpen ? (
           <button type="button" className="map-picker-open" onClick={() => setMapOpen(true)}>
             <Map /> Open map

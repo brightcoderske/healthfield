@@ -603,24 +603,25 @@ export function CheckoutForm({
               />
             </label>
             <label>
-              Town or area
-              <input name="deliveryArea" required={method === "DELIVERY"} />
+              Town or area <em>(optional)</em>
+              <input name="deliveryArea" placeholder="Juja, Thika…" />
             </label>
             {method === "DELIVERY" ? (
               <div className="checkout-location full">
                 <span className="checkout-location-title">
                   <MapPin /> Where should we deliver?
                 </span>
-                <p className="checkout-location-note">
-                  Search for your area and pick it from the suggestions. The delivery fee
-                  is worked out from how far that is from the branch packing your order.
-                </p>
-                <MapPicker value={pin} onChange={pinLocation} />
+                <MapPicker
+                  value={pin}
+                  onChange={pinLocation}
+                  height={220}
+                  searchPlaceholder="Estate, road, building or landmark"
+                />
                 <label className="full">
                   Directions for the rider
                   <textarea
                     name="deliveryAddress"
-                    rows={3}
+                    rows={2}
                     required
                     value={address}
                     onChange={(event) => {
@@ -629,10 +630,7 @@ export function CheckoutForm({
                     }}
                     placeholder="House or building name, floor, gate colour, anything that helps the rider find you"
                   />
-                  <small>
-                    Started from the location you picked. Add whatever a rider still
-                    needs once they arrive.
-                  </small>
+                  <small>Gate colour, floor, landmark — whatever helps on arrival.</small>
                 </label>
                 {deliveryQuote && !deliveryQuote.available ? (
                   <div className="auth-error" role="alert">
