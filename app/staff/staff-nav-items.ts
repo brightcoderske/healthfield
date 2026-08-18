@@ -1,4 +1,4 @@
-import { BookOpen, Boxes, ClipboardList, History, LayoutDashboard, Percent, Pill, ShieldCheck, ShoppingBasket } from "lucide-react";
+import { BookOpen, Boxes, Stethoscope, ClipboardList, History, LayoutDashboard, Percent, Pill, ShieldCheck, ShoppingBasket } from "lucide-react";
 import type { StaffPermission } from "@/lib/staff-permissions";
 
 export type StaffNavItem = readonly [string, string, typeof LayoutDashboard, StaffPermission];
@@ -14,6 +14,7 @@ export const staffNavGroups = [
     ["/staff/orders", "Orders", ClipboardList, "ORDERS_VIEW"],
     ["/staff/past-orders", "Past orders", History, "PAST_ORDERS_VIEW"],
     ["/staff/prescriptions", "Prescriptions", ShieldCheck, "PRESCRIPTIONS_VIEW"],
+    ["/staff/consultations", "Consultations", Stethoscope, "CONSULTATIONS_VIEW"],
   ] },
   { label: "Storefront content", items: [
     ["/staff/offers", "Offers", Percent, "OFFERS_MANAGE"],

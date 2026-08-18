@@ -126,6 +126,15 @@ export function paymentReferenceMatchesOrder(reference: string | null | undefine
   return Boolean(incoming && order && (incoming === order || incoming === order.slice(0, 12)));
 }
 
+/**
+ * How recent an unreferenced payment must be before its amount alone may match it.
+ *
+ * A Buy Goods till sends no account reference, so the amount is the only link back to
+ * an order. Outside this window the coincidence of two equal amounts stops being
+ * unlikely, and a match becomes a guess.
+ */
+export const AMOUNT_ONLY_MATCH_WINDOW_MS = 30 * 60_000;
+
 export function selectIncomingPaymentCandidate<T extends { receiptNumber: string; amount: string | number; accountReference: string | null; createdAt: Date }>(input: {
   amount: string | number;
   receiptNumber?: string | null;
@@ -145,8 +154,67 @@ export function selectIncomingPaymentCandidate<T extends { receiptNumber: string
   if (!input.allowAmountOnly) return null;
 
   const now = input.now ?? Date.now();
-  const recentAmountMatches = amountMatches.filter((row) => now - row.createdAt.getTime() <= 30 * 60_000);
+  const recentAmountMatches = amountMatches.filter((row) => now - row.createdAt.getTime() <= AMOUNT_ONLY_MATCH_WINDOW_MS);
   return recentAmountMatches.length === 1 ? recentAmountMatches[0] : null;
+}
+
+/** A payment awaiting money, as seen from an arriving Safaricom notification. */
+export type MatchablePaymentTransaction = {
+  id: number;
+  method: string;
+  channel: string;
+  status: string;
+  amount: string | number;
+  receiptNumber: string | null;
+  createdAt: Date;
+  orderNumber: string | null;
+};
+
+/**
+ * The mirror of selectIncomingPaymentCandidate, for the direction Safaricom pushes.
+ *
+ * One till payment has just landed and many orders may be waiting for money. Both
+ * directions have to agree on what counts as a match, or an order matched by the
+ * webhook could be contradicted by the customer's next poll — hence the shared window
+ * and the same refuse-when-ambiguous rule.
+ */
+export function selectPaymentForIncoming<T extends MatchablePaymentTransaction>(input: {
+  incoming: { receiptNumber: string; amount: number; accountReference: string | null };
+  candidates: T[];
+  now?: number;
+}): T | null {
+  const amountMatches = input.candidates.filter(
+    (row) =>
+      Math.abs(Number(row.amount) - input.incoming.amount) <= 0.001 &&
+      // A settled STK payment is still matchable while it carries only a placeholder
+      // receipt, because the real one arrives with this notification.
+      (row.status !== "PAID" || Boolean(row.receiptNumber?.startsWith("STK-"))),
+  );
+
+  // A Paybill reference names the order outright, so it decides on its own.
+  const referenceMatches = amountMatches.filter((row) => paymentReferenceMatchesOrder(input.incoming.accountReference, row.orderNumber));
+  if (referenceMatches.length) return referenceMatches.length === 1 ? referenceMatches[0] : null;
+
+  // A Buy Goods till carries no reference, so the amount is all Safaricom sends.
+  //
+  // That is only enough at the counter, where the seller watched the customer pay and
+  // the sale was rung up seconds earlier. An online order is a stranger's money arriving
+  // from somewhere else entirely, so it is matched by the receipt the customer pasted
+  // and never by amount alone. Even at the counter this refuses to guess: two sales
+  // owing the same amount both go to the seller rather than one being credited with the
+  // other's money.
+  const now = input.now ?? Date.now();
+  const awaiting = amountMatches.filter(
+    (row) =>
+      row.channel === "POS" &&
+      row.method === "MANUAL_MPESA" &&
+      row.status !== "PAID" &&
+      row.status !== "REFUNDED" &&
+      // A seller who typed a different receipt is settling something else.
+      (!row.receiptNumber || row.receiptNumber === input.incoming.receiptNumber) &&
+      now - row.createdAt.getTime() <= AMOUNT_ONLY_MATCH_WINDOW_MS,
+  );
+  return awaiting.length === 1 ? awaiting[0] : null;
 }
 
 export function classifyStkQueryResult(payload: JsonRecord): StkQueryOutcome {

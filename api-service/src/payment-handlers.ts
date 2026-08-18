@@ -6,7 +6,7 @@ import { sendEmail } from "./email";
 import { requireTeamPermission } from "./staff-permissions";
 import { getDb } from "./db";
 import { json } from "./http";
-import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, selectIncomingPaymentCandidate, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, validDateOrNull, type IncomingMpesaPayment } from "./mpesa";
+import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, selectIncomingPaymentCandidate, selectPaymentForIncoming, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, validDateOrNull, type IncomingMpesaPayment } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -124,7 +124,9 @@ function chooseIncomingPayment<T extends { receiptNumber: string; amount: string
     amount: payment.amount,
     receiptNumber: payment.receiptNumber,
     orderNumber,
-    allowAmountOnly: ["PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "FAILED", "CANCELLED"].includes(payment.status),
+    // Matching on amount alone is a counter rule. Online orders arrive from strangers
+    // and are settled by the receipt they pasted, never by a coincidence of totals.
+    allowAmountOnly: payment.channel === "POS" && ["PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "FAILED", "CANCELLED"].includes(payment.status),
     recent,
     now,
   });
@@ -172,16 +174,20 @@ export async function reconcileManualPaymentFromIncoming(transactionId: number) 
   const candidate = await findIncomingPaymentCandidate(payment.id);
   if (!candidate) return { paid: false, candidate: null };
 
-  // Online customers paste a receipt, so only that exact provider receipt may
-  // complete the order automatically. POS can also use a unique exact-amount
-  // candidate, but a seller must confirm the payer identity before completion.
+  // Online customers paste a receipt, so only that exact provider receipt may complete
+  // the order automatically; anything else goes to an administrator. The POS counter is
+  // where matching by amount is safe, because the seller is standing with the payer.
   if (payment.channel === "ONLINE" && candidate.receiptNumber !== payment.receiptNumber) return { paid: false, candidate: null };
-  if (payment.channel === "POS") {
-    await db.update(paymentTransactions).set({ status:"REQUIRES_REVIEW", receiptNumber:candidate.receiptNumber, resultDescription:"Till payment found; waiting for the seller to confirm the payer identity." }).where(eq(paymentTransactions.id,payment.id));
-    return { paid: false, candidate };
-  }
 
-  await markPaymentPaid(payment.id, { receiptNumber:candidate.receiptNumber, amount:Number(candidate.amount), phone:candidate.phone, providerPayload:candidate.providerPayload || undefined, incomingPaymentId:candidate.id });
+  // Best effort by contract: every caller treats a failure here as "not settled yet"
+  // and polls again, so a rejected completion must never surface as a server error on
+  // the seller's screen mid-sale.
+  try {
+    await markPaymentPaid(payment.id, { receiptNumber:candidate.receiptNumber, amount:Number(candidate.amount), phone:candidate.phone, providerPayload:candidate.providerPayload || undefined, incomingPaymentId:candidate.id });
+  } catch (error) {
+    console.error("Till payment could not be completed automatically", { transactionId: payment.id, incomingPaymentId: candidate.id, error });
+    return { paid: false, candidate: null };
+  }
   return { paid: true, candidate };
 }
 
@@ -279,6 +285,8 @@ export async function handleManualPayment(request: Request) {
   if (!order) return json({ error: "Order not found." }, { status: 404 });
   const [settings] = await db.select({ onlineManualEnabled: siteSettings.onlineManualEnabled, posManualEnabled: siteSettings.posManualEnabled }).from(siteSettings).limit(1);
   const channel = await orderPaymentChannel(order.id, order.orderNumber);
+  // An online customer must paste their receipt: nobody is at the counter to vouch for
+  // who paid, so the code is the only thing tying a stranger's money to this order.
   if (channel === "ONLINE" && message.length < 10) return json({ error: "Paste the complete M-Pesa payment message." }, { status: 400 });
   const receiptNumber = message ? extractMpesaReceipt(message) : null;
   if (channel === "ONLINE" && !receiptNumber) return json({ error: "The M-Pesa receipt code could not be found. Paste the complete confirmation SMS." }, { status: 400 });
@@ -319,10 +327,13 @@ export async function handleManualPayment(request: Request) {
   }
   await db.update(orders).set({ paymentMethod: "MANUAL_MPESA", paymentStatus: "PENDING", paymentReference: receiptNumber }).where(eq(orders.id, order.id));
   const matched = await reconcileManualPaymentFromIncoming(transaction.id);
-  if (matched.paid) return json({ ok:true, paid:true, orderNumber:order.orderNumber, receiptNumber:matched.candidate?.receiptNumber, message:"M-Pesa payment matched. Your order has been placed successfully." });
-  const amountCandidates = channel === "POS" && !matched.candidate ? await findRecentIncomingAmountCandidates(transaction.id) : [];
+  if (matched.paid) return json({ ok:true, paid:true, orderNumber:order.orderNumber, receiptNumber:matched.candidate?.receiptNumber, message: channel === "POS" ? "Till payment matched. The sale is complete." : "M-Pesa payment matched. Your order has been placed successfully." });
+  // A unique till payment now completes the sale on its own, so the only reason a
+  // seller is still asked to choose is genuine ambiguity: several people paid the same
+  // amount in the same few minutes and nothing but the payer name separates them.
+  const amountCandidates = channel === "POS" ? await findRecentIncomingAmountCandidates(transaction.id) : [];
   if (receiptNumber) void requestKnownTransactionStatus(transaction.id).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: transaction.id, error }));
-  return json({ ok: true, paid:false, candidatePayment:incomingCandidatePayload(matched.candidate), candidatePayments:amountCandidates.map(incomingCandidatePayload), orderNumber: order.orderNumber, message: matched.candidate ? "A Till payment was found. Confirm the payer name with the customer to complete the sale." : amountCandidates.length ? `${amountCandidates.length} Till payments have this exact amount. Ask the customer for the payer name or receipt and choose the correct payment.` : receiptNumber ? "Receipt extracted. Healthfield is checking Safaricom before sending it for review." : "Waiting for the till payment. The seller will confirm the payer name before completing the sale." }, { status: 202 });
+  return json({ ok: true, paid:false, candidatePayment:null, candidatePayments:amountCandidates.map(incomingCandidatePayload), orderNumber: order.orderNumber, message: amountCandidates.length > 1 ? `${amountCandidates.length} Till payments have this exact amount. Ask the customer for the payer name or receipt and choose the correct payment.` : receiptNumber ? "Receipt extracted. Healthfield is checking Safaricom before sending it for review." : "Waiting for the till payment. It completes automatically the moment Safaricom delivers it." }, { status: 202 });
 }
 
 async function finalizeCancellation(orderId: number, paymentId: number, actorId: number | null) {
@@ -366,13 +377,13 @@ export async function handlePaymentReconcile(request: Request) {
   const [payment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, status.payment.id)).limit(1);
   if (payment.method === "MANUAL_MPESA") {
     const matched = await reconcileManualPaymentFromIncoming(payment.id);
-    if (matched.paid) return json({ ok:true, paid:true, message:"M-Pesa receipt matched. Your order has been placed successfully.", ...(await paymentStatus(checkoutToken)) });
-    if (matched.candidate) {
-      return json({ ok:true, paid:false, candidatePayment:incomingCandidatePayload(matched.candidate), message:"Till payment found. Ask the customer to confirm the payer name, receipt and amount.", ...(await paymentStatus(checkoutToken)) });
-    }
+    if (matched.paid) return json({ ok:true, paid:true, message: payment.channel === "POS" ? "Till payment matched. The sale is complete." : "M-Pesa receipt matched. Your order has been placed successfully.", ...(await paymentStatus(checkoutToken)) });
     if (payment.channel === "POS") {
+      // A single unambiguous till payment settles itself above, so reaching here means
+      // either several payers used the same amount, or the automatic completion was
+      // refused. Either way the seller is offered the list rather than left waiting.
       const amountCandidates = await findRecentIncomingAmountCandidates(payment.id);
-      if (amountCandidates.length) return json({ ok:true, paid:false, candidatePayments:amountCandidates.map(incomingCandidatePayload), message:amountCandidates.length === 1 ? "Till payment found. Ask the customer to confirm the payer name, receipt and amount." : `${amountCandidates.length} Till payments have this exact amount. Ask the customer for the payer name or receipt and choose the correct payment.`, ...(await paymentStatus(checkoutToken)) });
+      if (amountCandidates.length) return json({ ok:true, paid:false, candidatePayments:amountCandidates.map(incomingCandidatePayload), message:amountCandidates.length === 1 ? "A Till payment matching this amount needs checking. Confirm the payer name with the customer." : `${amountCandidates.length} Till payments have this exact amount. Ask the customer for the payer name or receipt and choose the correct payment.`, ...(await paymentStatus(checkoutToken)) });
     }
     if (payment.channel === "ONLINE" && payment.receiptNumber) void requestKnownTransactionStatus(payment.id).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: payment.id, error }));
     if (payment.status === "CANCEL_REQUESTED" && Date.now() - payment.updatedAt.getTime() >= cancellationGraceMs) {
@@ -610,23 +621,39 @@ async function ingestIncomingPayment(incoming: IncomingMpesaPayment, payload: Re
   const [receiptPayment] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.receiptNumber, incoming.receiptNumber)).limit(1);
   let payment: typeof paymentTransactions.$inferSelect | undefined = receiptPayment?.method !== "CASH" ? receiptPayment : undefined;
   if (!payment) {
-    const candidates = await db.select({ payment: paymentTransactions, orderNumber: orders.orderNumber }).from(paymentTransactions).innerJoin(orders, eq(orders.id, paymentTransactions.orderId)).where(and(inArray(paymentTransactions.method, ["MPESA_EXPRESS", "MANUAL_MPESA"]), inArray(paymentTransactions.status, ["INITIATED", "PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "PAID", "FAILED", "CANCELLED"]), gte(paymentTransactions.createdAt, new Date(Date.now() - 24 * 60 * 60_000)))).orderBy(desc(paymentTransactions.createdAt)).limit(200);
-    const amountMatches = candidates.filter((row) =>
-      Math.abs(Number(row.payment.amount) - incoming.amount) <= 0.001 &&
-      (row.payment.status !== "PAID" || row.payment.receiptNumber?.startsWith("STK-")),
-    );
-    const referenceMatches = amountMatches.filter((row) => paymentReferenceMatchesOrder(incoming.accountReference, row.orderNumber));
-    const selected = referenceMatches.length === 1 ? referenceMatches[0] : null;
+    // The database clock decides how recent a payment is, so a drift between the API
+    // host and MySQL cannot quietly shrink the matching window to nothing.
+    const candidateRows = await db.select({
+      payment: paymentTransactions,
+      orderNumber: orders.orderNumber,
+      createdAtUnix: sql<number>`unix_timestamp(${paymentTransactions.createdAt})`,
+      databaseNowUnix: sql<number>`unix_timestamp(current_timestamp)`,
+    }).from(paymentTransactions).innerJoin(orders, eq(orders.id, paymentTransactions.orderId)).where(and(inArray(paymentTransactions.method, ["MPESA_EXPRESS", "MANUAL_MPESA"]), inArray(paymentTransactions.status, ["INITIATED", "PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "PAID", "FAILED", "CANCELLED"]), sql`${paymentTransactions.createdAt} >= date_sub(current_timestamp, interval 24 hour)`)).orderBy(desc(paymentTransactions.createdAt)).limit(200);
+    const now = candidateRows.length ? Number(candidateRows[0].databaseNowUnix) * 1000 : Date.now();
+    const selected = selectPaymentForIncoming({
+      incoming: { receiptNumber: incoming.receiptNumber, amount: incoming.amount, accountReference: incoming.accountReference },
+      now,
+      candidates: candidateRows.map((row) => ({
+        id: row.payment.id,
+        method: row.payment.method,
+        channel: row.payment.channel,
+        status: row.payment.status,
+        amount: row.payment.amount,
+        receiptNumber: row.payment.receiptNumber,
+        createdAt: new Date(Number(row.createdAtUnix) * 1000),
+        orderNumber: row.orderNumber,
+        payment: row.payment,
+      })),
+    });
     payment = selected?.payment;
   }
   if (payment && Math.abs(Number(payment.amount) - incoming.amount) <= 0.001) {
-    if (payment.channel === "POS" && payment.method === "MANUAL_MPESA") {
-      await db.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", resultDescription: "Till payment found; waiting for the seller to confirm the payer identity." }).where(and(eq(paymentTransactions.id, payment.id), inArray(paymentTransactions.status, ["PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "FAILED", "CANCELLED"])));
-    } else {
-      try {
-        await markPaymentPaid(payment.id, { receiptNumber: incoming.receiptNumber, amount: incoming.amount, phone: incoming.phone, providerPayload: { ...payload, healthfieldRecoverySource: source }, incomingPaymentId: incomingId });
-      } catch (error) { console.error("C2B payment match requires review", { transactionId: payment.id, error }); }
-    }
+    // The selector already refused anything ambiguous, so a counter sale that reaches
+    // here has exactly one payment it can belong to and completes on its own. Holding
+    // it for the seller to confirm was the step that left tills waiting.
+    try {
+      await markPaymentPaid(payment.id, { receiptNumber: incoming.receiptNumber, amount: incoming.amount, phone: incoming.phone, providerPayload: { ...payload, healthfieldRecoverySource: source }, incomingPaymentId: incomingId });
+    } catch (error) { console.error("C2B payment match requires review", { transactionId: payment.id, error }); }
   }
   return { incomingId, isNewIncoming };
 }

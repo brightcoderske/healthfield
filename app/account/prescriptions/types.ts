@@ -7,6 +7,10 @@ export type CustomerPrescriptionItem = {
   unitPrice: string | null;
   availability: "PENDING" | "AVAILABLE" | "PARTIALLY_AVAILABLE" | "UNAVAILABLE";
   source: "CUSTOMER_CART" | "PHARMACIST";
+  dispenseRule: "COURSE_BOUND" | "DIVISIBLE";
+  minimumQuantity: number | null;
+  selectedQuantity: number | null;
+  deferred: boolean;
   pharmacistNote: string | null;
 };
 

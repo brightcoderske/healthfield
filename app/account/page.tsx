@@ -119,6 +119,7 @@ export default async function AccountPage() {
       >
         <div>
           <h2>My prescriptions</h2>
+          <Link href="/account/consultations">My consultations</Link>
           <Link href="/prescriptions/upload">Upload another</Link>
         </div>
         <header>

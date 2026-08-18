@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildC2bCallbackUrls, buildPaymentRecoveryCallbackUrls, buildPullTransactionsQueryPayload, buildStkNotificationUrl, buildStkPushPayload, buildTransactionStatusPayload, classifyStkQueryResult, extractMpesaReceipt, isSuccessfulMpesaResponseCode, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, selectIncomingPaymentCandidate, stkBackgroundReconcileDelay, stkReconciliationReference, validDateOrNull, type MpesaConfiguration } from "./mpesa.ts";
+import { buildC2bCallbackUrls, buildPaymentRecoveryCallbackUrls, buildPullTransactionsQueryPayload, buildStkNotificationUrl, buildStkPushPayload, buildTransactionStatusPayload, classifyStkQueryResult, extractMpesaReceipt, isSuccessfulMpesaResponseCode, mpesaPassword, mpesaTimestamp, normalizeKenyanPhone, normalizePaymentReference, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, paymentReferenceMatchesOrder, selectIncomingPaymentCandidate, selectPaymentForIncoming, stkBackgroundReconcileDelay, stkReconciliationReference, validDateOrNull, type MpesaConfiguration } from "./mpesa.ts";
 
 test("normalizes supported Kenyan mobile number formats", () => {
   assert.equal(normalizeKenyanPhone("0712 345 678"), "254712345678");
@@ -107,6 +107,119 @@ test("exact order reference wins when equal-amount Till payments are ambiguous",
     { receiptNumber: "TGH7K2AB92", amount: "2450.00", accountReference: "OTHER", createdAt: now },
   ];
   assert.equal(selectIncomingPaymentCandidate({ amount: 2450, orderNumber: "POS-ME8K-12AB", allowAmountOnly: true, now: now.getTime(), recent })?.receiptNumber, "TGH7K2AB91");
+});
+
+const tillNow = new Date("2026-08-13T12:00:00Z").getTime();
+type Waiting = Parameters<typeof selectPaymentForIncoming>[0]["candidates"][number];
+function counterSale(overrides: Partial<Waiting> = {}): Waiting {
+  return {
+    id: 1,
+    method: "MANUAL_MPESA",
+    channel: "POS",
+    status: "PENDING",
+    amount: "2450.00",
+    receiptNumber: null,
+    createdAt: new Date(tillNow - 4 * 60_000),
+    orderNumber: "POS-ME8K-12AB",
+    ...overrides,
+  };
+}
+function arriving(overrides: Partial<Parameters<typeof selectPaymentForIncoming>[0]["incoming"]> = {}) {
+  return { receiptNumber: "TGH7K2AB91", amount: 2450, accountReference: null, ...overrides };
+}
+
+test("a counter till payment with no reference matches the one sale waiting for that amount", () => {
+  // Buy Goods sends no account reference, so the amount is the only link Safaricom
+  // gives us. This is the case that leaves a seller waiting when it does not work.
+  const selected = selectPaymentForIncoming({ incoming: arriving(), candidates: [counterSale()], now: tillNow });
+  assert.equal(selected?.id, 1);
+});
+
+test("an online order is never matched by amount alone", () => {
+  // Money arriving from a stranger has to be tied to the order by the receipt the
+  // customer pasted, or an unrelated payer quietly settles somebody else's basket.
+  const selected = selectPaymentForIncoming({
+    incoming: arriving(),
+    candidates: [counterSale({ channel: "ONLINE", status: "REQUIRES_REVIEW", orderNumber: "HF-WEB-0001" })],
+    now: tillNow,
+  });
+  assert.equal(selected, null);
+});
+
+test("two counter sales owing the same amount are both left for the seller", () => {
+  const selected = selectPaymentForIncoming({
+    incoming: arriving(),
+    candidates: [counterSale({ id: 1 }), counterSale({ id: 2, orderNumber: "POS-ME8K-99ZZ" })],
+    now: tillNow,
+  });
+  assert.equal(selected, null);
+});
+
+test("an order reference decides between equal amounts, online included", () => {
+  const selected = selectPaymentForIncoming({
+    incoming: arriving({ accountReference: "HF-WEB-0002" }),
+    candidates: [counterSale({ id: 1 }), counterSale({ id: 2, channel: "ONLINE", orderNumber: "HF-WEB-0002" })],
+    now: tillNow,
+  });
+  assert.equal(selected?.id, 2);
+});
+
+test("a seller who typed a different receipt is not credited with an unrelated payment", () => {
+  const selected = selectPaymentForIncoming({
+    incoming: arriving(),
+    candidates: [counterSale({ receiptNumber: "TGH7K2AB99" })],
+    now: tillNow,
+  });
+  assert.equal(selected, null);
+});
+
+test("a typed receipt still matches its own payment", () => {
+  const selected = selectPaymentForIncoming({
+    incoming: arriving(),
+    candidates: [counterSale({ receiptNumber: "TGH7K2AB91" })],
+    now: tillNow,
+  });
+  assert.equal(selected?.id, 1);
+});
+
+test("a stale sale is not matched by amount alone", () => {
+  const selected = selectPaymentForIncoming({
+    incoming: arriving(),
+    candidates: [counterSale({ createdAt: new Date(tillNow - 90 * 60_000) })],
+    now: tillNow,
+  });
+  assert.equal(selected, null);
+});
+
+test("an already paid sale is never paid twice by an arriving till payment", () => {
+  const selected = selectPaymentForIncoming({
+    incoming: arriving(),
+    candidates: [counterSale({ status: "PAID", receiptNumber: "TGH7K2AB55" })],
+    now: tillNow,
+  });
+  assert.equal(selected, null);
+});
+
+test("a settled STK payment still collects its real receipt from the notification", () => {
+  // The STK callback marks the payment paid against a placeholder receipt; the C2B
+  // notification that follows carries the real one and must still land on it.
+  const selected = selectPaymentForIncoming({
+    incoming: arriving({ accountReference: "POS-ME8K-12AB" }),
+    candidates: [counterSale({ method: "MPESA_EXPRESS", status: "PAID", receiptNumber: "STK-123" })],
+    now: tillNow,
+  });
+  assert.equal(selected?.id, 1);
+});
+
+test("an STK payment is not amount-matched by a stray till payment", () => {
+  // Without a reference there is nothing tying this money to an STK sale, and STK has
+  // its own callback; guessing here would credit a prompt nobody answered.
+  const selected = selectPaymentForIncoming({
+    incoming: arriving(),
+    candidates: [counterSale({ method: "MPESA_EXPRESS" })],
+    now: tillNow,
+  });
+  assert.equal(selected, null);
 });
 
 test("builds the documented Buy Goods STK request shape", () => {

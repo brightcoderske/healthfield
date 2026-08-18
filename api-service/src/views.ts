@@ -22,6 +22,8 @@ import {
   categories,
   chatConversations,
   chatMessages,
+  consultationMessages,
+  consultations,
   healthConditions,
   offerItems,
   offers,
@@ -41,6 +43,8 @@ import {
   users,
 } from "../../db/schema";
 import { requireSession, type Session } from "./auth";
+import { handleConsultationThread } from "./consultations";
+import { googleMapsConfigured, loadDeliveryConfiguration } from "./delivery";
 import { getDb } from "./db";
 import { json, publicImageUrl } from "./http";
 import {
@@ -77,6 +81,60 @@ const searchProductCard = {
   shortDescription: products.shortDescription,
   description: products.description,
 };
+
+async function consultationQueue() {
+  const db = getDb();
+  const [rows, unread] = await Promise.all([
+    db
+      .select({
+        id: consultations.id,
+        reference: consultations.reference,
+        customerId: consultations.customerId,
+        customerName: sql<string | null>`trim(concat(${users.firstName}, ' ', ${users.lastName}))`,
+        customerEmail: users.email,
+        customerPhone: users.phone,
+        status: consultations.status,
+        outcome: consultations.outcome,
+        concern: consultations.concern,
+        callbackRequested: consultations.callbackRequested,
+        callbackPhone: consultations.callbackPhone,
+        prescriptionId: consultations.prescriptionId,
+        assignedTo: consultations.assignedTo,
+        prescriberName: consultations.prescriberName,
+        professionalNotes: consultations.professionalNotes,
+        reviewVersion: consultations.reviewVersion,
+        lastMessageAt: consultations.lastMessageAt,
+        createdAt: consultations.createdAt,
+      })
+      .from(consultations)
+      .leftJoin(users, eq(users.id, consultations.customerId))
+      .orderBy(desc(consultations.lastMessageAt)),
+    db
+      .select({ consultationId: consultationMessages.consultationId, total: count() })
+      .from(consultationMessages)
+      .where(and(eq(consultationMessages.senderRole, "CUSTOMER"), eq(consultationMessages.readByProfessional, false)))
+      .groupBy(consultationMessages.consultationId),
+  ]);
+  // The prescriber picks medicines from the same active catalogue the dispensing
+  // pharmacist prices from, so an issued prescription can never name a dead product.
+  const catalogue = await db
+    .select({
+      id: products.id,
+      name: products.name,
+      packSize: products.packSize,
+      prescriptionRequired: products.prescriptionRequired,
+    })
+    .from(products)
+    .where(eq(products.isActive, true))
+    .orderBy(asc(products.name));
+  return {
+    consultations: rows.map((row) => ({
+      ...row,
+      unread: Number(unread.find((entry) => entry.consultationId === row.id)?.total || 0),
+    })),
+    products: catalogue,
+  };
+}
 
 async function prescriptionQueue() {
   const db = getDb();
@@ -478,6 +536,8 @@ function idsFrom(url: URL) {
     .slice(0, 100);
 }
 
+export const SEARCH_RESULT_LIMIT = 250;
+
 function searchTerms(value: string) {
   return value
     .toLowerCase()
@@ -608,10 +668,10 @@ async function orderListRows() {
   const orderRows = await db
     .select()
     .from(orders)
-    .orderBy(
-      sql`case when ${orders.status}='NEW' then 0 when ${orders.status} in ('CONFIRMED','UNDER_REVIEW') then 1 else 2 end`,
-      desc(orders.createdAt),
-    );
+    // Newest first, full stop. The queue used to float NEW and under-review orders to
+    // the top, which meant a just-placed order could appear below older ones and staff
+    // had to hunt for it; the status filters above the table already do that job.
+    .orderBy(desc(orders.createdAt));
   const paymentRows = orderRows.length
     ? await db.select({ orderId: paymentTransactions.orderId, channel: paymentTransactions.channel }).from(paymentTransactions).where(inArray(paymentTransactions.orderId, orderRows.map((order) => order.id))).orderBy(desc(paymentTransactions.createdAt))
     : [];
@@ -827,7 +887,7 @@ export async function handleView(request: Request, path: string) {
         .from(products)
         .where(and(eq(products.isActive, true), ...matching))
         .orderBy(desc(products.isFeatured), desc(products.createdAt))
-        .limit(50),
+        .limit(SEARCH_RESULT_LIMIT + 1),
       db
         .select(searchProductCard)
         .from(products)
@@ -835,6 +895,8 @@ export async function handleView(request: Request, path: string) {
         .orderBy(desc(products.isFeatured), desc(products.createdAt))
         .limit(12),
     ]);
+    const capped = exact.length > SEARCH_RESULT_LIMIT;
+    if (capped) exact.length = SEARCH_RESULT_LIMIT;
     const all = [...exact, ...alternatives];
     const productIds = [...new Set(all.map((product) => product.id))];
     const [mappings, ratings] = productIds.length
@@ -887,6 +949,7 @@ export async function handleView(request: Request, path: string) {
     return json(
       {
         products: shape(exact),
+        capped,
         similar: shape(
           alternatives
             .filter((product) => !exactIds.has(product.id))
@@ -1098,6 +1161,28 @@ export async function handleView(request: Request, path: string) {
       },
     });
   }
+  if (path === "consultations") {
+    const auth = await requireSession(request, ["CUSTOMER"]);
+    if ("response" in auth) return auth.response;
+    const rows = await getDb()
+      .select({
+        id: consultations.id,
+        reference: consultations.reference,
+        status: consultations.status,
+        outcome: consultations.outcome,
+        concern: consultations.concern,
+        callbackRequested: consultations.callbackRequested,
+        prescriptionId: consultations.prescriptionId,
+        lastMessageAt: consultations.lastMessageAt,
+        createdAt: consultations.createdAt,
+      })
+      .from(consultations)
+      .where(eq(consultations.customerId, auth.session.userId))
+      .orderBy(desc(consultations.createdAt));
+    return json({ consultations: rows });
+  }
+  const consultationDetail = path.match(/^consultation\/(\d+)$/);
+  if (consultationDetail) return handleConsultationThread(request, Number(consultationDetail[1]));
   if (path === "checkout") {
     const ids = idsFrom(url);
     const auth = await requireSession(request);
@@ -1136,10 +1221,18 @@ export async function handleView(request: Request, path: string) {
     const liveOffers = (await loadLiveOffers())
       .filter(isBundle)
       .map(offerPayload);
+    const deliveryConfiguration = await loadDeliveryConfiguration();
     return json({
       catalog: images(catalog),
       offers: liveOffers,
       customer: customer ?? null,
+      // The customer must pin a location before a delivery fee exists at all, so the
+      // form needs to know whether distance pricing is live before it renders.
+      delivery: {
+        distancePricing: deliveryConfiguration.settings.enabled,
+        flatFee: deliveryConfiguration.settings.fallbackFee,
+        freeDeliveryThreshold: deliveryConfiguration.settings.freeDeliveryThreshold,
+      },
       payment: {
         onlineMpesaEnabled: Boolean(
           settings?.onlineMpesaEnabled &&
@@ -1210,8 +1303,13 @@ export async function handleView(request: Request, path: string) {
     const db = getDb();
     const view = path.slice(6);
     if (view === "navigation") {
-      const [[{ newOrders }], [{ newChats }], [{ unmatchedPayments }]] =
-        await Promise.all([
+      const [
+        [{ newOrders }],
+        [{ newChats }],
+        [{ unmatchedPayments }],
+        [{ pendingPrescriptions }],
+        [{ pendingConsultations }],
+      ] = await Promise.all([
           db
             .select({ newOrders: count() })
             .from(orders)
@@ -1229,11 +1327,27 @@ export async function handleView(request: Request, path: string) {
             .select({ unmatchedPayments: count() })
             .from(mpesaIncomingPayments)
             .where(isNull(mpesaIncomingPayments.matchedTransactionId)),
+          db
+            .select({ pendingPrescriptions: count() })
+            .from(prescriptions)
+            .where(
+              inArray(prescriptions.status, [
+                "RECEIVED",
+                "UNDER_REVIEW",
+                "MORE_INFORMATION_REQUIRED",
+              ]),
+            ),
+          db
+            .select({ pendingConsultations: count() })
+            .from(consultations)
+            .where(ne(consultations.status, "CLOSED")),
         ]);
       return json({
         newOrders: Number(newOrders),
         newChats: Number(newChats),
         unmatchedPayments: Number(unmatchedPayments),
+        pendingPrescriptions: Number(pendingPrescriptions),
+        pendingConsultations: Number(pendingConsultations),
       });
     }
     if (view === "dashboard") {
@@ -1474,6 +1588,7 @@ export async function handleView(request: Request, path: string) {
       });
     }
     if (view === "prescriptions") return json(await prescriptionQueue());
+    if (view === "consultations") return json(await consultationQueue());
     if (view === "campaigns")
       return json({
         campaigns: await db
@@ -1652,6 +1767,32 @@ export async function handleView(request: Request, path: string) {
         settings: (await db.select().from(siteSettings).limit(1))[0] ?? null,
         paymentRuntime: paymentConfigurationSummary(),
       });
+    if (view === "delivery") {
+      // Branches are returned whether or not they carry a pin: an unpinned branch is
+      // the single most common reason distance pricing silently falls back to a flat
+      // fee, so the screen has to show it rather than hide it.
+      const [{ settings, bands }, branchRows] = await Promise.all([
+        loadDeliveryConfiguration(),
+        db
+          .select({
+            id: branches.id,
+            name: branches.name,
+            code: branches.code,
+            address: branches.address,
+            latitude: branches.latitude,
+            longitude: branches.longitude,
+            isActive: branches.isActive,
+          })
+          .from(branches)
+          .orderBy(asc(branches.name)),
+      ]);
+      return json({
+        settings,
+        bands,
+        branches: branchRows,
+        routing: { googleConfigured: googleMapsConfigured() },
+      });
+    }
     if (view === "offers") {
       // Every offer regardless of state, so an administrator can revive an expired one.
       const [offerRows, memberRows, catalogue] = await Promise.all([
@@ -1844,7 +1985,13 @@ export async function handleView(request: Request, path: string) {
       auth.session,
       "PRESCRIPTIONS_VIEW",
     );
-    const [[{ newOrders }], [{ pendingPrescriptions }]] = await Promise.all([
+    // Consultations are counted only for people allowed to open them, so a badge
+    // never hints at work a staff member cannot see.
+    const canViewConsultations = sessionHasPermission(
+      auth.session,
+      "CONSULTATIONS_VIEW",
+    );
+    const [[{ newOrders }], [{ pendingPrescriptions }], [{ pendingConsultations }]] = await Promise.all([
       canViewOrders
         ? getDb()
             .select({ newOrders: count() })
@@ -1863,10 +2010,17 @@ export async function handleView(request: Request, path: string) {
               ]),
             )
         : Promise.resolve([{ pendingPrescriptions: 0 }]),
+      canViewConsultations
+        ? getDb()
+            .select({ pendingConsultations: count() })
+            .from(consultations)
+            .where(ne(consultations.status, "CLOSED"))
+        : Promise.resolve([{ pendingConsultations: 0 }]),
     ]);
     return json({
       newOrders: Number(newOrders),
       pendingPrescriptions: Number(pendingPrescriptions),
+      pendingConsultations: Number(pendingConsultations),
       branch: auth.branch,
       permissions: auth.session.permissions,
     });
@@ -2058,6 +2212,11 @@ export async function handleView(request: Request, path: string) {
     const auth = await requireTeamPermission(request, "PRESCRIPTIONS_VIEW");
     if ("response" in auth) return auth.response;
     return json(await prescriptionQueue());
+  }
+  if (path === "staff/consultations") {
+    const auth = await requireTeamPermission(request, "CONSULTATIONS_VIEW");
+    if ("response" in auth) return auth.response;
+    return json(await consultationQueue());
   }
   if (path === "walk-in-sale") {
     const auth = await requireTeamPermission(request, "POS_USE");

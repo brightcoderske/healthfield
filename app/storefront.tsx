@@ -25,6 +25,7 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { ConsultBanner } from "./consult-banner";
 import { ProductCard } from "./product-card";
 import {
   CatalogueInterruption,
@@ -57,7 +58,7 @@ type CatalogCategory = {
   featuredOnStorefront?: boolean;
 };
 type HealthCondition = { id: number; name: string; slug: string };
-type SearchPayload = { products: CatalogProduct[]; similar: CatalogProduct[] };
+type SearchPayload = { products: CatalogProduct[]; similar: CatalogProduct[]; capped?: boolean };
 
 const searchCache = new Map<string, SearchPayload>();
 
@@ -371,7 +372,7 @@ export function Storefront({
       const target = section?.querySelector<HTMLElement>(".approved-title") || section;
       if (!target) return;
       const stickyBottom = Array.from(
-        document.querySelectorAll<HTMLElement>(".desktop-store, .approved-topbar"),
+        document.querySelectorAll<HTMLElement>(".desktop-store, .approved-topbar, .rx-search-row"),
       ).reduce((bottom, header) => {
         const bounds = header.getBoundingClientRect();
         return bounds.height > 0 ? Math.max(bottom, bounds.bottom) : bottom;
@@ -604,6 +605,7 @@ export function Storefront({
               <Search />
             </button>
           </label>
+          <ConsultBanner />
           <a
             className="desktop-help"
             href={
@@ -628,6 +630,7 @@ export function Storefront({
             Home
           </Link>
           <a href="/prescriptions/upload">Upload prescription</a>
+          <a href="/prescriptions/consult">Get a prescription</a>
           <div
             className={`desktop-nav-dropdown${openMenu === "category" ? " is-open" : ""}`}
             data-nav-menu="category"
@@ -726,7 +729,10 @@ export function Storefront({
               placeholder="Search products"
             />
           </label>
+          <ConsultBanner />
           <Link href="/">Home</Link>
+          <Link href="/prescriptions/consult">Get a prescription</Link>
+          <Link href="/prescriptions/upload">Upload prescription</Link>
           <Link href="/blog">Blogs &amp; health guide</Link>
           <details>
             <summary>
@@ -982,21 +988,24 @@ export function Storefront({
             </button>
           </aside>
         )}
-        <label className="approved-search">
-          <Search />
-          <input
-            value={query}
-            onChange={(event) => updateSearchQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                viewSearchResults();
-              }
-            }}
-            placeholder="Search products, categories..."
-            aria-label="Search products and categories"
-          />
-        </label>
+        <div className="rx-search-row">
+          <label className="approved-search">
+            <Search />
+            <input
+              value={query}
+              onChange={(event) => updateSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  viewSearchResults();
+                }
+              }}
+              placeholder="Search products, categories..."
+              aria-label="Search products and categories"
+            />
+          </label>
+          <ConsultBanner />
+        </div>
 
         {!query.trim() && (
           <section className="approved-section" id="conditions">
@@ -1056,7 +1065,9 @@ export function Storefront({
               <small>
                 {searching
                   ? "Searching the catalogue…"
-                  : "Search by product, brand or health need"}
+                  : normalizedQuery
+                    ? `${filtered.length} ${filtered.length === 1 ? "match" : "matches"} across the whole catalogue${activeSearchResults?.capped ? " — refine your words to narrow this down" : ""}`
+                    : "Search by product, brand or health need"}
               </small>
             </div>
           </div>
@@ -1200,6 +1211,10 @@ export function Storefront({
                   : "Contact the pharmacy"}
               </small>
             </span>
+          </a>
+          <ConsultBanner />
+          <a href="/prescriptions/consult">
+            <Stethoscope /> Get a Prescription
           </a>
           <a href="/prescriptions/upload">
             <Upload /> Upload Prescription

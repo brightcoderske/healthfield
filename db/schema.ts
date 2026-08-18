@@ -140,6 +140,12 @@ export const orders = mysqlTable("orders", {
   discount: decimal("discount", { precision: 12, scale: 2 }).default("0").notNull(),
   total: decimal("total", { precision: 12, scale: 2 }).notNull(),
   suggestedBranchId: int("suggested_branch_id").references(() => branches.id),
+  // What the delivery fee was actually derived from, kept so a dispute can be settled
+  // and so re-pricing after a branch reassignment has something to compare against.
+  deliveryDistanceKm: decimal("delivery_distance_km", { precision: 6, scale: 2 }),
+  deliveryDurationMinutes: int("delivery_duration_minutes"),
+  deliveryBandId: int("delivery_band_id").references(() => deliveryBands.id),
+  deliveryCourier: varchar("delivery_courier", { length: 120 }),
   ...timestamps,
 }, (table) => [
   uniqueIndex("orders_number_unique").on(table.orderNumber),
@@ -256,6 +262,15 @@ export const prescriptionRequestItems = mysqlTable("prescription_request_items",
   unitPrice: decimal("unit_price", { precision: 12, scale: 2 }),
   availability: mysqlEnum("availability", ["PENDING", "AVAILABLE", "PARTIALLY_AVAILABLE", "UNAVAILABLE"]).default("PENDING").notNull(),
   source: mysqlEnum("source", ["CUSTOMER_CART", "PHARMACIST"]).default("PHARMACIST").notNull(),
+  // Whether the patient may pay for part of this line now and the rest later. The
+  // safe default is the strict one: a line is a full course unless a pharmacist has
+  // deliberately said otherwise.
+  dispenseRule: mysqlEnum("dispense_rule", ["COURSE_BOUND", "DIVISIBLE"]).default("COURSE_BOUND").notNull(),
+  minimumQuantity: int("minimum_quantity"),
+  // The patient's choice for this purchase. The prescription itself is never edited:
+  // a deferred line stays on it and can be bought later without a new consultation.
+  selectedQuantity: int("selected_quantity"),
+  deferred: boolean("deferred").default(false).notNull(),
   pharmacistNote: text("pharmacist_note"),
   ...timestamps,
 }, (table) => [
@@ -313,9 +328,42 @@ export const siteSettings = mysqlTable("site_settings", {
   posManualEnabled: boolean("pos_manual_enabled").default(true).notNull(),
   mpesaTillNumber: varchar("mpesa_till_number", { length: 30 }),
   mpesaAccountName: varchar("mpesa_account_name", { length: 150 }),
+  // Distance-based delivery. The bands themselves live in delivery_bands; these are
+  // the shop-wide rules that sit around them.
+  deliveryPricingEnabled: boolean("delivery_pricing_enabled").default(false).notNull(),
+  deliveryMaxRadiusKm: decimal("delivery_max_radius_km", { precision: 6, scale: 2 }),
+  deliveryOutsideCoverage: mysqlEnum("delivery_outside_coverage", ["BLOCK", "CUSTOM_FEE"]).default("BLOCK").notNull(),
+  deliveryOutsideFee: decimal("delivery_outside_fee", { precision: 12, scale: 2 }),
+  // Straight-line distance under-reports what a rider actually travels. When Google
+  // routing is unavailable the haversine result is multiplied by this instead.
+  deliveryDetourFactor: decimal("delivery_detour_factor", { precision: 4, scale: 2 }).default("1.30").notNull(),
+  deliveryUseRoadDistance: boolean("delivery_use_road_distance").default(true).notNull(),
+  deliveryFallbackFee: decimal("delivery_fallback_fee", { precision: 12, scale: 2 }).default("250").notNull(),
   updatedBy: int("updated_by").references(() => users.id),
   ...timestamps,
 });
+
+/**
+ * Delivery pricing bands, ordered outwards from the fulfilling branch.
+ *
+ * Bands are half-open (min inclusive, max exclusive) so 0-3 and 3-6 never both claim
+ * 3 km; lib/delivery-pricing.ts owns that rule and is what actually prices an order.
+ */
+export const deliveryBands = mysqlTable("delivery_bands", {
+  id: int("id").autoincrement().primaryKey(),
+  label: varchar("label", { length: 120 }).notNull(),
+  minKm: decimal("min_km", { precision: 6, scale: 2 }).notNull(),
+  maxKm: decimal("max_km", { precision: 6, scale: 2 }).notNull(),
+  fee: decimal("fee", { precision: 12, scale: 2 }).notNull(),
+  // Null inherits the shop-wide threshold; a value here overrides it for this band.
+  freeAboveSubtotal: decimal("free_above_subtotal", { precision: 12, scale: 2 }),
+  freeDeliveryEligible: boolean("free_delivery_eligible").default(true).notNull(),
+  // Set when an external courier runs this distance instead of a Healthfield rider.
+  courier: varchar("courier", { length: 120 }),
+  displayOrder: int("display_order").default(0).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  ...timestamps,
+}, (table) => [index("delivery_bands_order_idx").on(table.displayOrder, table.minKm)]);
 
 export const twoFactorChallenges = mysqlTable("two_factor_challenges", {
   id: int("id").autoincrement().primaryKey(),
@@ -488,3 +536,53 @@ export const campaigns = mysqlTable("campaigns", {
   sentAt: timestamp("sent_at"),
   ...timestamps,
 }, (table) => [index("campaign_status_idx").on(table.status, table.createdAt)]);
+
+// A consultation is a request for a prescription the customer does not yet hold.
+// It is deliberately kept in its own tables: the existing prescriptions pipeline
+// assumes a document exists from the moment the row is created, so a consultation
+// only joins that pipeline once a prescriber has issued an actual prescription
+// (see consultations.prescriptionId), leaving the upload flow untouched.
+export const consultations = mysqlTable("consultations", {
+  id: int("id").autoincrement().primaryKey(),
+  reference: varchar("reference", { length: 40 }).notNull(),
+  customerId: int("customer_id").notNull().references(() => users.id),
+  status: mysqlEnum("status", ["NEW", "UNDER_REVIEW", "MORE_INFORMATION_REQUIRED", "CONSULTATION_IN_PROGRESS", "CLOSED"]).default("NEW").notNull(),
+  // Outcome carries a PENDING member rather than being nullable so that neither
+  // the queue filters nor this production database have to reason about NULL.
+  outcome: mysqlEnum("outcome", ["PENDING", "PRESCRIPTION_ISSUED", "OTC_RECOMMENDED", "REFERRAL_REQUIRED", "NO_ACTION_REQUIRED"]).default("PENDING").notNull(),
+  concern: text("concern").notNull(),
+  callbackRequested: boolean("callback_requested").default(false).notNull(),
+  callbackPhone: varchar("callback_phone", { length: 30 }),
+  prescriptionId: int("prescription_id").references(() => prescriptions.id, { onDelete: "set null" }),
+  assignedTo: int("assigned_to").references(() => users.id, { onDelete: "set null" }),
+  // Captured as attested at the moment of issue rather than read from the staff
+  // profile, so the audit trail survives the prescriber later editing their account.
+  prescriberName: varchar("prescriber_name", { length: 200 }),
+  prescriberRegistration: varchar("prescriber_registration", { length: 60 }),
+  professionalNotes: text("professional_notes"),
+  reviewVersion: int("review_version").default(0).notNull(),
+  lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("consultations_reference_unique").on(table.reference),
+  index("consultations_review_queue_idx").on(table.status, table.createdAt),
+  index("consultations_customer_idx").on(table.customerId, table.id),
+]);
+
+// Read state is kept as two flags rather than nullable "read at" timestamps: this
+// database coerces nullable TIMESTAMP columns into NOT NULL zero dates, which has
+// silently broken a feature here before.
+export const consultationMessages = mysqlTable("consultation_messages", {
+  id: int("id").autoincrement().primaryKey(),
+  consultationId: int("consultation_id").notNull().references(() => consultations.id, { onDelete: "cascade" }),
+  senderId: int("sender_id").notNull().references(() => users.id),
+  senderRole: mysqlEnum("sender_role", ["CUSTOMER", "PROFESSIONAL"]).notNull(),
+  message: text("message").notNull(),
+  attachmentKey: varchar("attachment_key", { length: 500 }),
+  attachmentName: varchar("attachment_name", { length: 255 }),
+  attachmentMime: varchar("attachment_mime", { length: 100 }),
+  attachmentSize: int("attachment_size"),
+  readByCustomer: boolean("read_by_customer").default(false).notNull(),
+  readByProfessional: boolean("read_by_professional").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [index("consultation_messages_thread_idx").on(table.consultationId, table.createdAt)]);

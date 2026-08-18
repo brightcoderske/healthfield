@@ -1,9 +1,10 @@
 "use client";
 
-import { FileUp, X } from "lucide-react";
+import { FileUp, Stethoscope, X } from "lucide-react";
 import Link from "next/link";
 import { createPortal } from "react-dom";
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { CONSULT_PATH } from "./consult-banner";
 import { prescriptionUploadHref, type PrescriptionSelection } from "@/lib/prescription-selection";
 import styles from "./prescription-add-button.module.css";
 
@@ -20,9 +21,9 @@ export function PrescriptionAddButton({ items, className, children, ariaLabel }:
     const place = () => {
       const rect = trigger.current?.getBoundingClientRect();
       if (!rect) return;
-      const width = Math.min(320, window.innerWidth - 20);
+      const width = Math.min(340, window.innerWidth - 20);
       const left = Math.max(10, Math.min(window.innerWidth - width - 10, rect.left + rect.width / 2 - width / 2));
-      setPosition(rect.top >= 280
+      setPosition(rect.top >= 340
         ? { width, left, bottom:window.innerHeight - rect.top + 10 }
         : { width, left, top:rect.bottom + 10 });
     };
@@ -42,10 +43,15 @@ export function PrescriptionAddButton({ items, className, children, ariaLabel }:
   const popover = open && typeof document !== "undefined" ? createPortal(<div className={styles.backdrop} role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
       <section className={styles.dialog} style={position} role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <button ref={closeButton} className={styles.close} type="button" onClick={() => setOpen(false)} aria-label="Close prescription notice"><X/></button>
-        <p className={styles.message} id={titleId}>A doctor&apos;s prescription is required to buy <strong>{items.length === 1 ? items[0]?.name || "this medicine" : "these medicines"}</strong>. It stays outside your cart until pharmacist review.</p>
+        <p className={styles.message} id={titleId}>
+          <strong>{items.length === 1 ? items[0]?.name || "This medicine" : "These medicines"}</strong> need a prescription before we can dispense {items.length === 1 ? "it" : "them"}. Choose the option that fits you — either way we take it from here.
+        </p>
+        <div className="rx-route-choice">
+          <Link href={uploadHref}><FileUp/><span><strong>Upload prescription</strong><small>You already have one from a doctor.</small></span></Link>
+          <Link className="rx-route-primary" href={CONSULT_PATH}><Stethoscope/><span><strong>Get a prescription</strong><small>Consult a healthcare professional first.</small></span></Link>
+        </div>
         <div className={styles.actions}>
-          <Link href={uploadHref}><FileUp/> Upload prescription</Link>
-          <button type="button" onClick={() => setOpen(false)}>Exclude &amp; continue</button>
+          <button type="button" onClick={() => setOpen(false)}>Back to shopping</button>
         </div>
       </section>
     </div>, document.body) : null;

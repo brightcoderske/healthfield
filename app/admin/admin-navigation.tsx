@@ -1,19 +1,26 @@
 "use client";
 
-import { Boxes, ClipboardList, LayoutDashboard, Pill } from "lucide-react";
+import { Bell, BellOff, Boxes, ClipboardList, LayoutDashboard, Pill } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { adminNavGroups } from "./admin-nav-items";
 import { AdminMobileMenu } from "./admin-mobile-menu";
+import { useLiveCounts, type NavigationCounts } from "../use-live-counts";
 
 function active(path: string, href: string) {
   return href === "/admin" ? path === href : path.startsWith(href);
 }
 
-export function AdminNavigation({ firstName, role, counts }: { firstName: string; role: string; counts: { newOrders: number; newChats: number; unmatchedPayments?: number } }) {
+export function AdminNavigation({ firstName, role, counts: initialCounts }: { firstName: string; role: string; counts: NavigationCounts }) {
   const path = usePathname();
-  const badge = (href: string) => href === "/admin/orders" ? counts.newOrders : href === "/admin/chats" ? counts.newChats : href === "/admin/unmatched-payments" ? counts.unmatchedPayments || 0 : 0;
+  const { counts, muted, toggleMute } = useLiveCounts(initialCounts, "/api/notifications/admin");
+  const badge = (href: string) => href === "/admin/orders" ? counts.newOrders
+    : href === "/admin/chats" ? counts.newChats || 0
+    : href === "/admin/unmatched-payments" ? counts.unmatchedPayments || 0
+    : href === "/admin/prescriptions" ? counts.pendingPrescriptions || 0
+    : href === "/admin/consultations" ? counts.pendingConsultations || 0
+    : 0;
   return <>
     <aside className="admin-sidebar">
       <Link prefetch={false} className="admin-brand" href="/admin"><Image src="/healthfield-logo-clean.png" alt="Healthfield Pharmacy" width={230} height={90}/></Link>
@@ -22,6 +29,9 @@ export function AdminNavigation({ firstName, role, counts }: { firstName: string
         {group.items.map(([href, label, Icon]) => <Link prefetch={false} className={active(path, href) ? "active" : ""} href={href} key={href}><Icon/>{label}{badge(href) > 0 ? <b>{badge(href)}</b> : null}</Link>)}
       </section>)}</nav>
       <div className="admin-user"><span>{firstName.slice(0, 1)}</span><div><strong>{firstName}</strong><small>{role.replace("_", " ")}</small></div></div>
+      <button className="rx-alert-toggle" type="button" onClick={toggleMute} aria-pressed={!muted}>
+        {muted ? <BellOff/> : <Bell/>}{muted ? "Alert sound off" : "Alert sound on"}
+      </button>
       <form className="admin-sidebar-logout" action="/api/auth/logout" method="post"><button>Log out</button></form>
     </aside>
     <nav className="admin-mobile-nav">

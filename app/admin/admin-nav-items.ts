@@ -1,4 +1,4 @@
-import { Activity, BookOpen, Boxes, Building2, ClipboardList, History, Megaphone, Percent, LayoutDashboard, LayoutList, MessageSquareText, Pill, Settings, ShieldCheck, ShoppingBasket, UserCog, Users, WalletCards } from "lucide-react";
+import { Activity, BookOpen, Stethoscope, Boxes, Building2, ClipboardList, History, Megaphone, Percent, LayoutDashboard, LayoutList, MessageSquareText, Pill, Route, Settings, ShieldCheck, ShoppingBasket, UserCog, Users, WalletCards } from "lucide-react";
 
 export const adminNavGroups = [
   { label: "Daily operations", items: [
@@ -8,6 +8,7 @@ export const adminNavGroups = [
     ["/admin/orders", "Orders", ClipboardList],
     ["/admin/past-orders", "Past orders", History],
     ["/admin/prescriptions", "Prescriptions", ShieldCheck],
+    ["/admin/consultations", "Consultations", Stethoscope],
     ["/admin/chats", "Chats", MessageSquareText],
   ] },
   { label: "Stock and catalogue", items: [
@@ -24,6 +25,7 @@ export const adminNavGroups = [
     ["/admin/blogs", "Blogs", BookOpen],
   ] },
   { label: "Administration", items: [
+    ["/admin/delivery", "Delivery pricing", Route],
     ["/admin/staff", "Staff", UserCog],
     ["/admin/activity", "Activity log", Activity],
     ["/admin/settings", "Settings", Settings],

@@ -23,6 +23,9 @@ type Data = {
     deliveryArea: string | null;
     deliveryLatitude: string | null;
     deliveryLongitude: string | null;
+    deliveryFee: string;
+    deliveryDistanceKm: string | null;
+    deliveryCourier: string | null;
     total: string;
   };
   items: Array<{ id: number; productId: number | null; productName: string; quantity: number; unitPrice: string; lineTotal: string }>;

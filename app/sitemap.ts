@@ -3,7 +3,7 @@ import { backendPublicJson } from "@/lib/backend-api";
 
 export default async function sitemap():Promise<MetadataRoute.Sitemap>{
   const origin=(process.env.APP_URL||"https://healthfieldpharmacy.co.ke").replace(/\/$/,"");
-  const staticPaths=["","/about","/contact","/faq","/conditions","/prescriptions/upload","/shipping-policy","/returns-policy","/privacy-policy","/terms","/blog","/pharmacy/juja","/pharmacy/nairobi-cbd","/pharmacy/nairobi","/pharmacy/thika","/pharmacy/kahawa-west","/pharmacy/thika-road"];
+  const staticPaths=["","/about","/contact","/faq","/conditions","/prescriptions/upload","/prescriptions/consult","/shipping-policy","/returns-policy","/privacy-policy","/terms","/blog","/pharmacy/juja","/pharmacy/nairobi-cbd","/pharmacy/nairobi","/pharmacy/thika","/pharmacy/kahawa-west","/pharmacy/thika-road"];
   let products:Array<{id:number;updatedAt:string}>=[],posts:Array<{slug:string;updatedAt:string}>=[],stores:Array<{name:string;code:string;updatedAt:string}>=[];
   try{[products,posts,stores]=await Promise.all([backendPublicJson<{products:Array<{id:number;updatedAt:string}>}>("/v1/views/sitemap",300).then(value=>value.products),backendPublicJson<{posts:Array<{slug:string;updatedAt:string}>}>("/v1/views/blogs",300).then(value=>value.posts),backendPublicJson<{stores:Array<{name:string;code:string;updatedAt:string}>}>("/v1/views/locations",300).then(value=>value.stores)]);}catch{}
   const slug=(value:string)=>value.toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");

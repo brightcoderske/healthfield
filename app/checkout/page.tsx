@@ -26,6 +26,11 @@ type Data = {
     tillNumber: string | null;
     accountName: string | null;
   };
+  delivery: {
+    distancePricing: boolean;
+    flatFee: number;
+    freeDeliveryThreshold: number | null;
+  };
 };
 export default async function CheckoutPage() {
   const jar = await cookies();
@@ -48,6 +53,7 @@ export default async function CheckoutPage() {
       initialOffers={offers}
       customer={data.customer}
       payment={data.payment}
+      delivery={data.delivery}
     />
   );
 }

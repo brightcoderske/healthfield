@@ -2,7 +2,7 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import { KeyRound, Plus, Search, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
-import { DEFAULT_STAFF_PERMISSIONS, STAFF_PERMISSION_GROUPS, type StaffPermission } from "@/lib/staff-permissions";
+import { DEFAULT_STAFF_PERMISSIONS, STAFF_PERMISSION_GROUPS, STAFF_PERMISSION_VALUES, type StaffPermission } from "@/lib/staff-permissions";
 
 type Store = { id:number; name:string };
 type Staff = { id:number; firstName:string; lastName:string; email:string; phone:string|null; role:"STAFF"|"ADMIN"|"SUPER_ADMIN"; homeBranchId:number|null; isActive:boolean; twoFactorEnabled:boolean; permissions:StaffPermission[] };
@@ -86,10 +86,10 @@ export function StaffManager({ initialStaff, stores, canManageAdmins }: { initia
 
     {permissionsEditing?<div className="staff-permissions-modal" onClick={()=>!permissionSaving&&setPermissionsEditing(null)}><section role="dialog" aria-modal="true" aria-labelledby="staff-permissions-title" onClick={(event)=>event.stopPropagation()}>
       <header><div><small>Operational access</small><h2 id="staff-permissions-title">{permissionsEditing.firstName} {permissionsEditing.lastName} roles</h2><p>{permissionsEditing.email} · {stores.find((store)=>store.id===permissionsEditing.homeBranchId)?.name||"No assigned shop"}</p></div><button type="button" onClick={()=>setPermissionsEditing(null)} aria-label="Close roles"><X/></button></header>
-      <div className="staff-permissions-summary"><strong>{permissionDraft.length} of {DEFAULT_STAFF_PERMISSIONS.length} permissions selected</strong><span>Tabs appear only when their view permission is enabled. Every protected action is also checked by the API.</span></div>
+      <div className="staff-permissions-summary"><strong>{permissionDraft.length} of {STAFF_PERMISSION_VALUES.length} permissions selected</strong><span>Tabs appear only when their view permission is enabled. Every protected action is also checked by the API.</span></div>
       <div className="staff-permissions-grid">{STAFF_PERMISSION_GROUPS.map((group)=><fieldset key={group.label}><legend>{group.label}</legend>{group.permissions.map((permission)=><label key={permission.value}><input type="checkbox" checked={permissionDraft.includes(permission.value)} onChange={()=>togglePermission(permission.value)}/><span><strong>{permission.label}</strong><small>{permission.description}</small></span></label>)}</fieldset>)}</div>
       {error?<div className="auth-error">{error}</div>:null}
-      <footer><button type="button" onClick={()=>setPermissionDraft([...DEFAULT_STAFF_PERMISSIONS])}>Select all</button><button type="button" onClick={()=>setPermissionDraft([])}>Clear all</button><span/><button type="button" onClick={()=>setPermissionsEditing(null)}>Cancel</button><button type="button" className="primary" disabled={permissionSaving} onClick={savePermissions}>{permissionSaving?"Saving roles…":"Save roles"}</button></footer>
+      <footer><button type="button" onClick={()=>setPermissionDraft([...STAFF_PERMISSION_VALUES])}>Select all</button><button type="button" onClick={()=>setPermissionDraft([])}>Clear all</button><span/><button type="button" onClick={()=>setPermissionsEditing(null)}>Cancel</button><button type="button" className="primary" disabled={permissionSaving} onClick={savePermissions}>{permissionSaving?"Saving roles…":"Save roles"}</button></footer>
     </section></div>:null}
   </main>;
 }

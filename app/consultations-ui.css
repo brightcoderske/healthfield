@@ -1,0 +1,235 @@
+/* Get a Prescription: the storefront banner, the request form, the customer
+   conversation and the professional queue. Loaded last so it can settle on top of
+   the shared page styles without editing them. */
+
+/* ---------- Cycling storefront banner ----------
+   Sits beside the search field at every width and matches its height, so the two
+   read as one control rather than the service being pushed onto its own row. */
+.rx-consult-banner{height:45px;min-width:0;padding:0 14px;border-radius:11px;display:flex;align-items:center;gap:10px;color:white;background:linear-gradient(135deg, #792487, #d62e83);box-shadow:0 4px 12px rgba(120, 36, 131, 0.22);overflow:hidden;}
+.rx-consult-mark{width:30px;height:30px;flex:none;border-radius:50%;background:rgba(255, 255, 255, 0.18);display:grid;place-items:center;}
+.rx-consult-mark svg{width:21px;height:21px;color:white;}
+.rx-consult-banner b{min-width:0;height:17px;display:block;overflow:hidden;}
+.rx-consult-banner b > span{display:block;animation:rx-consult-cycle 9s cubic-bezier(0.65, 0, 0.2, 1) infinite;}
+.rx-consult-banner i{height:17px;display:flex;align-items:center;font-size:12.5px;font-weight:800;font-style:normal;letter-spacing:-0.01em;white-space:nowrap;}
+@keyframes rx-consult-cycle{
+  0%,24%{transform:translateY(0);}
+  33%,57%{transform:translateY(-17px);}
+  66%,90%{transform:translateY(-34px);}
+  100%{transform:translateY(-51px);}
+}
+@media (prefers-reduced-motion: reduce){.rx-consult-banner b > span{animation:none;}}
+
+/* The desktop brand row gives the banner its own column; it tightens rather than
+   disappearing when the viewport narrows towards the phone layout. */
+@media (max-width: 1180px){
+  .desktop-brand-row > .rx-consult-banner{padding:0 11px;gap:8px;}
+  .desktop-brand-row > .rx-consult-banner i{font-size:11.5px;}
+  .desktop-brand-row > .rx-consult-banner .rx-consult-mark{width:26px;height:26px;}
+  .desktop-brand-row > .rx-consult-banner .rx-consult-mark svg{width:18px;height:18px;}
+}
+
+/* Phones: one row, search flexes, the banner keeps a readable share beside it. */
+.rx-search-row{display:flex;align-items:stretch;gap:9px;}
+.rx-search-row > .approved-search{flex:1;min-width:0;}
+.rx-search-row > .rx-consult-banner{width:min(46%, 178px);flex:none;height:auto;}
+@media (max-width: 420px){
+  .rx-search-row{gap:7px;}
+  .rx-search-row > .rx-consult-banner{width:min(46%, 150px);padding:0 9px;gap:7px;}
+  .rx-search-row > .rx-consult-banner i{font-size:10.5px;}
+  .rx-search-row > .rx-consult-banner .rx-consult-mark{width:24px;height:24px;}
+  .rx-search-row > .rx-consult-banner .rx-consult-mark svg{width:17px;height:17px;}
+}
+
+/* Both menus style their plain links heavily, so these overrides are written at a
+   higher specificity than those rules rather than relying on load order. */
+.mobile-shop-menu > a.rx-consult-banner{min-height:44px;height:44px;margin:2px 0 6px;border-bottom:0;color:white;}
+.approved-services-overlay section > a.rx-consult-banner{min-height:46px;height:46px;margin-bottom:8px;border-bottom:0;color:white;background:linear-gradient(135deg, #792487, #d62e83);}
+.approved-services-overlay section > a.rx-consult-banner svg,
+.mobile-shop-menu > a.rx-consult-banner svg{width:21px;color:white;}
+
+/* ---------- Choice between uploading and consulting ----------
+   Shown when a prescription-only medicine is added. Both routes are given equal
+   weight and a plain explanation, so the moment reads as help rather than refusal. */
+.rx-route-choice{display:grid;gap:8px;}
+.rx-route-choice > a{padding:11px 12px;border:1px solid #ecdff0;border-radius:11px;display:grid;grid-template-columns:34px 1fr;align-items:center;gap:11px;background:white;text-align:left;}
+.rx-route-choice > a > svg{width:20px;justify-self:center;color:#a3268c;}
+.rx-route-choice strong{display:block;font-size:12px;line-height:1.25;}
+.rx-route-choice small{display:block;margin-top:2px;color:#77717d;font-size:10px;line-height:1.35;}
+.rx-route-choice > a.rx-route-primary{color:white;border-color:transparent;background:linear-gradient(135deg, #792487, #d62e83);box-shadow:0 5px 14px rgba(120, 36, 131, 0.24);}
+.rx-route-choice > a.rx-route-primary > svg{color:white;}
+.rx-route-choice > a.rx-route-primary small{color:rgba(255, 255, 255, 0.85);}
+
+/* ---------- Request form ---------- */
+.rx-consult-page{width:min(760px, calc(100% - 32px));margin:22px auto 60px;}
+.rx-consult-page > a{display:inline-flex;margin-bottom:14px;font-size:11px;font-weight:700;}
+.rx-consult-form{padding:22px;border:1px solid #efe6f1;border-radius:14px;background:white;box-shadow:0 6px 22px rgba(60, 25, 70, 0.06);}
+.rx-consult-form h1{margin:8px 0 6px;font-size:23px;letter-spacing:-0.02em;}
+.rx-consult-form > p{margin:0 0 16px;color:#5c5665;font-size:12px;line-height:1.5;}
+.rx-consult-form label{display:block;margin-bottom:13px;}
+.rx-consult-form label > span{display:block;margin-bottom:5px;font-size:11px;font-weight:700;}
+.rx-consult-form textarea{width:100%;min-height:132px;padding:11px 12px;border:1px solid #e4dfe7;border-radius:10px;outline:0;font:inherit;font-size:12px;line-height:1.5;resize:vertical;}
+.rx-consult-form input[type="tel"]{width:100%;height:42px;padding:0 12px;border:1px solid #e4dfe7;border-radius:10px;outline:0;font:inherit;font-size:12px;}
+.rx-consult-form textarea:focus,.rx-consult-form input:focus{border-color:#c02f8b;}
+.rx-consult-callback{padding:12px;border:1px solid #f0e4f2;border-radius:11px;background:#fdf9fd;}
+.rx-consult-callback > label{display:flex;align-items:flex-start;gap:10px;margin:0;}
+.rx-consult-callback input[type="checkbox"]{width:17px;height:17px;margin-top:1px;accent-color:#b52a86;flex:none;}
+.rx-consult-callback strong{display:block;font-size:12px;}
+.rx-consult-callback small{color:#77717d;font-size:10px;line-height:1.4;}
+.rx-consult-callback > div{margin-top:11px;}
+.rx-consult-form button{width:100%;min-height:46px;margin-top:16px;border:0;border-radius:10px;color:white;background:linear-gradient(135deg, #792487, #d62e83);display:flex;align-items:center;justify-content:center;gap:8px;font-size:12px;font-weight:750;cursor:pointer;}
+.rx-consult-form button:disabled{opacity:0.62;cursor:default;}
+.rx-consult-form button svg{width:17px;}
+.rx-consult-note{margin-top:14px;padding:11px 13px;border-radius:10px;background:#f7f2f9;display:flex;gap:9px;color:#5c5665;font-size:10.5px;line-height:1.45;}
+.rx-consult-note svg{width:16px;flex:none;color:#8d2a8d;}
+.rx-consult-message{margin-top:13px;padding:11px 13px;border-radius:10px;background:#f4f7f2;display:flex;gap:9px;align-items:center;font-size:11px;}
+.rx-consult-message svg{width:16px;flex:none;color:#3f8c4f;}
+.rx-consult-message.is-error{background:#fdf3f3;}
+.rx-consult-message.is-error svg{color:#c0392b;}
+.rx-consult-done{margin-top:14px;display:flex;flex-wrap:wrap;gap:9px;}
+.rx-consult-done a{min-height:40px;padding:0 16px;border:1px solid #e8dcea;border-radius:9px;display:inline-flex;align-items:center;font-size:11px;font-weight:700;}
+
+/* ---------- Customer list ---------- */
+.rx-consult-list{display:grid;gap:9px;}
+.rx-consult-list article{padding:13px;border:1px solid #efe6f1;border-radius:12px;background:white;display:grid;grid-template-columns:1fr auto;align-items:center;gap:11px;}
+.rx-consult-list h2{margin:0 0 3px;font-size:13px;}
+.rx-consult-list p{margin:0;color:#6d6774;font-size:11px;line-height:1.45;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;}
+.rx-consult-list a{min-height:38px;padding:0 15px;border-radius:9px;color:white;background:#8b2589;display:inline-flex;align-items:center;font-size:11px;font-weight:700;}
+.rx-consult-empty{padding:34px 20px;border:1px dashed #e6d9ea;border-radius:13px;text-align:center;color:#6d6774;}
+.rx-consult-empty svg{width:26px;color:#a3268c;}
+.rx-consult-empty strong{display:block;margin:9px 0 4px;color:#221d26;font-size:13px;}
+.rx-consult-empty p{margin:0 0 14px;font-size:11px;}
+.rx-consult-empty > a{min-height:42px;padding:0 20px;border-radius:9px;color:white;background:linear-gradient(135deg, #792487, #d62e83);display:inline-flex;align-items:center;font-size:11px;font-weight:750;}
+
+/* ---------- Status pills ---------- */
+.rx-status{padding:5px 10px;border-radius:99px;font-size:9.5px;font-weight:750;letter-spacing:0.02em;text-transform:uppercase;white-space:nowrap;}
+.rx-status.new{color:#8a4b12;background:#fdf0e2;}
+.rx-status.under-review{color:#1f5f8b;background:#e7f1f9;}
+.rx-status.more-information-required{color:#a3341f;background:#fdeceb;}
+.rx-status.consultation-in-progress{color:#6a2585;background:#f6ebfa;}
+.rx-status.closed{color:#2f6b3d;background:#eaf5ec;}
+
+/* ---------- Conversation ---------- */
+.rx-thread-page{width:min(900px, calc(100% - 32px));margin:22px auto 60px;}
+.rx-thread-head{margin-bottom:14px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:11px;}
+.rx-thread-head a{font-size:11px;font-weight:700;}
+.rx-thread-hero{padding:18px;border:1px solid #efe6f1;border-radius:13px;background:white;margin-bottom:13px;}
+.rx-thread-hero h1{margin:9px 0 5px;font-size:20px;letter-spacing:-0.02em;}
+.rx-thread-hero > p{margin:0;color:#6d6774;font-size:11px;}
+.rx-thread-concern{margin-top:13px;padding:12px;border-radius:10px;background:#faf7fb;}
+.rx-thread-concern small{display:block;margin-bottom:5px;color:#8a2589;font-size:9.5px;font-weight:750;letter-spacing:0.05em;text-transform:uppercase;}
+.rx-thread-concern p{margin:0;font-size:12px;line-height:1.55;white-space:pre-wrap;}
+.rx-thread-outcome{margin-top:12px;padding:12px;border-radius:10px;background:#f2f7f3;display:flex;gap:10px;align-items:flex-start;}
+.rx-thread-outcome svg{width:18px;flex:none;color:#3f8c4f;}
+.rx-thread-outcome strong{display:block;font-size:12px;}
+.rx-thread-outcome p{margin:3px 0 0;color:#5c5665;font-size:11px;line-height:1.45;}
+.rx-thread-outcome a{display:inline-flex;margin-top:8px;font-size:11px;font-weight:750;}
+
+.rx-messages{padding:16px;border:1px solid #efe6f1;border-radius:13px;background:white;display:grid;gap:11px;}
+.rx-messages > article{max-width:80%;padding:11px 13px;border-radius:12px;background:#f5f1f7;}
+.rx-messages > article.is-professional{background:#f2f6fb;}
+.rx-messages > article.is-mine{margin-left:auto;color:white;background:linear-gradient(135deg, #82268a, #c62d86);}
+.rx-messages header{margin-bottom:5px;display:flex;justify-content:space-between;gap:12px;font-size:9.5px;font-weight:700;opacity:0.78;}
+.rx-messages p{margin:0;font-size:12px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;}
+.rx-messages a.rx-attachment{margin-top:8px;padding:7px 10px;border-radius:8px;background:rgba(0, 0, 0, 0.05);display:inline-flex;align-items:center;gap:7px;font-size:10.5px;font-weight:700;}
+.rx-messages > article.is-mine a.rx-attachment{background:rgba(255, 255, 255, 0.2);color:white;}
+.rx-attachment svg{width:14px;}
+.rx-messages-empty{padding:26px 12px;text-align:center;color:#8a848f;font-size:11px;}
+
+.rx-reply{margin-top:13px;padding:14px;border:1px solid #efe6f1;border-radius:13px;background:white;}
+.rx-reply textarea{width:100%;min-height:84px;padding:11px 12px;border:1px solid #e4dfe7;border-radius:10px;outline:0;font:inherit;font-size:12px;line-height:1.5;resize:vertical;}
+.rx-reply textarea:focus{border-color:#c02f8b;}
+.rx-reply-actions{margin-top:10px;display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
+.rx-reply-file{padding:8px 12px;border:1px solid #e8dcea;border-radius:9px;display:inline-flex;align-items:center;gap:7px;font-size:10.5px;font-weight:700;cursor:pointer;}
+.rx-reply-file svg{width:15px;color:#a3268c;}
+.rx-reply-file input{display:none;}
+.rx-reply-actions > button{min-height:40px;margin-left:auto;padding:0 20px;border:0;border-radius:9px;color:white;background:linear-gradient(135deg, #792487, #d62e83);display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:750;cursor:pointer;}
+.rx-reply-actions > button:disabled{opacity:0.6;cursor:default;}
+.rx-reply-actions > button svg{width:15px;}
+.rx-reply-closed{margin-top:13px;padding:14px;border:1px dashed #e6d9ea;border-radius:12px;text-align:center;color:#6d6774;font-size:11px;}
+
+/* ---------- Professional queue ---------- */
+.rx-queue-tools{margin-bottom:11px;display:flex;flex-wrap:wrap;gap:9px;}
+.rx-queue-tools input{flex:1;min-width:190px;height:40px;padding:0 12px;border:1px solid #e4dfe7;border-radius:10px;outline:0;font:inherit;font-size:11.5px;}
+.rx-queue-tools select{height:40px;padding:0 11px;border:1px solid #e4dfe7;border-radius:10px;outline:0;background:white;font:inherit;font-size:11.5px;}
+.rx-queue-tools input:focus,.rx-queue-tools select:focus{border-color:#c02f8b;}
+.rx-queue{display:grid;gap:9px;}
+.rx-queue-row{padding:13px;border:1px solid #ece6ee;border-radius:12px;background:white;display:grid;grid-template-columns:1.5fr 2fr 1fr auto;align-items:center;gap:13px;}
+.rx-queue-row small{display:block;margin-bottom:3px;color:#8a848f;font-size:9px;font-weight:750;letter-spacing:0.05em;text-transform:uppercase;}
+.rx-queue-row strong{font-size:12px;}
+.rx-queue-row p{margin:0;color:#6d6774;font-size:11px;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;}
+.rx-queue-row > button{min-height:38px;padding:0 16px;border:0;border-radius:9px;color:white;background:#8b2589;font-size:11px;font-weight:700;cursor:pointer;}
+.rx-queue-callback{margin-top:4px;display:inline-flex;align-items:center;gap:5px;color:#a3341f;font-size:10px;font-weight:750;}
+.rx-queue-callback svg{width:13px;}
+.rx-queue-unread{margin-left:6px;padding:2px 7px;border-radius:99px;color:white;background:#d62e83;font-size:9px;font-weight:750;}
+@media (max-width: 900px){.rx-queue-row{grid-template-columns:1fr;}}
+
+.rx-panel{position:fixed;z-index:80;inset:0;background:rgba(28, 12, 34, 0.5);display:flex;justify-content:flex-end;}
+.rx-panel > section{width:min(620px, 100%);height:100%;overflow-y:auto;padding:20px;background:#fbf9fc;}
+.rx-panel header{margin-bottom:14px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.rx-panel h2{margin:5px 0 3px;font-size:18px;}
+.rx-panel header p{margin:0;color:#6d6774;font-size:11px;}
+.rx-panel header button{width:34px;height:34px;border:1px solid #e8dcea;border-radius:9px;background:white;display:grid;place-items:center;cursor:pointer;}
+.rx-panel header button svg{width:16px;}
+.rx-panel .rx-messages{max-height:320px;overflow-y:auto;}
+.rx-panel-block{margin-top:13px;padding:14px;border:1px solid #efe6f1;border-radius:12px;background:white;}
+.rx-panel-block > h3{margin:0 0 9px;font-size:12px;}
+.rx-panel-block label{display:block;margin-bottom:10px;}
+.rx-panel-block label > span{display:block;margin-bottom:4px;font-size:10.5px;font-weight:700;}
+.rx-panel-block input,.rx-panel-block textarea,.rx-panel-block select{width:100%;padding:9px 11px;border:1px solid #e4dfe7;border-radius:9px;outline:0;font:inherit;font-size:11.5px;}
+.rx-panel-block textarea{min-height:78px;line-height:1.5;resize:vertical;}
+.rx-panel-block input:focus,.rx-panel-block textarea:focus,.rx-panel-block select:focus{border-color:#c02f8b;}
+.rx-panel-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.rx-panel-line{margin-bottom:9px;padding:11px;border:1px solid #eee7f0;border-radius:10px;background:#fdfbfd;}
+.rx-panel-line-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;}
+.rx-panel-line-head strong{font-size:11.5px;}
+.rx-panel-line-head button{border:0;border-radius:7px;padding:5px 9px;color:#a3341f;background:#fdeceb;font-size:10px;font-weight:700;cursor:pointer;}
+.rx-panel-actions{margin-top:14px;display:flex;flex-wrap:wrap;gap:9px;}
+.rx-panel-actions button{min-height:40px;padding:0 15px;border:1px solid #e8dcea;border-radius:9px;background:white;font-size:11px;font-weight:700;cursor:pointer;}
+.rx-panel-actions button.primary{border-color:transparent;color:white;background:linear-gradient(135deg, #792487, #d62e83);}
+.rx-panel-actions button:disabled{opacity:0.55;cursor:default;}
+.rx-panel-message{margin-top:11px;padding:10px 12px;border-radius:9px;background:#fdf3f3;color:#a3341f;font-size:11px;}
+.rx-panel-message.is-ok{background:#eef6ef;color:#2f6b3d;}
+@media (max-width: 620px){.rx-panel-grid{grid-template-columns:1fr;}.rx-messages > article{max-width:92%;}}
+
+/* ---------- Live alert control ----------
+   Sits with the sidebar user block. Muting is per person and per browser, so one
+   staff member silencing the counter never affects anyone else's shift. */
+.rx-alert-toggle{width:100%;margin-top:8px;padding:8px 10px;border:1px solid rgba(255, 255, 255, 0.16);border-radius:9px;color:inherit;background:transparent;display:flex;align-items:center;gap:8px;font-size:10px;font-weight:650;cursor:pointer;opacity:0.75;}
+.rx-alert-toggle:hover{opacity:1;}
+.rx-alert-toggle svg{width:14px;flex:none;}
+
+/* ---------- Pharmacist part-payment control ---------- */
+.rx-dispense-rule{margin-top:8px;padding:9px 10px;border:1px solid #efe6f1;border-radius:9px;background:#fdfbfd;display:grid;grid-template-columns:1fr 1fr;gap:9px;align-items:end;}
+.rx-dispense-rule label{display:flex;flex-direction:column;gap:4px;font-size:10px;font-weight:700;}
+.rx-dispense-rule select,.rx-dispense-rule input{height:34px;padding:0 9px;border:1px solid #e4dfe7;border-radius:8px;outline:0;background:white;font:inherit;font-size:11px;}
+.rx-dispense-rule select:focus,.rx-dispense-rule input:focus{border-color:#c02f8b;}
+.rx-dispense-rule > small{grid-column:1 / -1;color:#77717d;font-size:9.5px;line-height:1.4;}
+@media (max-width: 620px){.rx-dispense-rule{grid-template-columns:1fr;}}
+
+/* ---------- Patient part-payment chooser ----------
+   Deliberately framed as "buy now / buy later", never as editing the prescription:
+   the authorised quantities are untouched and a deferred line stays claimable. */
+.rx-dispense{margin-top:13px;padding:14px;border:1px solid #efe6f1;border-radius:12px;background:#fdfbfd;}
+.rx-dispense > header{display:flex;gap:10px;align-items:flex-start;margin-bottom:12px;}
+.rx-dispense > header svg{width:19px;flex:none;color:#a3268c;}
+.rx-dispense > header strong{display:block;font-size:12.5px;}
+.rx-dispense > header small{color:#6d6774;font-size:10.5px;line-height:1.45;}
+.rx-dispense article{margin-bottom:9px;padding:11px;border:1px solid #eee7f0;border-radius:10px;background:white;}
+.rx-dispense article.is-deferred{opacity:0.62;}
+.rx-dispense-line{display:flex;justify-content:space-between;align-items:flex-start;gap:11px;}
+.rx-dispense-line strong{display:block;font-size:12px;}
+.rx-dispense-line small{color:#77717d;font-size:10px;line-height:1.4;}
+.rx-dispense-line b{font-size:12px;white-space:nowrap;}
+.rx-dispense-controls{margin-top:9px;display:flex;flex-wrap:wrap;align-items:center;gap:7px;}
+.rx-dispense-controls button{min-height:32px;padding:0 13px;border:1px solid #e4dfe7;border-radius:8px;background:white;font-size:10.5px;font-weight:700;cursor:pointer;}
+.rx-dispense-controls button.active{border-color:transparent;color:white;background:linear-gradient(135deg, #792487, #d62e83);}
+.rx-dispense-controls label{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:700;}
+.rx-dispense-controls input{width:66px;height:32px;padding:0 8px;border:1px solid #e4dfe7;border-radius:8px;outline:0;font:inherit;font-size:11px;}
+.rx-dispense-controls input:focus{border-color:#c02f8b;}
+.rx-dispense-locked,.rx-dispense-note{margin:8px 0 0;color:#6d6774;font-size:10px;line-height:1.4;display:flex;align-items:center;gap:6px;}
+.rx-dispense-locked svg{width:13px;flex:none;color:#a3341f;}
+.rx-dispense > footer{margin-top:11px;padding-top:11px;border-top:1px solid #eee7f0;display:flex;justify-content:space-between;align-items:center;gap:11px;}
+.rx-dispense > footer small{display:block;color:#77717d;font-size:10px;}
+.rx-dispense > footer strong{font-size:15px;}
+.rx-dispense > footer button{min-height:40px;padding:0 18px;border:0;border-radius:9px;color:white;background:linear-gradient(135deg, #792487, #d62e83);font-size:11px;font-weight:750;cursor:pointer;}
+.rx-dispense > footer button:disabled{opacity:0.55;cursor:default;}

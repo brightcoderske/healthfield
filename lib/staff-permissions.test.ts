@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { firstStaffPath, hasStaffPermission, normalizeStaffPermissions, STAFF_PERMISSION_VALUES } from "./staff-permissions.ts";
+import { DEFAULT_STAFF_PERMISSIONS, firstStaffPath, hasStaffPermission, normalizeStaffPermissions, STAFF_PERMISSION_VALUES } from "./staff-permissions.ts";
 
 test("administrators bypass staff permission rows",()=>{
   assert.equal(hasStaffPermission("ADMIN",[],"BLOGS_MANAGE"),true);
@@ -21,4 +21,14 @@ test("staff landing uses the first available visible tab",()=>{
   assert.equal(firstStaffPath("STAFF",["PRODUCTS_VIEW"]),"/staff/products");
   assert.equal(firstStaffPath("STAFF",["BLOGS_MANAGE"]),"/staff/blogs");
   assert.equal(firstStaffPath("STAFF",[]),"/unauthorized");
+});
+
+test("prescribing rights are never granted by default",()=>{
+  // Dispensing access is handed to new staff automatically; issuing a prescription
+  // must be granted deliberately, so it stays out of the default set.
+  assert.equal(DEFAULT_STAFF_PERMISSIONS.includes("CONSULTATIONS_PROCESS"),false);
+  assert.equal(DEFAULT_STAFF_PERMISSIONS.includes("CONSULTATIONS_VIEW"),false);
+  assert.equal(DEFAULT_STAFF_PERMISSIONS.includes("PRESCRIPTIONS_PROCESS"),true);
+  assert.equal(hasStaffPermission("STAFF",[...DEFAULT_STAFF_PERMISSIONS],"CONSULTATIONS_PROCESS"),false);
+  assert.equal(STAFF_PERMISSION_VALUES.includes("CONSULTATIONS_PROCESS"),true);
 });

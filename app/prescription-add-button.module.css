@@ -3,8 +3,8 @@
 .close{position:absolute;top:6px;right:6px;width:24px;height:24px;min-height:0;padding:0;border:0;border-radius:7px;color:#655b68;background:#f5f1f6;display:grid;place-items:center}
 .close svg{width:13px}
 .message{margin:0;padding-right:25px;color:#443748;font-size:12px;line-height:1.35}
-.actions{margin-top:8px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
-.actions>a,.actions>button{width:100%;min-width:0;min-height:30px;padding:3px 5px;border:1px solid #c51d38;border-radius:8px;color:#fff;background:#c51d38;display:flex;align-items:center;justify-content:center;gap:4px;text-align:center;white-space:nowrap;font-size:10.5px;font-weight:800}
-.actions>a:hover,.actions>button:hover{background:#a91830}
+.actions{margin-top:6px;display:grid;grid-template-columns:1fr;gap:6px}
+.actions>a,.actions>button{width:100%;min-width:0;min-height:32px;padding:3px 5px;border:1px solid #e4dfe7;border-radius:8px;color:#5c5665;background:#fff;display:flex;align-items:center;justify-content:center;gap:4px;text-align:center;white-space:nowrap;font-size:10.5px;font-weight:750}
+.actions>a:hover,.actions>button:hover{background:#f7f2f9}
 .actions svg{width:14px}
 @media(max-width:380px){.dialog{padding:8px}.message{font-size:11.5px}.actions>a,.actions>button{font-size:9.5px;padding:3px}}

@@ -1,0 +1,91 @@
+/* Distance-based delivery: the checkout map pin, and the admin pricing screen. */
+
+.map-picker{display:flex;flex-direction:column;gap:8px;}
+.map-picker-search-row{display:flex;align-items:stretch;gap:8px;}
+.map-picker-search-host{flex:1;min-width:0;}
+.map-picker-search-host[hidden]{display:none;}
+.map-picker-open{flex:0 0 auto;min-height:38px;padding:0 12px;border:1px solid #ddd5e0;border-radius:8px;color:#542064;background:#fff;display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:750;white-space:nowrap;}
+.map-picker-open svg{width:15px;}
+/* Matches both the plain input and the Places web component, which sizes itself.
+   The colour is set explicitly because Google's element otherwise renders what the
+   customer types in a muted grey that reads as placeholder text. */
+.map-picker-search,input.map-picker-search{width:100%;min-height:38px;padding:0 11px;border:1px solid #ddd5e0;border-radius:8px;color:#181529;background:#fff;font-size:11px;}
+gmp-place-autocomplete.map-picker-search{padding:0;border:0;--gmp-mat-color-on-surface:#181529;--gmp-mat-color-on-surface-variant:#5f5866;--gmp-mat-color-primary:#762584;}
+gmp-place-autocomplete.map-picker-search::part(input){color:#181529;font-size:11px;}
+gmp-place-autocomplete.map-picker-search::part(prediction-item){color:#181529;}
+.map-picker-search:focus,input.map-picker-search:focus{outline:2px solid #762584;outline-offset:1px;}
+.map-picker-canvas{width:100%;border:1px solid #e0d9e3;border-radius:10px;background:#f2eef4;overflow:hidden;}
+.map-picker-pin svg{width:15px;flex:0 0 15px;}
+.map-picker-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
+.map-picker-actions > button{min-height:36px;padding:0 13px;border:1px solid #ddd5e0;border-radius:8px;color:#542064;background:#fff;display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:750;}
+.map-picker-actions > button:disabled{opacity:0.6;}
+.map-picker-actions > button svg{width:15px;}
+.map-picker-actions .spin{animation:map-picker-spin 1s linear infinite;}
+@keyframes map-picker-spin{to{transform:rotate(360deg);}}
+.map-picker-pin{min-width:0;color:#19954a;display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:750;}
+.map-picker-hint{color:#7a7380;font-size:9px;}
+/* Google injects its autocomplete list at the end of <body>, outside any modal. */
+.pac-container{z-index:2147483647;}
+
+.checkout-location{display:flex;flex-direction:column;gap:9px;}
+.checkout-location-title{color:#181529;display:flex;align-items:center;gap:6px;font-size:11px;font-weight:800;}
+.checkout-location-title svg{width:16px;}
+.checkout-location-note{margin:0;color:#756e79;font-size:9px;line-height:1.5;}
+.checkout-location-courier{margin:0;color:#21633b;font-size:9px;font-weight:700;}
+.checkout-delivery-detail{color:#7a7380;font-size:8px;font-weight:600;}
+
+.delivery-admin > header p{max-width:640px;}
+.delivery-admin section{width:min(1180px, 100%);margin:0 auto 22px;}
+.delivery-admin section > h2{margin:0 0 4px;font-size:17px;}
+.delivery-admin section > p{margin:0 0 12px;color:#756e79;font-size:9px;}
+.delivery-warning{width:min(1180px, 100%);margin:0 auto 12px;padding:11px 13px;border:1px solid #f0dcc0;border-radius:10px;color:#89521d;background:#fff4e3;display:flex;align-items:center;gap:9px;font-size:10px;line-height:1.5;}
+.delivery-warning svg{width:17px;flex:0 0 17px;}
+.delivery-warning a{color:#89521d;text-decoration:underline;font-weight:750;}
+.admin-notice{width:min(1180px, 100%);margin:0 auto 12px;padding:11px 13px;border:1px solid #cbe7d4;border-radius:10px;color:#21633b;background:#eaf7ee;font-size:10px;}
+
+.delivery-band-row{grid-template-columns:minmax(130px, 1.3fr) minmax(90px, 0.8fr) minmax(90px, 0.7fr) minmax(120px, 1fr) minmax(110px, 0.9fr) minmax(80px, 0.6fr) minmax(200px, 1.2fr);}
+.delivery-band-actions{display:flex;flex-wrap:wrap;align-items:center;gap:5px;}
+.delivery-band-actions button{min-height:28px;padding:0 8px;border:1px solid #ddd5e0;border-radius:6px;color:#542064;background:#fff;display:inline-flex;align-items:center;gap:4px;font-size:8px;font-weight:750;}
+.delivery-band-actions button:disabled{opacity:0.4;}
+.delivery-band-actions button.danger{color:#a8322f;border-color:#eccbc9;}
+.delivery-band-actions svg{width:13px;}
+.delivery-coverage{margin:9px 0 0;color:#756e79;font-size:9px;}
+.compact-table-empty{margin:0;padding:16px;color:#7a7380;text-align:center;font-size:10px;}
+
+.delivery-rules form > button{min-height:40px;margin-top:13px;padding:0 18px;border:0;border-radius:8px;color:#fff;background:#762584;font-size:10px;font-weight:800;}
+.delivery-rules form > button:disabled{opacity:0.55;}
+.delivery-rules label > small,.delivery-admin .product-form-grid label > small{margin-top:3px;color:#7a7380;font-size:8px;font-weight:500;}
+
+.delivery-preview-controls{margin-top:11px;display:flex;flex-wrap:wrap;align-items:end;gap:10px;}
+.delivery-preview-controls label{display:flex;flex-direction:column;gap:4px;font-size:9px;font-weight:750;}
+.delivery-preview-controls input{height:38px;padding:0 10px;border:1px solid #ddd5e0;border-radius:7px;}
+.delivery-preview-controls button{min-height:38px;padding:0 16px;border:0;border-radius:8px;color:#fff;background:#762584;font-size:10px;font-weight:800;}
+.delivery-preview-controls button:disabled{opacity:0.55;}
+.delivery-preview-result{margin-top:12px;padding:12px 14px;border:1px solid #cbe7d4;border-radius:10px;background:#eaf7ee;display:flex;flex-direction:column;gap:4px;font-size:10px;}
+.delivery-preview-result.unavailable{border-color:#eccbc9;background:#fdeceb;}
+.delivery-preview-result strong{font-size:12px;}
+.delivery-preview-source{color:#6c7a70;font-size:8px;}
+.delivery-preview-result.unavailable .delivery-preview-source{color:#8a6a68;}
+
+.delivery-branch-row{grid-template-columns:minmax(140px, 1fr) minmax(200px, 2fr) minmax(160px, 1.1fr) minmax(60px, 0.4fr);}
+.delivery-branch-row svg{width:15px;}
+.delivery-branch-row > span{display:flex;align-items:center;gap:6px;}
+.delivery-branch-row > a{color:#762584;font-weight:750;}
+
+@media (max-width: 900px){
+.delivery-band-row,.delivery-branch-row{grid-template-columns:1fr;gap:5px;}
+}
+
+.order-delivery-summary{grid-column:1/-1;margin:4px 0 2px;padding:11px 13px;border:1px solid #e0d9e3;border-radius:10px;background:#faf8fb;display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:10px;}
+.order-delivery-summary span{min-width:0;display:flex;flex-direction:column;gap:2px;}
+.order-delivery-summary small{color:#7a7380;font-size:8px;}
+.order-delivery-summary strong{font-size:11px;}
+@media (max-width: 700px){.order-delivery-summary{grid-template-columns:1fr;}}
+
+/* Pasting the M-Pesa message is now optional, so the panel explains what happens without it. */
+.manual-payment-hint{margin:0;color:#756e79;font-size:9px;line-height:1.5;}
+.manual-payment-panel label em{color:#7a7380;font-style:normal;font-weight:600;}
+.manual-payment-panel label > small{margin-top:4px;color:#7a7380;font-size:8px;font-weight:500;}
+
+/* The prompt-phone field explains where its value came from without shouting. */
+.billing-phone > small{margin-top:4px;color:#7a7380;font-size:8px;font-weight:500;}

@@ -9,7 +9,7 @@ import styles from "./order-status-manager.module.css";
 const deliverySteps = ["NEW", "CONFIRMED", "BEING_FULFILLED", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "COMPLETED"];
 const pickupSteps = ["NEW", "CONFIRMED", "BEING_FULFILLED", "READY_FOR_PICKUP", "COMPLETED"];
 
-type Order = { id: number; orderNumber: string; status: OrderStatus; customerName: string; phone: string; email: string | null; fulfilmentMethod: OrderFulfilmentMethod; paymentStatus: string; paymentMethod: string; paymentReference: string | null; amountPaid: string; deliveryAddress: string | null; deliveryArea: string | null; deliveryLatitude: string | null; deliveryLongitude: string | null; total: string };
+type Order = { id: number; orderNumber: string; status: OrderStatus; customerName: string; phone: string; email: string | null; fulfilmentMethod: OrderFulfilmentMethod; paymentStatus: string; paymentMethod: string; paymentReference: string | null; amountPaid: string; deliveryAddress: string | null; deliveryArea: string | null; deliveryLatitude: string | null; deliveryLongitude: string | null; deliveryFee: string; deliveryDistanceKm: string | null; deliveryCourier: string | null; total: string };
 type Item = { id: number; productId: number | null; productName: string; quantity: number; unitPrice: string; lineTotal: string };
 type Store = { id: number; name: string };
 type Fulfilment = { orderItemId: number; branchId: number; quantityReserved: number; quantityPacked: number; status: string };
@@ -54,7 +54,21 @@ export function OrderStatusManager({ order, items, stores = [], fulfilments = []
     const payload = editable ? { status, customerName: String(form.get("customerName")), phone: String(form.get("phone")), email: String(form.get("email")) || null, deliveryArea: String(form.get("deliveryArea")) || null, deliveryAddress: String(form.get("deliveryAddress")) || null, fulfilments: fulfilmentPayload } : { status };
     const response = await fetch(`/api/orders/${order.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await response.json().catch(() => ({}));
-    if (response.ok) { setSaved(status); setMessage("Order and serving-store assignments saved."); } else setMessage(data.error || "Order could not be updated.");
+    if (response.ok) {
+      setSaved(status);
+      // Moving the order to a different serving store moves where the rider sets off
+      // from, so any change to the delivery leg is stated plainly rather than left to
+      // be discovered on the receipt.
+      const delivery = data.delivery as { repriced: boolean; fee: number; previousFee: number; distanceKm: number; branch: { name: string } | null } | null | undefined;
+      const changed = delivery && delivery.fee !== delivery.previousFee;
+      setMessage(
+        !changed
+          ? "Order and serving-store assignments saved."
+          : delivery!.repriced
+            ? `Saved. Delivery re-priced to KES ${delivery!.fee.toLocaleString()} (was KES ${delivery!.previousFee.toLocaleString()}) for the ${delivery!.distanceKm} km run from ${delivery!.branch?.name || "the new store"}.`
+            : `Saved. This order is already paid, so the KES ${delivery!.previousFee.toLocaleString()} delivery charge stands, but the ${delivery!.distanceKm} km run from ${delivery!.branch?.name || "the new store"} now prices at KES ${delivery!.fee.toLocaleString()}. Settle the difference manually.`,
+      );
+    } else setMessage(data.error || "Order could not be updated.");
     setSaving(false);
   }
 
@@ -76,6 +90,7 @@ export function OrderStatusManager({ order, items, stores = [], fulfilments = []
         <label>Email<input name="email" type="email" defaultValue={order.email || ""} disabled={!editable} /></label><label>Area<input name="deliveryArea" defaultValue={order.deliveryArea || ""} disabled={!editable} /></label>
         <label className="full">Address<input name="deliveryAddress" defaultValue={order.deliveryAddress || ""} disabled={!editable} /></label>
         {mapUrl && <a className={styles.mapLink} href={mapUrl} target="_blank" rel="noreferrer"><MapPin /> View exact delivery location</a>}
+        {order.fulfilmentMethod === "DELIVERY" ? <aside className="order-delivery-summary" aria-label="Delivery charge"><span><small>Delivery charged</small><strong>{Number(order.deliveryFee) === 0 ? "FREE" : `KES ${Number(order.deliveryFee).toLocaleString()}`}</strong></span><span><small>Distance quoted</small><strong>{order.deliveryDistanceKm ? `${Number(order.deliveryDistanceKm).toLocaleString()} km` : "Not measured"}</strong></span><span><small>Carried by</small><strong>{order.deliveryCourier || "Healthfield rider"}</strong></span></aside> : null}
         <aside className={styles.paymentSummary} aria-label="Payment details"><span><small>Payment method</small><strong className={`payment-type payment-type-${order.paymentMethod.toLowerCase()}`}>{paymentLabel(order.paymentMethod)}</strong></span><span><small>Amount paid</small><strong>KES {Number(order.amountPaid).toLocaleString()}</strong></span><span><small>{order.paymentMethod === "CASH" ? "Payment status" : "M-Pesa code"}</small><strong>{order.paymentMethod === "CASH" ? order.paymentStatus : order.paymentReference || "Awaiting confirmation"}</strong></span></aside>
         <section className="payment-audit"><header><span><ShieldCheck/><strong>Payment verification</strong></span><em className={`payment-status payment-status-${order.paymentStatus.toLowerCase()}`}>{order.paymentStatus}</em></header>{payments.length?payments.map(payment=><article key={payment.id}><div><span className={`payment-type payment-type-${payment.method.toLowerCase()}`}>{paymentLabel(payment.method)}</span><strong>KES {Number(payment.amount).toLocaleString()}</strong><small>{new Date(payment.createdAt).toLocaleString()}</small></div><div><small>Receipt</small><strong>{payment.receiptNumber||"Not received"}</strong><small>{payment.phone||"No billing phone"}</small></div><div><small>Status</small><strong>{payment.status.replaceAll("_"," ")}</strong><small>{payment.resultDescription||"No provider message"}</small></div>{payment.manualMessage?<details><summary>View submitted payment message</summary><p>{payment.manualMessage}</p></details>:<span/>}{payment.status==="REQUIRES_REVIEW"&&canReviewPayments?<div className="payment-review-actions"><button type="button" disabled={reviewing===payment.id} onClick={()=>reviewPayment(payment.id,"APPROVE")}><CheckCircle2/>Approve</button><button type="button" disabled={reviewing===payment.id} onClick={()=>reviewPayment(payment.id,"REJECT")}><XCircle/>Reject</button></div>:null}</article>):<p>No payment attempts recorded.</p>}</section>
         <h2 className={styles.itemsTitle}>Order items</h2><div className={styles.items}><div className={styles.head}><span>Product</span><span>Quantity</span><span>Amount</span><span>Serving store</span></div>{items.map((item) => <div className={styles.row} key={item.id}><strong>{item.productName}</strong><span>{item.quantity}</span><span>KES {Number(item.lineTotal).toLocaleString()}</span><label><select aria-label={`Serving store for ${item.productName}`} value={assignments[item.id] || ""} disabled={!editable} onChange={(event) => setAssignments((current) => ({ ...current, [item.id]: Number(event.target.value) || 0 }))}><option value="">No store with enough stock</option>{stores.map((store) => { const available = availableAt(item, store.id); return <option value={store.id} key={store.id} disabled={available !== null && available < item.quantity}>{store.name}{available === null ? "" : ` (${available} available)`}</option>; })}</select></label></div>)}</div>

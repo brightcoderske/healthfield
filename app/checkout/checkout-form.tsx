@@ -7,7 +7,6 @@ import {
   Clipboard,
   CreditCard,
   LoaderCircle,
-  LocateFixed,
   MapPin,
   ReceiptText,
   RefreshCw,
@@ -20,6 +19,8 @@ import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { manualTillPollDelay, paymentPollDelay } from "@/lib/payment-poll";
 import { prescriptionUploadHref } from "@/lib/prescription-selection";
+import { MapPicker, type PinnedLocation } from "../map-picker";
+import { deliveryFeeOf, useDeliveryQuote, type DeliveryOptions } from "../use-delivery-quote";
 
 type Product = {
   id: number;
@@ -71,12 +72,14 @@ export function CheckoutForm({
   initialOffers = [],
   customer,
   payment,
+  delivery,
 }: {
   initialCart: Record<number, number>;
   initialCatalog: Product[];
   initialOffers?: CheckoutOffer[];
   customer: Customer;
   payment: PaymentOptions;
+  delivery: DeliveryOptions;
 }) {
   const initialPayment: PaymentMethod = payment.onlineMpesaEnabled
     ? "MPESA_EXPRESS"
@@ -86,13 +89,18 @@ export function CheckoutForm({
     useState<PaymentMethod>(initialPayment);
   const [error, setError] = useState("");
   const [result, setResult] = useState<CheckoutResult | null>(null);
-  const [coordinates, setCoordinates] = useState<{
-    latitude: number;
-    longitude: number;
-  } | null>(null);
-  const [locating, setLocating] = useState(false);
+  const [pin, setPin] = useState<PinnedLocation | null>(null);
+  // Seeded from the pin's reverse-geocoded address, then editable: the map gets the
+  // rider to the street, the customer's own words get them to the door.
+  const [address, setAddress] = useState("");
+  const [addressTouched, setAddressTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [manualMessage, setManualMessage] = useState("");
+  // The M-Pesa prompt almost always goes to the number already typed above, so it
+  // follows that field until the customer edits it — then it is theirs and stays put.
+  const [phone, setPhone] = useState(customer?.phone ?? "");
+  const [billingPhone, setBillingPhone] = useState(customer?.phone ?? "");
+  const [billingPhoneTouched, setBillingPhoneTouched] = useState(false);
   const [copied, setCopied] = useState(false);
   const [retryPhone, setRetryPhone] = useState(customer?.phone ?? "");
   const checkoutToken = useRef(
@@ -148,7 +156,27 @@ export function CheckoutForm({
           line.quantity,
       0,
     ) + bundleTotal;
-  const total = subtotal + (method === "DELIVERY" ? 250 : 0);
+  // Seeding the address here rather than in an effect keeps the pin and the wording
+  // that describes it in a single update, and leaves anything the customer typed alone.
+  function pinLocation(location: PinnedLocation | null) {
+    setPin(location);
+    if (location?.address && !addressTouched) setAddress(location.address);
+  }
+  // The same basket the server will price, so the preview and the charge cannot
+  // disagree about which branch has to fulfil the order.
+  const quotedLines = [
+    ...lines.map((line) => ({ productId: line.product!.id, quantity: line.quantity })),
+    ...offers.flatMap((offer) => offer.items.map((item) => ({ productId: item.productId, quantity: item.quantity }))),
+  ];
+  const { quote: deliveryQuote, loading: quotingDelivery } = useDeliveryQuote({
+    active: method === "DELIVERY",
+    pin,
+    subtotal,
+    items: quotedLines,
+  });
+  const deliveryFee = deliveryFeeOf(deliveryQuote, delivery, method === "DELIVERY");
+  const deliveryBlocked = method === "DELIVERY" && Boolean(deliveryQuote && !deliveryQuote.available);
+  const total = subtotal + deliveryFee;
 
   useEffect(() => {
     if (!result || !["WAITING", "REVIEW"].includes(result.state)) return;
@@ -226,27 +254,6 @@ export function CheckoutForm({
     };
   }, [paymentMethod, result?.state]);
 
-  function locate() {
-    if (!navigator.geolocation)
-      return setError("Location services are not available on this device.");
-    setLocating(true);
-    setError("");
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        setCoordinates({
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-        });
-        setLocating(false);
-      },
-      () => {
-        setError("Allow location access, then try again.");
-        setLocating(false);
-      },
-      { enableHighAccuracy: true, timeout: 12_000 },
-    );
-  }
-
   async function copyTill() {
     if (!payment.tillNumber) return;
     try {
@@ -270,6 +277,15 @@ export function CheckoutForm({
       return setError(
         "Enter your email so this guest order can appear in your account if you register later.",
       );
+    // The fee cannot exist without a pin, so this is a hard stop rather than a nudge.
+    if (method === "DELIVERY" && !pin)
+      return setError(
+        "Pin your delivery location on the map so the delivery fee can be calculated.",
+      );
+    if (deliveryBlocked)
+      return setError(
+        "Delivery is not available to that location. Choose pharmacy pickup or pin a location inside the delivery area.",
+      );
     setRetryPhone(value("billingPhone") || value("phone") || "");
     setSubmitting(true);
     setError("");
@@ -289,8 +305,8 @@ export function CheckoutForm({
             paymentMethod === "MANUAL_MPESA" ? manualMessage.trim() : undefined,
           deliveryAddress: value("deliveryAddress"),
           deliveryArea: value("deliveryArea"),
-          deliveryLatitude: coordinates?.latitude,
-          deliveryLongitude: coordinates?.longitude,
+          deliveryLatitude: pin?.latitude,
+          deliveryLongitude: pin?.longitude,
           items: lines.map((line) => ({
             productId: line.product!.id,
             quantity: line.quantity,
@@ -411,6 +427,10 @@ export function CheckoutForm({
       </button>
       <p>
         Amount to pay: <strong>KES {total.toLocaleString()}</strong>
+      </p>
+      <p className="manual-payment-hint">
+        Pay that exact amount to the till, then paste the confirmation message Safaricom
+        sends you. The code inside it is what links your payment to this order.
       </p>
       <label>
         Paste the complete M-Pesa confirmation message
@@ -565,7 +585,11 @@ export function CheckoutForm({
                 name="phone"
                 type="tel"
                 autoComplete="tel"
-                defaultValue={customer?.phone ?? ""}
+                value={phone}
+                onChange={(event) => {
+                  setPhone(event.target.value);
+                  if (!billingPhoneTouched) setBillingPhone(event.target.value);
+                }}
                 required
               />
             </label>
@@ -583,31 +607,45 @@ export function CheckoutForm({
               <input name="deliveryArea" required={method === "DELIVERY"} />
             </label>
             {method === "DELIVERY" ? (
-              <>
+              <div className="checkout-location full">
+                <span className="checkout-location-title">
+                  <MapPin /> Where should we deliver?
+                </span>
+                <p className="checkout-location-note">
+                  Search for your area and pick it from the suggestions. The delivery fee
+                  is worked out from how far that is from the branch packing your order.
+                </p>
+                <MapPicker value={pin} onChange={pinLocation} />
                 <label className="full">
-                  Delivery address
-                  <textarea name="deliveryAddress" rows={3} required />
+                  Directions for the rider
+                  <textarea
+                    name="deliveryAddress"
+                    rows={3}
+                    required
+                    value={address}
+                    onChange={(event) => {
+                      setAddressTouched(true);
+                      setAddress(event.target.value);
+                    }}
+                    placeholder="House or building name, floor, gate colour, anything that helps the rider find you"
+                  />
+                  <small>
+                    Started from the location you picked. Add whatever a rider still
+                    needs once they arrive.
+                  </small>
                 </label>
-                <div className="checkout-location full">
-                  <button type="button" onClick={locate} disabled={locating}>
-                    <LocateFixed />
-                    {locating
-                      ? "Getting location…"
-                      : coordinates
-                        ? "Location captured"
-                        : "Use my current location"}
-                  </button>
-                  {coordinates ? (
-                    <a
-                      target="_blank"
-                      rel="noreferrer"
-                      href={`https://www.google.com/maps?q=${coordinates.latitude},${coordinates.longitude}`}
-                    >
-                      Preview on Google Maps
-                    </a>
-                  ) : null}
-                </div>
-              </>
+                {deliveryQuote && !deliveryQuote.available ? (
+                  <div className="auth-error" role="alert">
+                    {deliveryQuote.message} Choose pharmacy pickup, or pin a location
+                    inside the delivery area.
+                  </div>
+                ) : null}
+                {deliveryQuote?.available && deliveryQuote.courier ? (
+                  <p className="checkout-location-courier">
+                    Delivered by {deliveryQuote.courier} on Healthfield&rsquo;s behalf.
+                  </p>
+                ) : null}
+              </div>
             ) : null}
           </div>
           {prescriptionLines.length || prescriptionOffers.length ? (
@@ -674,10 +712,15 @@ export function CheckoutForm({
                 type="tel"
                 inputMode="tel"
                 autoComplete="tel"
-                defaultValue={customer?.phone ?? ""}
+                value={billingPhone}
+                onChange={(event) => {
+                  setBillingPhoneTouched(true);
+                  setBillingPhone(event.target.value);
+                }}
                 placeholder="0712 345 678"
                 required
               />
+              <small>Taken from the number above. Change it to pay from another phone.</small>
             </label>
           ) : null}
           {paymentMethod === "MANUAL_MPESA" ? tillPanel : null}
@@ -754,8 +797,31 @@ export function CheckoutForm({
               Subtotal<b>KES {subtotal.toLocaleString()}</b>
             </span>
             <span>
-              Delivery<b>KES {method === "DELIVERY" ? "250" : "0"}</b>
+              Delivery
+              <b>
+                {method !== "DELIVERY"
+                  ? "KES 0"
+                  : quotingDelivery
+                    ? "Calculating…"
+                    : !pin
+                      ? "Pin your location"
+                      : deliveryBlocked
+                        ? "Unavailable"
+                        : deliveryFee === 0
+                          ? "FREE"
+                          : `KES ${deliveryFee.toLocaleString()}`}
+              </b>
             </span>
+            {method === "DELIVERY" && deliveryQuote?.available ? (
+              <span className="checkout-delivery-detail">
+                {deliveryQuote.free
+                  ? "Order qualifies for free delivery"
+                  : `${deliveryQuote.distanceKm.toLocaleString()} km${deliveryQuote.bandLabel ? ` · ${deliveryQuote.bandLabel}` : ""}${deliveryQuote.branchName ? ` from ${deliveryQuote.branchName}` : ""}`}
+                {!deliveryQuote.free && deliveryQuote.freeAboveSubtotal !== null
+                  ? ` · Free above KES ${deliveryQuote.freeAboveSubtotal.toLocaleString()}`
+                  : ""}
+              </span>
+            ) : null}
             <span>
               Total<strong>KES {total.toLocaleString()}</strong>
             </span>

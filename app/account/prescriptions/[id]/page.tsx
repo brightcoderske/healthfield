@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { BackendError, backendJson } from "@/lib/backend-api";
 import { prescriptionStatuses, prescriptionStatusLabels, prescriptionTrackingSteps, type PrescriptionStatus } from "@/lib/prescription-workflow";
 import { requireRole } from "@/lib/auth";
+import { DispenseSelector } from "./dispense-selector";
 import type { CustomerPrescriptionData } from "../types";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,7 @@ export default async function CustomerPrescriptionPage({params}:{params:Promise<
     <div className="prescription-customer-grid">
       <section className="prescription-saved-proposal"><header><div><LockKeyhole/><span><small>Pharmacy prepared</small><h2>{order?"Your saved proposal":"Medicine review"}</h2></span></div>{order?<b>{order.orderNumber}</b>:null}</header>
         {proposalItems.length?<div className="prescription-proposal-lines">{proposalItems.map((item)=><article key={item.id}><span><strong>{item.productName}</strong><small>Quantity {item.approvedQuantity} · KES {Number(item.unitPrice).toLocaleString()} each{item.pharmacistNote?` · ${item.pharmacistNote}`:""}</small></span><b>KES {(Number(item.unitPrice)*Number(item.approvedQuantity)).toLocaleString()}</b></article>)}</div>:<div className="prescription-proposal-pending"><FileText/><strong>{request.status==="DECLINED"?"No proposal was created":"Your pharmacist is preparing the medicine list"}</strong><p>{request.status==="DECLINED"?(request.pharmacistNotes||"Contact the pharmacy if you need help."):"Confirmed medicines, quantities and prices will appear here after approval."}</p></div>}
+        {canPay&&proposalItems.length>1?<DispenseSelector prescriptionId={request.id} items={proposalItems}/>:null}
         {order?<footer><span><small>{paid?"Paid total":"Proposal total"}</small><strong>KES {Number(order.total).toLocaleString()}</strong></span>{canPay?<Link href={`/account/prescriptions/${request.id}/checkout`}>Review &amp; pay</Link>:paid?<Link href={`/account/orders/${order.id}`}>View paid order</Link>:null}</footer>:null}
       </section>
       <aside className="prescription-cart-independence"><ShoppingBag/><h2>Your normal cart stays separate</h2><p>You can ignore this saved proposal for now, keep adding any other products to your normal cart, and return here whenever you are ready.</p><div><Link href="/#products">Keep shopping</Link>{canPay?<Link href={`/account/prescriptions/${request.id}/checkout`}>Return to proposal</Link>:null}</div></aside>

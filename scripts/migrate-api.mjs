@@ -8,15 +8,19 @@ import mysql from "mysql2/promise";
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const applicationRoot = resolve(repositoryRoot, "api-service");
 // Production keeps its API environment beside the service, while local split
-// development uses the repository-level .env.local. Allow callers to select
-// that file without copying credentials into another location.
-const environmentFile = process.env.API_ENV_FILE
-  ? resolve(repositoryRoot, process.env.API_ENV_FILE)
-  : resolve(applicationRoot, ".env");
+// development uses the repository-level .env.local. API_ENV_FILE overrides both;
+// otherwise the first of the two that exists wins, so the same command works on a
+// developer machine and on the server without a shell-specific env prefix.
+const candidates = process.env.API_ENV_FILE
+  ? [resolve(repositoryRoot, process.env.API_ENV_FILE)]
+  : [resolve(applicationRoot, ".env"), resolve(repositoryRoot, ".env.local")];
+const environmentFile = candidates.find((candidate) => existsSync(candidate));
 
-if (!existsSync(environmentFile)) {
-  throw new Error(`Missing API environment file: ${environmentFile}`);
+if (!environmentFile) {
+  throw new Error(`Missing API environment file. Looked for: ${candidates.join(", ")}`);
 }
+
+console.log(`Using environment: ${environmentFile}`);
 
 loadEnvFile(environmentFile);
 

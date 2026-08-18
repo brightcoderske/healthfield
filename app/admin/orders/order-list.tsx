@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { applicableOrderStatuses, type OrderFulfilmentMethod, type OrderStatus } from "@/lib/order-status-transitions";
 import styles from "./order-list.module.css";
 
-type Order = { id: number; orderNumber: string; customerName: string; phone: string; status: string; createdAt: string; paymentStatus: string; paymentMethod: string; paymentChannel: "ONLINE" | "POS" | null; amountPaid: string; fulfilmentMethod: OrderFulfilmentMethod; total: string; deliveryArea: string | null };
+type Order = { id: number; orderNumber: string; customerName: string; phone: string; status: string; createdAt: string; paymentStatus: string; paymentMethod: string; paymentChannel: "ONLINE" | "POS" | null; amountPaid: string; fulfilmentMethod: OrderFulfilmentMethod; total: string; deliveryArea: string | null; deliveryDistanceKm: string | null; deliveryDurationMinutes: number | null };
 type OrderKind = "ALL" | "DELIVERY" | "PICKUP" | "POS";
 
 const removable = new Set(["NEW", "CONFIRMED", "UNDER_REVIEW", "CANCELLED"]);
@@ -101,8 +101,17 @@ export function OrderList({ orders, statuses = allStatuses, filterKey = "healthf
     <div className={styles.scroller}><section className={`admin-search-table ${styles.table}`} onClick={() => setOpen(null)}><div className="admin-search-head"><span>Order &amp; customer</span><span>Status</span><span>Payment</span><span>Fulfilment</span><span>Total</span><span>Actions</span></div>{visible.length ? visible.map((order) => {
       const rowKind = orderKind(order);
       const fulfilmentLabel = rowKind === "POS" ? "POS SALE" : rowKind;
-      const fulfilmentDetail = rowKind === "DELIVERY" ? order.deliveryArea || "Customer delivery" : rowKind === "PICKUP" ? "Store pickup" : "Counter sale";
-      return <article className={styles[rowKind.toLowerCase()]} key={order.id}><div><a className="row-link" href={`${basePath}/${order.id}`}>{order.orderNumber}</a><small>{order.customerName} · {order.phone}</small></div><div><strong>{order.status.replaceAll("_", " ")}</strong><small>{new Date(order.createdAt).toLocaleDateString()}</small></div><div><strong className={`payment-type payment-type-${order.paymentMethod.toLowerCase()}`}>{paymentName(order.paymentMethod)}</strong><small>{order.paymentStatus}</small></div><div><strong>{fulfilmentLabel}</strong><small>{fulfilmentDetail}</small></div><strong>KES {Number(order.total).toLocaleString()}</strong><div className={styles.actions}><button aria-label="Order actions" onClick={(event) => { event.stopPropagation(); setOpen(open === order.id ? null : order.id); }}><MoreHorizontal/></button>{open === order.id ? <div onClick={(event) => event.stopPropagation()}><a href={`${basePath}/${order.id}`}>Open order</a>{allowDelete && removable.has(order.status) ? <button onClick={() => remove(order)}><Trash2/> Delete order</button> : null}</div> : null}</div></article>;
+      // A delivery row leads with the run itself — how far and how long — because that
+      // is what decides who takes it and when. Everything else collects at the counter.
+      const distance = order.deliveryDistanceKm === null ? null : Number(order.deliveryDistanceKm);
+      const run = rowKind !== "DELIVERY" ? null : [
+        distance ? `${distance.toLocaleString()} km` : null,
+        order.deliveryDurationMinutes ? `${order.deliveryDurationMinutes} min` : null,
+      ].filter(Boolean).join(" · ");
+      const fulfilmentDetail = rowKind === "DELIVERY"
+        ? run || order.deliveryArea || "Distance not measured"
+        : rowKind === "PICKUP" ? "Store pickup" : "Counter sale";
+      return <article className={styles[rowKind.toLowerCase()]} key={order.id}><div><a className="row-link" href={`${basePath}/${order.id}`}>{order.orderNumber}</a><small>{order.customerName} · {order.phone}</small></div><div><strong>{order.status.replaceAll("_", " ")}</strong><small>{new Date(order.createdAt).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</small></div><div><strong className={`payment-type payment-type-${order.paymentMethod.toLowerCase()}`}>{paymentName(order.paymentMethod)}</strong><small>{order.paymentStatus}</small></div><div><strong>{fulfilmentLabel}</strong><small>{fulfilmentDetail}</small></div><strong>KES {Number(order.total).toLocaleString()}</strong><div className={styles.actions}><button aria-label="Order actions" onClick={(event) => { event.stopPropagation(); setOpen(open === order.id ? null : order.id); }}><MoreHorizontal/></button>{open === order.id ? <div onClick={(event) => event.stopPropagation()}><a href={`${basePath}/${order.id}`}>Open order</a>{allowDelete && removable.has(order.status) ? <button onClick={() => remove(order)}><Trash2/> Delete order</button> : null}</div> : null}</div></article>;
     }) : <div className="database-empty"><ClipboardList/><strong>No matching orders</strong><span>{selected.length ? "Clear a status filter or search again." : emptyHint || "Try a different search."}</span></div>}</section></div>
     {pageSize && pageCount > 1 ? <div className={styles.pager}><button type="button" disabled={current === 0} onClick={() => setPage(current - 1)}>← Previous</button><span>Page {current + 1} of {pageCount}</span><button type="button" disabled={current >= pageCount - 1} onClick={() => setPage(current + 1)}>Next →</button></div> : null}
   </>;

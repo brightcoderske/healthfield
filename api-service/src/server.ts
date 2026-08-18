@@ -5,13 +5,15 @@ import { Readable } from "node:stream";
 import { resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { migrate } from "drizzle-orm/mysql2/migrator";
-import { getDb, closeDb } from "./db";
+import { getDb, closeDb, databaseClock } from "./db";
 import { json } from "./http";
+import { handleConsultationAttachment, handleConsultationMessages, handleConsultations } from "./consultations";
+import { handleDeliveryBands, handleDeliveryPreview, handleDeliveryQuote, handleDeliverySettings } from "./delivery";
 import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
 import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, reconcilePendingStkPayments, recoverMissedMpesaPayments } from "./payment-handlers";
 import {
-  handleAuth, handleBlogs, handleCampaigns, handleChats, handleCustomerOrderReceived, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
+  handleAuth, handleBlogs, handleCampaigns, handleChats, handleCustomerOrderReceived, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptionSelection, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
 } from "./mutations";
 
@@ -69,7 +71,13 @@ async function route(request: Request, ip: string): Promise<Response> {
   }
   // Browser navigations and <img> tags often omit Origin; only enforce CORS for credentialed cross-origin API calls.
   if (origin && !allowedOrigins.has(origin) && url.pathname.startsWith("/v1/")) return json({ error: "Origin not allowed." }, { status: 403 });
-  if (url.pathname === "/health") return json({ service: "healthfield-api", status: "ok", timestamp: new Date().toISOString(), deployment: deploymentInfo() });
+  if (url.pathname === "/health") {
+    // The clock is reported here because a timezone drift between the host and MySQL
+    // is invisible until a receipt shows the wrong time; this makes it checkable the
+    // moment a deploy lands.
+    const clock = await databaseClock().catch((error) => ({ error: error instanceof Error ? error.message : "Database clock unavailable." }));
+    return json({ service: "healthfield-api", status: "ok", timestamp: new Date().toISOString(), clock, deployment: deploymentInfo() });
+  }
   const paymentNotificationRoute = url.pathname.match(/^\/v1\/payments\/mobile-money\/(stk\/notification|c2b\/confirmation|c2b\/verification|status\/result|status\/timeout|recovery\/notification)\/([^/]+)$/);
   if (paymentNotificationRoute) {
     const configuredSecret = mpesaConfiguration()?.callbackSecret || "";
@@ -145,10 +153,27 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/prescriptions") return responseOf(handlePrescriptions(request));
   const prescriptionCheckoutMatch = url.pathname.match(/^\/v1\/prescriptions\/(\d+)\/checkout$/);
   if (prescriptionCheckoutMatch) return responseOf(handlePrescriptionCheckout(request, Number(prescriptionCheckoutMatch[1])));
+  const prescriptionSelectionMatch = url.pathname.match(/^\/v1\/prescriptions\/(\d+)\/selection$/);
+  if (prescriptionSelectionMatch) return responseOf(handlePrescriptionSelection(request, Number(prescriptionSelectionMatch[1])));
   const prescriptionMatch = url.pathname.match(/^\/v1\/prescriptions\/(\d+)\/download$/);
   if (prescriptionMatch) return responseOf(handlePrescriptions(request, Number(prescriptionMatch[1])));
   const prescriptionStatusMatch = url.pathname.match(/^\/v1\/prescriptions\/(\d+)$/);
   if (prescriptionStatusMatch) return responseOf(handlePrescriptions(request, Number(prescriptionStatusMatch[1])));
+  if (url.pathname === "/v1/consultations") {
+    // Opening a consultation needs no document, so the queue is protected here
+    // rather than relying on upload friction the way prescriptions do.
+    if (request.method === "POST" && rateLimited(`${trustedClientIp}:consultation`, 10)) return json({ error: "Too many consultation requests. Try again later." }, { status: 429, headers: { "Retry-After": "900" } });
+    return responseOf(handleConsultations(request));
+  }
+  const consultationMessageMatch = url.pathname.match(/^\/v1\/consultations\/(\d+)\/messages$/);
+  if (consultationMessageMatch) {
+    if (rateLimited(`${trustedClientIp}:consultation-message`, 60)) return json({ error: "Too many messages. Try again shortly." }, { status: 429, headers: { "Retry-After": "900" } });
+    return responseOf(handleConsultationMessages(request, Number(consultationMessageMatch[1])));
+  }
+  const consultationAttachmentMatch = url.pathname.match(/^\/v1\/consultations\/attachments\/(\d+)$/);
+  if (consultationAttachmentMatch) return responseOf(handleConsultationAttachment(request, Number(consultationAttachmentMatch[1])));
+  const consultationMatch = url.pathname.match(/^\/v1\/consultations\/(\d+)$/);
+  if (consultationMatch) return responseOf(handleConsultations(request, Number(consultationMatch[1])));
   const inventoryMatch = url.pathname.match(/^\/v1\/inventory\/(\d+)$/);
   if (inventoryMatch) return responseOf(handleInventory(request, Number(inventoryMatch[1])));
   if (url.pathname === "/v1/staff") return responseOf(handleStaff(request));
@@ -156,6 +181,17 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (staffPermissionsMatch) return responseOf(handleStaffPermissions(request, Number(staffPermissionsMatch[1])));
   const staffMatch = url.pathname.match(/^\/v1\/staff\/(\d+)$/);
   if (staffMatch) return responseOf(handleStaff(request, Number(staffMatch[1])));
+  if (url.pathname === "/v1/delivery/quote") {
+    // Quoting is open to anonymous shoppers and each call can hit Google, so the
+    // endpoint is capped per client rather than left as a free metering hole.
+    if (rateLimited(`${trustedClientIp}:delivery-quote`, 120)) return json({ error: "Too many delivery quotes. Try again shortly." }, { status: 429, headers: { "Retry-After": "900" } });
+    return responseOf(handleDeliveryQuote(request));
+  }
+  if (url.pathname === "/v1/delivery/preview") return responseOf(handleDeliveryPreview(request));
+  if (url.pathname === "/v1/delivery/settings") return responseOf(handleDeliverySettings(request));
+  if (url.pathname === "/v1/delivery/bands") return responseOf(handleDeliveryBands(request));
+  const deliveryBandMatch = url.pathname.match(/^\/v1\/delivery\/bands\/(\d+)$/);
+  if (deliveryBandMatch) return responseOf(handleDeliveryBands(request, Number(deliveryBandMatch[1])));
   if (url.pathname === "/v1/stores") return responseOf(handleStores(request));
   const storeMatch = url.pathname.match(/^\/v1\/stores\/(\d+)$/);
   if (storeMatch) return responseOf(handleStores(request, Number(storeMatch[1])));

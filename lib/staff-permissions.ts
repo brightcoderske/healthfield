@@ -9,6 +9,8 @@ export const STAFF_PERMISSION_VALUES = [
   "PAYMENTS_REVIEW",
   "PRESCRIPTIONS_VIEW",
   "PRESCRIPTIONS_PROCESS",
+  "CONSULTATIONS_VIEW",
+  "CONSULTATIONS_PROCESS",
   "INVENTORY_VIEW",
   "INVENTORY_UPDATE",
   "OFFERS_MANAGE",
@@ -39,6 +41,10 @@ export const STAFF_PERMISSION_GROUPS: ReadonlyArray<{
     { value:"INVENTORY_VIEW", label:"View inventory", description:"See stock for the staff member's assigned shop." },
     { value:"INVENTORY_UPDATE", label:"Update inventory", description:"Change available, reserved and reorder quantities for that shop." },
   ] },
+  { label: "Consultations", permissions: [
+    { value:"CONSULTATIONS_VIEW", label:"View consultations", description:"Open prescription consultation requests and their conversations." },
+    { value:"CONSULTATIONS_PROCESS", label:"Conduct consultations", description:"Reply to patients and issue prescriptions, OTC advice or referrals. Grant only to registered prescribers." },
+  ] },
   { label: "Storefront content", permissions: [
     { value:"OFFERS_MANAGE", label:"Manage offers", description:"Create, edit, publish and remove product offers." },
     { value:"BLOGS_MANAGE", label:"Manage blogs", description:"Create, edit, publish and remove blog articles." },
@@ -47,7 +53,12 @@ export const STAFF_PERMISSION_GROUPS: ReadonlyArray<{
 
 // Existing staff keep their current operational access after migration. An owner can
 // then narrow each account deliberately without a surprise lockout during rollout.
-export const DEFAULT_STAFF_PERMISSIONS: readonly StaffPermission[] = STAFF_PERMISSION_VALUES;
+// Consultation permissions are deliberately absent: issuing a prescription is a
+// prescriber's act, so it is granted deliberately per account rather than handed to
+// every new staff member the way dispensing access is.
+export const DEFAULT_STAFF_PERMISSIONS: readonly StaffPermission[] = STAFF_PERMISSION_VALUES.filter(
+  (permission) => permission !== "CONSULTATIONS_VIEW" && permission !== "CONSULTATIONS_PROCESS",
+);
 
 export const STAFF_PERMISSION_SET = new Set<string>(STAFF_PERMISSION_VALUES);
 
@@ -67,6 +78,7 @@ export const STAFF_PERMISSION_PATHS: ReadonlyArray<{ permission: StaffPermission
   { permission:"ORDERS_VIEW", href:"/staff/orders" },
   { permission:"PAST_ORDERS_VIEW", href:"/staff/past-orders" },
   { permission:"PRESCRIPTIONS_VIEW", href:"/staff/prescriptions" },
+  { permission:"CONSULTATIONS_VIEW", href:"/staff/consultations" },
   { permission:"OFFERS_MANAGE", href:"/staff/offers" },
   { permission:"BLOGS_MANAGE", href:"/staff/blogs" },
 ];

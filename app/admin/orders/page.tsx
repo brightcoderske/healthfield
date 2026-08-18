@@ -4,7 +4,7 @@ import { OrderList } from "./order-list";
 
 export const dynamic = "force-dynamic";
 
-type Order={id:number;orderNumber:string;customerName:string;phone:string;status:string;createdAt:string;paymentStatus:string;paymentMethod:string;paymentChannel:"ONLINE"|"POS"|null;amountPaid:string;fulfilmentMethod:"DELIVERY"|"PICKUP";total:string;deliveryArea:string|null};
+type Order={id:number;orderNumber:string;customerName:string;phone:string;status:string;createdAt:string;paymentStatus:string;paymentMethod:string;paymentChannel:"ONLINE"|"POS"|null;amountPaid:string;fulfilmentMethod:"DELIVERY"|"PICKUP";total:string;deliveryArea:string|null;deliveryDistanceKm:string|null;deliveryDurationMinutes:number|null};
 export default async function OrdersPage(){
   const {orders}=await backendJson<{orders:Order[]}>("/v1/views/admin/orders");
   // Dispatched and completed orders live on the Past orders tab so this stays a

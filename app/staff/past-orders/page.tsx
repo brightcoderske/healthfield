@@ -5,7 +5,7 @@ import { backendJson } from "@/lib/backend-api";
 import { requireStaffPermission } from "@/lib/auth";
 
 export const dynamic="force-dynamic";
-type Order={id:number;orderNumber:string;customerName:string;phone:string;status:string;createdAt:string;paymentStatus:string;paymentMethod:string;paymentChannel:"ONLINE"|"POS"|null;amountPaid:string;fulfilmentMethod:"DELIVERY"|"PICKUP";total:string;deliveryArea:string|null};
+type Order={id:number;orderNumber:string;customerName:string;phone:string;status:string;createdAt:string;paymentStatus:string;paymentMethod:string;paymentChannel:"ONLINE"|"POS"|null;amountPaid:string;fulfilmentMethod:"DELIVERY"|"PICKUP";total:string;deliveryArea:string|null;deliveryDistanceKm:string|null;deliveryDurationMinutes:number|null};
 
 export default async function StaffPastOrdersPage(){
   await requireStaffPermission("PAST_ORDERS_VIEW");
