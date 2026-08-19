@@ -78,9 +78,35 @@ export function googleMapsConfigured() {
  * checkout. A customer must never be blocked from paying because a third party is
  * briefly unreachable.
  */
-export async function googleRoute(from: GeoPoint, to: GeoPoint): Promise<{ km: number; minutes: number | null } | null> {
+type RoutedLeg = { km: number; minutes: number | null };
+
+/**
+ * Routed legs already paid for, keyed by the two endpoints.
+ *
+ * One customer pinning one address generates many quotes: every basket change, every
+ * free-delivery recalculation, and again when the order is finally placed. The distance
+ * between those two points does not change, so it is fetched once and reused. Without
+ * this, a single order could cost a dozen Routes calls instead of one.
+ *
+ * Coordinates are rounded to five decimals, roughly a metre, so the same pin always
+ * lands on the same key while genuinely different addresses never collide.
+ */
+const routeCache = new Map<string, { leg: RoutedLeg; expiresAt: number }>();
+const ROUTE_CACHE_TTL_MS = 60 * 60_000;
+const ROUTE_CACHE_LIMIT = 1000;
+
+function routeCacheKey(from: GeoPoint, to: GeoPoint) {
+  const at = (point: GeoPoint) => `${point.latitude.toFixed(5)},${point.longitude.toFixed(5)}`;
+  return `${at(from)}>${at(to)}`;
+}
+
+export async function googleRoute(from: GeoPoint, to: GeoPoint): Promise<RoutedLeg | null> {
   const key = process.env.GOOGLE_MAPS_API_KEY;
   if (!key) return null;
+  const cacheKey = routeCacheKey(from, to);
+  const cached = routeCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.leg;
   try {
     const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
       method: "POST",
@@ -110,13 +136,28 @@ export async function googleRoute(from: GeoPoint, to: GeoPoint): Promise<{ km: n
     if (typeof route?.distanceMeters !== "number") return null;
     // Duration arrives as a protobuf duration string, "1152s".
     const seconds = Number(String(route.duration ?? "").replace(/s$/, ""));
-    return {
+    const leg: RoutedLeg = {
       km: Math.round((route.distanceMeters / 1000) * 100) / 100,
       minutes: Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds / 60) : null,
     };
+    // Oldest entries are dropped first: Map preserves insertion order, so the head of
+    // the iterator is the least recently added.
+    if (routeCache.size >= ROUTE_CACHE_LIMIT) {
+      for (const staleKey of routeCache.keys()) {
+        routeCache.delete(staleKey);
+        if (routeCache.size < ROUTE_CACHE_LIMIT) break;
+      }
+    }
+    routeCache.set(cacheKey, { leg, expiresAt: Date.now() + ROUTE_CACHE_TTL_MS });
+    return leg;
   } catch {
     return null;
   }
+}
+
+/** Test seam: forgets every cached leg. */
+export function clearRouteCache() {
+  routeCache.clear();
 }
 
 export type FulfilmentQuote = {

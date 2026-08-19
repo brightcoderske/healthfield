@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Banknote,
   ArrowLeft,
   Check,
   CheckCircle2,
@@ -39,6 +40,7 @@ type Customer = {
 type PaymentOptions = {
   onlineMpesaEnabled: boolean;
   onlineManualEnabled: boolean;
+  onlineCodEnabled: boolean;
   tillNumber: string | null;
   accountName: string | null;
 };
@@ -53,7 +55,7 @@ export type CheckoutOffer = {
     prescriptionRequired: boolean;
   }>;
 };
-type PaymentMethod = "MPESA_EXPRESS" | "MANUAL_MPESA";
+type PaymentMethod = "MPESA_EXPRESS" | "MANUAL_MPESA" | "CASH_ON_DELIVERY";
 type CheckoutResult = {
   id: number;
   orderNumber: string;
@@ -529,8 +531,9 @@ export function CheckoutForm({
       </main>
     );
 
+  const codAvailable = payment.onlineCodEnabled && method === "DELIVERY";
   const noPayments =
-    !payment.onlineMpesaEnabled && !payment.onlineManualEnabled;
+    !payment.onlineMpesaEnabled && !payment.onlineManualEnabled && !codAvailable;
   return (
     <main className="checkout-page">
       <header>
@@ -701,7 +704,59 @@ export function CheckoutForm({
                 </span>
               </label>
             ) : null}
+            {codAvailable ? (
+              <label
+                className={`payment-choice ${paymentMethod === "CASH_ON_DELIVERY" ? "active" : ""}`}
+              >
+                <input
+                  type="radio"
+                  name="payment"
+                  value="CASH_ON_DELIVERY"
+                  checked={paymentMethod === "CASH_ON_DELIVERY"}
+                  onChange={() => setPaymentMethod("CASH_ON_DELIVERY")}
+                />
+                <Banknote />
+                <span>
+                  <strong>Cash on delivery</strong>
+                  <small>Pay the rider in cash when your order arrives</small>
+                </span>
+              </label>
+            ) : null}
           </div>
+          {paymentMethod === "CASH_ON_DELIVERY" ? (
+            <div className="cod-invoice">
+              <strong>Invoice — payable on delivery</strong>
+              <span>
+                Medicines<b>KES {subtotal.toLocaleString()}</b>
+              </span>
+              <span>
+                Delivery
+                <b>
+                  {!pin
+                    ? "Pin your location"
+                    : quotingDelivery
+                      ? "Calculating…"
+                      : deliveryFee === 0
+                        ? "FREE"
+                        : `KES ${deliveryFee.toLocaleString()}`}
+                </b>
+              </span>
+              {deliveryQuote?.available ? (
+                <span className="cod-invoice-detail">
+                  {deliveryQuote.distanceKm.toLocaleString()} km
+                  {deliveryQuote.bandLabel ? ` · ${deliveryQuote.bandLabel}` : ""}
+                  {deliveryQuote.branchName ? ` from ${deliveryQuote.branchName}` : ""}
+                </span>
+              ) : null}
+              <span className="cod-invoice-total">
+                Amount due on delivery<b>KES {total.toLocaleString()}</b>
+              </span>
+              <small>
+                No payment is taken now. Have the exact amount ready for the rider — an
+                invoice is emailed to you once the order is placed.
+              </small>
+            </div>
+          ) : null}
           {paymentMethod === "MPESA_EXPRESS" && payment.onlineMpesaEnabled ? (
             <label className="billing-phone">
               Phone number to receive the M-Pesa prompt
@@ -744,10 +799,14 @@ export function CheckoutForm({
             }
           >
             {submitting
-              ? "Starting secure payment…"
-              : paymentMethod === "MPESA_EXPRESS"
-                ? "Pay with M-Pesa"
-                : "Submit proof and place order"}
+              ? paymentMethod === "CASH_ON_DELIVERY"
+                ? "Placing order…"
+                : "Starting secure payment…"
+              : paymentMethod === "CASH_ON_DELIVERY"
+                ? `Place order · Pay KES ${total.toLocaleString()} on delivery`
+                : paymentMethod === "MPESA_EXPRESS"
+                  ? "Pay with M-Pesa"
+                  : "Submit proof and place order"}
           </button>
         </form>
         <aside>

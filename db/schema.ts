@@ -156,7 +156,7 @@ export const orders = mysqlTable("orders", {
 export const paymentTransactions = mysqlTable("payment_transactions", {
   id: int("id").autoincrement().primaryKey(),
   orderId: int("order_id").notNull().references(() => orders.id),
-  method: mysqlEnum("method", ["MPESA_EXPRESS", "MANUAL_MPESA", "CASH"]).notNull(),
+  method: mysqlEnum("method", ["MPESA_EXPRESS", "MANUAL_MPESA", "CASH", "CASH_ON_DELIVERY"]).notNull(),
   channel: mysqlEnum("channel", ["ONLINE", "POS"]).notNull(),
   status: mysqlEnum("status", ["INITIATED", "PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "PAID", "FAILED", "CANCELLED", "REFUNDED"]).default("INITIATED").notNull(),
   amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
@@ -326,6 +326,9 @@ export const siteSettings = mysqlTable("site_settings", {
   posCashEnabled: boolean("pos_cash_enabled").default(true).notNull(),
   posMpesaEnabled: boolean("pos_mpesa_enabled").default(true).notNull(),
   posManualEnabled: boolean("pos_manual_enabled").default(true).notNull(),
+  // Cash on delivery for online orders. Off by default: it carries real collection
+  // risk, so it is a deliberate choice rather than something a shop inherits.
+  onlineCodEnabled: boolean("online_cod_enabled").default(false).notNull(),
   mpesaTillNumber: varchar("mpesa_till_number", { length: 30 }),
   mpesaAccountName: varchar("mpesa_account_name", { length: 150 }),
   // Distance-based delivery. The bands themselves live in delivery_bands; these are

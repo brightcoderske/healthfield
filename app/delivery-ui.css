@@ -112,3 +112,14 @@
 .checkout-location-title{font-size:10px;}
 .map-picker-canvas{border-radius:9px;}
 }
+
+/* Cash on delivery states what is owed, not what was paid — so it reads as an invoice,
+   with the amount due given the same weight a receipt gives the amount settled. */
+.cod-invoice{margin:10px 0 2px;padding:13px 15px;border:1px solid #f0dcc0;border-radius:11px;background:#fffaf1;display:flex;flex-direction:column;gap:6px;}
+.cod-invoice > strong{color:#89521d;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;}
+.cod-invoice > span{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#4c4650;font-size:10.5px;}
+.cod-invoice > span b{font-weight:750;}
+.cod-invoice-detail{color:#8a7f72!important;font-size:8.5px!important;}
+.cod-invoice-total{margin-top:3px;padding-top:8px;border-top:1px solid #eddcc2;color:#181529!important;font-size:12px!important;font-weight:800;}
+.cod-invoice-total b{font-size:14px;color:#89521d;}
+.cod-invoice > small{color:#7a7380;font-size:8.5px;line-height:1.5;}

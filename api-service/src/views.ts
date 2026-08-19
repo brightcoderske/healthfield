@@ -1106,6 +1106,7 @@ export async function handleView(request: Request, path: string) {
         .select({
           onlineMpesaEnabled: siteSettings.onlineMpesaEnabled,
           onlineManualEnabled: siteSettings.onlineManualEnabled,
+          onlineCodEnabled: siteSettings.onlineCodEnabled,
           mpesaTillNumber: siteSettings.mpesaTillNumber,
           mpesaAccountName: siteSettings.mpesaAccountName,
         })
@@ -1126,6 +1127,9 @@ export async function handleView(request: Request, path: string) {
         onlineManualEnabled: Boolean(
           settings?.onlineManualEnabled && settings.mpesaTillNumber,
         ),
+        // Cash on delivery has no provider to be configured, but it only makes sense
+        // for an order someone can actually be handed, so delivery gates it downstream.
+        onlineCodEnabled: Boolean(settings?.onlineCodEnabled),
         tillNumber: settings?.mpesaTillNumber || null,
         accountName: settings?.mpesaAccountName || null,
       },
@@ -1211,6 +1215,7 @@ export async function handleView(request: Request, path: string) {
       .select({
         onlineMpesaEnabled: siteSettings.onlineMpesaEnabled,
         onlineManualEnabled: siteSettings.onlineManualEnabled,
+        onlineCodEnabled: siteSettings.onlineCodEnabled,
         mpesaTillNumber: siteSettings.mpesaTillNumber,
         mpesaAccountName: siteSettings.mpesaAccountName,
       })

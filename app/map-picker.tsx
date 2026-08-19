@@ -182,6 +182,9 @@ export function MapPicker({
   const [searching, setSearching] = useState(false);
   const [searchBroken, setSearchBroken] = useState(false);
   const [mapsAvailable, setMapsAvailable] = useState(false);
+  // The load has finished, one way or the other. Distinguishes "still loading" from
+  // "genuinely unavailable", which decides whether the search box reports a fault.
+  const [mapsSettled, setMapsSettled] = useState(!googleMapsApiKey());
   const [mapOpen, setMapOpen] = useState(false);
   const [locating, setLocating] = useState(false);
   const [hint, setHint] = useState("");
@@ -203,7 +206,9 @@ export function MapPicker({
     if (!apiKey) return;
     let cancelled = false;
     void loadGoogleMaps(apiKey).then((maps) => {
-      if (cancelled || !maps) { if (!cancelled) setSearchBroken(true); return; }
+      if (cancelled) return;
+      setMapsSettled(true);
+      if (!maps) { setSearchBroken(true); return; }
       libraries.current = maps;
       geocoderRef.current = new maps.Geocoder();
       setMapsAvailable(true);
@@ -218,11 +223,21 @@ export function MapPicker({
     // Below three characters there is nothing worth a billed request; the field is
     // cleared by the change handler rather than here, so this effect only ever fetches.
     if (text.length < 3) return;
-    const maps = libraries.current;
-    const autocomplete = maps?.AutocompleteSuggestion;
-    if (!maps || !autocomplete) return;
     const id = (requestId.current += 1);
     const timer = window.setTimeout(async () => {
+      // Resolved inside the timer, not above it: bailing out early left the spinner
+      // running forever whenever Places was unavailable, because the change handler had
+      // already switched it on and nothing was left to switch it off.
+      const maps = libraries.current;
+      const autocomplete = maps?.AutocompleteSuggestion;
+      if (!maps || !autocomplete) {
+        if (id !== requestId.current) return;
+        setSearching(false);
+        // Only a settled load counts as broken; still loading just means try again on
+        // the next keystroke, which the mapsAvailable dependency below takes care of.
+        if (mapsSettled) setSearchBroken(true);
+        return;
+      }
       if (maps.AutocompleteSessionToken && !sessionToken.current) sessionToken.current = new maps.AutocompleteSessionToken();
       try {
         const response = await autocomplete.fetchAutocompleteSuggestions({
@@ -254,7 +269,8 @@ export function MapPicker({
       }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [query]);
+    // mapsSettled re-runs the search once the API finishes loading mid-typing.
+  }, [query, mapsSettled]);
 
   async function choose(suggestion: Suggestion) {
     setQuery(suggestion.primary);

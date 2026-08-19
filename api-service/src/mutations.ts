@@ -468,7 +468,7 @@ export async function handleOrders(request: Request, id?: number) {
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
   const parsed = z.object({
     fullName: z.string().trim().min(3).max(200), phone: z.string().trim().min(9).max(30), email: z.string().trim().email().optional().or(z.literal("")),
-    fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA_EXPRESS", "MANUAL_MPESA"]), billingPhone: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(30).optional()), manualPaymentMessage: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(2500).optional()), deliveryAddress: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(1000).optional()), deliveryArea: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(160).optional()),
+    fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA_EXPRESS", "MANUAL_MPESA", "CASH_ON_DELIVERY"]), billingPhone: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(30).optional()), manualPaymentMessage: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(2500).optional()), deliveryAddress: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(1000).optional()), deliveryArea: z.preprocess(value=>value===null?undefined:value,z.string().trim().max(160).optional()),
     deliveryLatitude: z.preprocess(value=>value===null?undefined:value,z.number().min(-90).max(90).optional()), deliveryLongitude: z.preprocess(value=>value===null?undefined:value,z.number().min(-180).max(180).optional()),
     checkoutToken: z.string().uuid(),
     items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).default([]),
@@ -484,7 +484,13 @@ export async function handleOrders(request: Request, id?: number) {
   const db = getDb();
   const [duplicate] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, total: orders.total, paymentStatus: orders.paymentStatus, paymentMethod: orders.paymentMethod }).from(orders).where(eq(orders.checkoutToken, parsed.data.checkoutToken)).limit(1);
   if (duplicate) return json({ ok: true, id: duplicate.id, orderNumber: duplicate.orderNumber, total: Number(duplicate.total), paymentStatus: duplicate.paymentStatus, paymentMethod: duplicate.paymentMethod, duplicate: true });
-  const [paymentSettings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber }).from(siteSettings).limit(1);
+  const [paymentSettings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, onlineCodEnabled: siteSettings.onlineCodEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber }).from(siteSettings).limit(1);
+  // Cash on delivery is only offered where there is a delivery to collect it on, and
+  // only while the shop has it switched on.
+  if (parsed.data.paymentMethod === "CASH_ON_DELIVERY") {
+    if (!paymentSettings?.onlineCodEnabled) return json({ error: "Cash on delivery is not available right now. Choose an M-Pesa option.", code: "COD_UNAVAILABLE" }, { status: 409 });
+    if (parsed.data.fulfilmentMethod !== "DELIVERY") return json({ error: "Cash on delivery applies to delivered orders only. Pay for a pickup order at the counter.", code: "COD_REQUIRES_DELIVERY" }, { status: 409 });
+  }
   if (parsed.data.paymentMethod === "MPESA_EXPRESS" && (!paymentSettings?.onlineMpesaEnabled || !mpesaConfiguration())) return json({ error: "M-Pesa Express is currently unavailable. Choose manual M-Pesa payment.", code: "MPESA_UNAVAILABLE" }, { status: 409 });
   if (parsed.data.paymentMethod === "MANUAL_MPESA" && (!paymentSettings?.onlineManualEnabled || !paymentSettings.mpesaTillNumber)) return json({ error: "Manual M-Pesa payment is currently unavailable.", code: "MANUAL_PAYMENT_UNAVAILABLE" }, { status: 409 });
   // An online till payment must carry its receipt: nobody is standing at the counter to
@@ -548,12 +554,12 @@ export async function handleOrders(request: Request, id?: number) {
       ...lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })),
       ...bundleLines.map((line) => ({ orderId: created.insertId, productId: line.productId, productName: line.productName, quantity: line.quantity, unitPrice: line.unitPrice.toString(), lineTotal: line.total.toString(), offerId: line.offerId, offerTitle: line.offerTitle })),
     ]);
-    const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: (subtotal + deliveryFee).toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
+    const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "CASH_ON_DELIVERY" ? "PENDING" : parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: (subtotal + deliveryFee).toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
     return { orderId: created.insertId, paymentId: payment.insertId, orderNumber };
   });
   const orderNumber = result.orderNumber;
   let paymentStatus: "PENDING" | "FAILED" | "PAID" = "PENDING";
-  let paymentMessage = parsed.data.paymentMethod === "MANUAL_MPESA" ? "Receipt extracted. Healthfield is checking Safaricom before sending it for review." : "Check your phone and enter your M-Pesa PIN.";
+  let paymentMessage = parsed.data.paymentMethod === "CASH_ON_DELIVERY" ? "Order placed. Pay the rider in cash when your medicines arrive." : parsed.data.paymentMethod === "MANUAL_MPESA" ? "Receipt extracted. Healthfield is checking Safaricom before sending it for review." : "Check your phone and enter your M-Pesa PIN.";
   if (parsed.data.paymentMethod === "MPESA_EXPRESS") {
     try {
       const stk = await initiateStkPush({ orderNumber, phone: parsed.data.billingPhone || parsed.data.phone, amount: subtotal + deliveryFee });
@@ -575,6 +581,15 @@ export async function handleOrders(request: Request, id?: number) {
       void requestKnownTransactionStatus(result.paymentId).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: result.paymentId, error }));
     }
   }
+  if (orderEmail && parsed.data.paymentMethod === "CASH_ON_DELIVERY") void sendEmail({ to: orderEmail, subject: `Invoice for ${orderNumber} — pay on delivery`, message: `Hello ${parsed.data.fullName},
+
+Your order ${orderNumber} is confirmed for cash on delivery.
+
+Medicines: KES ${subtotal.toLocaleString()}
+Delivery: KES ${deliveryFee.toLocaleString()}
+Amount due on delivery: KES ${(subtotal + deliveryFee).toLocaleString()}
+
+Please have the exact amount ready for the rider.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"CASH ON DELIVERY"}), channel:"orders" });
   if (orderEmail && parsed.data.paymentMethod === "MANUAL_MPESA" && paymentStatus !== "PAID") void sendEmail({ to: orderEmail, subject: `Payment proof received for ${orderNumber}`, message: `Hello ${parsed.data.fullName},\n\nWe received your payment proof for order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}. We will confirm it before processing the order.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"PAYMENT REVIEW"}), channel:"orders" });
   if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.`, channel:"orders" });
   return json({ ok: true, id: result.orderId, orderNumber, total: subtotal + deliveryFee, paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
@@ -1329,7 +1344,7 @@ export async function handleSettings(request: Request) {
     address: z.string().trim().max(1000), openingHours: z.string().trim().max(255), deliveryMessage: z.string().trim().min(2).max(255), freeDeliveryThreshold: z.coerce.number().nonnegative().optional(),
     bulkSmsApiUrl: z.string().trim().url().or(z.literal("")), bulkSmsApiKey: z.string().trim().max(500), bulkSmsSenderId: z.string().trim().max(50),
     facebookUrl: z.string().trim().url().or(z.literal("")), instagramUrl: z.string().trim().url().or(z.literal("")), xUrl: z.string().trim().url().or(z.literal("")), tiktokUrl: z.string().trim().url().or(z.literal("")), licenceTitle:z.string().trim().max(190),licenceNumber:z.string().trim().max(120),licenceImageUrl:z.string().trim().max(500), requireTeamTwoFactor: z.boolean(),
-    onlineMpesaEnabled:z.boolean(),onlineManualEnabled:z.boolean(),posCashEnabled:z.boolean(),posMpesaEnabled:z.boolean(),posManualEnabled:z.boolean(),mpesaTillNumber:z.string().trim().max(30),mpesaAccountName:z.string().trim().max(150),
+    onlineMpesaEnabled:z.boolean(),onlineManualEnabled:z.boolean(),onlineCodEnabled:z.boolean().optional().default(false),posCashEnabled:z.boolean(),posMpesaEnabled:z.boolean(),posManualEnabled:z.boolean(),mpesaTillNumber:z.string().trim().max(30),mpesaAccountName:z.string().trim().max(150),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid settings." }, { status: 400 });
   const data = parsed.data;

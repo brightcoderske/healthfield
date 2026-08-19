@@ -23,6 +23,7 @@ type Data = {
   payment: {
     onlineMpesaEnabled: boolean;
     onlineManualEnabled: boolean;
+    onlineCodEnabled: boolean;
     tillNumber: string | null;
     accountName: string | null;
   };
