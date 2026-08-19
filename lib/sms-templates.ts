@@ -117,11 +117,32 @@ export type OrderSmsContext = {
   amountDue?: number | null;
   branchName?: string | null;
   pharmacyName?: string;
+  /** Shown so a customer with a question can call rather than guess. */
+  pharmacyPhone?: string | null;
 };
 
+// Counter sales are recorded against a placeholder when nobody gave a name. Greeting
+// someone as "Hi Walk-in" reads as careless, so these are treated as no name at all.
+const PLACEHOLDER_NAMES = new Set(["walk", "walkin", "walk-in", "customer", "guest", "client", "cash", "n/a", "na", "unknown", "anonymous"]);
+
 function firstName(value: string | null | undefined) {
-  const name = String(value ?? "").trim().split(/\s+/)[0] ?? "";
-  return name.length > 1 ? name : "";
+  const trimmed = String(value ?? "").trim();
+  if (PLACEHOLDER_NAMES.has(trimmed.toLowerCase().replace(/\s+customer$/, ""))) return "";
+  const name = trimmed.split(/\s+/)[0] ?? "";
+  if (name.length < 2 || PLACEHOLDER_NAMES.has(name.toLowerCase())) return "";
+  return name;
+}
+
+/** "Hi Grace, " when there is a real name, "Hi customer, " when there is not. */
+function greeting(value: string | null | undefined) {
+  const name = firstName(value);
+  return name ? `Hi ${name}, ` : "Hi customer, ";
+}
+
+/** The shop's own number, appended so a reply has somewhere to go. */
+function helpline(phone: string | null | undefined) {
+  const digits = String(phone ?? "").trim();
+  return digits ? ` Help: ${digits}` : "";
 }
 
 function money(value: number | null | undefined) {
@@ -137,8 +158,8 @@ function money(value: number | null | undefined) {
  */
 export function orderSms(purpose: SmsPurpose, context: OrderSmsContext): string {
   const brand = context.pharmacyName?.trim() || "Healthfield";
-  const greeting = firstName(context.customerName);
-  const hello = greeting ? `Hi ${greeting}, ` : "";
+  const hello = greeting(context.customerName);
+  const help = helpline(context.pharmacyPhone);
   const total = money(context.total);
   const due = money(context.amountDue);
   const branch = context.branchName?.trim();
@@ -146,29 +167,29 @@ export function orderSms(purpose: SmsPurpose, context: OrderSmsContext): string 
   switch (purpose) {
     case "ORDER_RECEIVED":
       return toGsm7(
-        `${hello}${brand} has received your order ${context.orderNumber}. Track it at ${ORDER_TRACKING_URL}`,
+        `${hello}${brand} has received your order ${context.orderNumber}. Track it at ${ORDER_TRACKING_URL}.${help}`,
       );
     // The counter sale is already paid and already handed over, so this confirms rather
     // than promises: nothing further is going to happen that the customer must wait for.
     case "POS_SALE_COMPLETE":
       return toGsm7(
-        `${hello}we have received your payment and your order has been processed. Thanks for shopping with ${brand}. More at healthfieldpharmacy.co.ke`,
+        `${hello}we have received your payment and your order has been processed. Thanks for shopping with ${brand}.${help}`,
       );
     case "ORDER_READY_FOR_PICKUP":
       return toGsm7(
-        `${hello}order ${context.orderNumber} is ready for pickup${branch ? ` at ${brand} ${branch}` : ` at ${brand}`}. Please carry your order number.`,
+        `${hello}order ${context.orderNumber} is ready for pickup${branch ? ` at ${brand} ${branch}` : ` at ${brand}`}. Please carry your order number.${help}`,
       );
     case "ORDER_OUT_FOR_DELIVERY":
       return toGsm7(
-        `${hello}order ${context.orderNumber} is ready and on its way to you${due ? `. Please have ${due} ready for the rider` : ""}. ${brand}`,
+        `${hello}order ${context.orderNumber} is ready and on its way to you${due ? `. Please have ${due} ready for the rider` : ""}. ${brand}.${help}`,
       );
     case "PAYMENT_CONFIRMED":
       return toGsm7(
-        `${hello}${brand} has confirmed payment${total ? ` of ${total}` : ""} for order ${context.orderNumber}. Thank you.`,
+        `${hello}${brand} has confirmed payment${total ? ` of ${total}` : ""} for order ${context.orderNumber}. Thank you.${help}`,
       );
     case "CASH_ON_DELIVERY_DUE":
       return toGsm7(
-        `${hello}order ${context.orderNumber} is confirmed for cash on delivery${due ? `. Amount due on arrival: ${due}` : ""}. ${brand}`,
+        `${hello}order ${context.orderNumber} is confirmed for cash on delivery${due ? `. Amount due on arrival: ${due}` : ""}. ${brand}.${help}`,
       );
     default:
       return toGsm7(`${brand}: order ${context.orderNumber} has been updated.`);

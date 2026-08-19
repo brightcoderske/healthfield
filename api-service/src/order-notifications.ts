@@ -35,7 +35,7 @@ export async function notifyOrderBySms(orderId: number, purpose: SmsPurpose) {
       .where(eq(orders.id, orderId))
       .limit(1);
     if (!order?.phone) return;
-    const [settings] = await db.select({ pharmacyName: siteSettings.pharmacyName }).from(siteSettings).limit(1);
+    const [settings] = await db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone }).from(siteSettings).limit(1);
     const total = Number(order.total);
     const message = orderSms(purpose, {
       orderNumber: order.orderNumber,
@@ -45,6 +45,7 @@ export async function notifyOrderBySms(orderId: number, purpose: SmsPurpose) {
       amountDue: order.paymentStatus === "PAID" ? null : total,
       branchName: order.branchName,
       pharmacyName: settings?.pharmacyName ?? undefined,
+      pharmacyPhone: settings?.phone ?? null,
     });
     const outcome = await sendSms({ to: order.phone, message, purpose });
     if (outcome.failed) console.warn("Order SMS was not delivered", { orderId, purpose, detail: outcome.results[0]?.detail });

@@ -17,14 +17,17 @@ import {
  * on the API service only.
  *
  * Endpoints and field names come from their developer documentation:
- *   send    POST https://isms.celcomafrica.com/api/services/sendsms/
- *   dlr     POST https://isms.celcomafrica.com/api/services/getdlr/
- *   balance POST https://isms.celcomafrica.com/api/services/getbalance/
+ *   send    POST https://isms.celcomafrica.com/api/services/sendsms
+ *   dlr     POST https://isms.celcomafrica.com/api/services/getdlr
+ *   balance POST https://isms.celcomafrica.com/api/services/getbalance
+ *
+ * No trailing slash. Their documentation shows one, but the live service answers
+ * getbalance with an empty body when it is present — verified against a real account.
  */
 
-const DEFAULT_SEND_URL = "https://isms.celcomafrica.com/api/services/sendsms/";
-const DEFAULT_DLR_URL = "https://isms.celcomafrica.com/api/services/getdlr/";
-const DEFAULT_BALANCE_URL = "https://isms.celcomafrica.com/api/services/getbalance/";
+const DEFAULT_SEND_URL = "https://isms.celcomafrica.com/api/services/sendsms";
+const DEFAULT_DLR_URL = "https://isms.celcomafrica.com/api/services/getdlr";
+const DEFAULT_BALANCE_URL = "https://isms.celcomafrica.com/api/services/getbalance";
 
 export type SmsConfiguration = {
   sendUrl: string;
@@ -76,7 +79,9 @@ const RETURN_CODES: Record<string, string> = {
   "1001": "Invalid sender ID — the shortcode is not registered on this account.",
   "1002": "Network not allowed for this account.",
   "1003": "Invalid mobile number.",
-  "1004": "Low bulk credits — top up the Celcom account.",
+  // Documented as "low bulk credits", but the live service returns this for an
+  // unusable number — confirmed on an account with credit to spare.
+  "1004": "Invalid or unsupported mobile number (Celcom also uses this code for low credit).",
   "1005": "Celcom system error.",
   "1006": "Invalid credentials — check the API key and partner ID.",
   "1007": "Celcom system error.",
@@ -140,6 +145,8 @@ async function logSmsResults(input: {
   segmentsEach: number;
   orderId?: number | null;
   campaignId?: number | null;
+  /** Overrides the per-result outcome, used by the dry run. */
+  status?: "SENT" | "FAILED" | "PENDING";
 }) {
   if (!input.results.length) return;
   try {
@@ -152,7 +159,7 @@ async function logSmsResults(input: {
       segments: input.segmentsEach,
       providerMessageId: result.messageId,
       // "Sent" is all the send call can tell us; delivery is only known from a report.
-      status: result.ok ? "SENT" as const : "FAILED" as const,
+      status: input.status ?? (result.ok ? "SENT" as const : "FAILED" as const),
       responseCode: result.code || null,
       detail: result.detail.slice(0, 255),
       orderId: input.orderId ?? null,
@@ -171,20 +178,53 @@ export type SmsSendOutcome = {
   results: SmsResult[];
 };
 
+/**
+ * Node reports every connection-level failure as the single word "fetch failed" and
+ * hides the real reason on `error.cause`. Unwrapping it is the difference between a log
+ * line nobody can act on and one that names DNS, TLS or a refused connection.
+ */
+function networkReason(error: unknown) {
+  if (!(error instanceof Error)) return String(error);
+  const cause = (error as { cause?: { code?: string; message?: string } }).cause;
+  const detail = cause?.code || cause?.message;
+  return detail ? `${error.message} (${detail})` : error.message;
+}
+
+/** A connection that never landed is worth one more try; a rejection is not. */
+function isTransient(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "TimeoutError") return true;
+  const code = (error as { cause?: { code?: string } }).cause?.code || "";
+  return error.message === "fetch failed"
+    || ["ENOTFOUND", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ETIMEDOUT", "EPIPE", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"].includes(code);
+}
+
 async function postJson(url: string, body: Record<string, unknown>, timeoutMs = 15_000) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`Celcom returned HTTP ${response.status}: ${text.slice(0, 300)}`);
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw new Error(`Celcom returned a non-JSON response: ${text.slice(0, 300)}`);
+  // One retry, because a momentary blip should not silently cost a customer their
+  // order confirmation. Anything Celcom actually answered is never retried.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, 1200));
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`Celcom returned HTTP ${response.status}: ${text.slice(0, 300)}`);
+      try {
+        return JSON.parse(text) as unknown;
+      } catch {
+        throw new Error(`Celcom returned a non-JSON response: ${text.slice(0, 300)}`);
+      }
+    } catch (error) {
+      lastError = error;
+      if (!isTransient(error)) throw new Error(networkReason(error));
+    }
   }
+  throw new Error(`${networkReason(lastError)} after 2 attempts`);
 }
 
 /**
@@ -223,6 +263,20 @@ export async function sendSms(input: {
 
   if (configuration.dryRun) {
     console.info("SMS dry run", { purpose: input.purpose, recipients: recipients.length, segments, message });
+    // Still logged, or a rehearsal would leave nothing to inspect — the whole point of
+    // a dry run is seeing exactly what would have gone out, to whom, at what cost.
+    // Marked PENDING with an explicit note rather than SENT, because nothing left here.
+    const results: SmsResult[] = recipients.map((recipient) => ({
+      recipient, ok: false, messageId: null, code: "",
+      detail: "Dry run — composed but not sent to the network.",
+    }));
+    await logSmsResults({
+      results, message, purpose: input.purpose,
+      senderId: senderIdFor(configuration, input.purpose),
+      segmentsEach: smsSegments(message),
+      orderId: input.orderId, campaignId: input.campaignId,
+      status: "PENDING",
+    });
     return { sent: 0, failed: 0, skipped: "Dry run — no message was sent.", segments, results: [] };
   }
 

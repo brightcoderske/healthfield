@@ -57,7 +57,7 @@ test("segment counting follows the concatenation rules", () => {
   assert.equal(smsSegments("[".repeat(81)), 2);
 });
 
-const order = { orderNumber: "HF-WEB-1042", customerName: "Grace Wanjiru", total: 2400, pharmacyName: "Healthfield" };
+const order = { orderNumber: "HF-WEB-1042", customerName: "Grace Wanjiru", total: 2400, pharmacyName: "Healthfield", pharmacyPhone: "0757148900" };
 
 test("every transactional message names the pharmacy and the order", () => {
   for (const purpose of ["ORDER_RECEIVED", "ORDER_READY_FOR_PICKUP", "ORDER_OUT_FOR_DELIVERY", "PAYMENT_CONFIRMED"] as const) {
@@ -77,10 +77,12 @@ test("the order-received message points at the tracking page", () => {
 });
 
 test("the counter sale message confirms payment and asks nothing further", () => {
-  const message = orderSms("POS_SALE_COMPLETE", { orderNumber: "POS-1042", customerName: "Grace Wanjiru" });
+  const message = orderSms("POS_SALE_COMPLETE", { orderNumber: "POS-1042", customerName: "Grace Wanjiru", pharmacyPhone: "0757148900" });
   assert.match(message, /received your payment/);
   assert.match(message, /been processed/);
-  assert.match(message, /healthfieldpharmacy\.co\.ke/);
+  // The shop's number replaced the website here: a counter customer with a query wants
+  // to call, and the message has no room for both inside one segment.
+  assert.match(message, /Help: 0757148900/);
   assert.equal(smsSegments(message), 1, `too long: ${gsm7Length(message)} chars`);
   // Nothing is pending, so it must not promise a further update.
   assert.ok(!/we will let you know|ready for/i.test(message));
@@ -102,11 +104,28 @@ test("the cash-on-delivery message states what the rider will collect", () => {
   assert.equal(smsSegments(message), 1);
 });
 
-test("a first name is used when it is usable and skipped when it is not", () => {
+test("a real first name is used, and a placeholder never is", () => {
   assert.match(orderSms("ORDER_RECEIVED", order), /^Hi Grace, /);
-  assert.ok(!orderSms("ORDER_RECEIVED", { ...order, customerName: null }).startsWith("Hi"));
-  // A single initial is not a greeting worth sending.
-  assert.ok(!orderSms("ORDER_RECEIVED", { ...order, customerName: "G" }).startsWith("Hi"));
+  // A counter sale with nobody named is recorded as "Walk-in customer". Greeting
+  // someone as "Hi Walk-in" reads as careless, so it falls back to a neutral opening.
+  for (const placeholder of ["Walk-in customer", "walk-in", "Walk in customer", "Customer", "Guest", "N/A", null, "", "G"]) {
+    const message = orderSms("ORDER_RECEIVED", { ...order, customerName: placeholder });
+    assert.match(message, /^Hi customer, /, `bad greeting for ${JSON.stringify(placeholder)}: ${message}`);
+    assert.ok(!/Hi Walk/i.test(message), "a placeholder leaked into the greeting");
+  }
+});
+
+test("every message carries the shop phone and still fits one segment", () => {
+  for (const purpose of ["ORDER_RECEIVED", "POS_SALE_COMPLETE", "ORDER_READY_FOR_PICKUP", "ORDER_OUT_FOR_DELIVERY", "PAYMENT_CONFIRMED", "CASH_ON_DELIVERY_DUE"] as const) {
+    const message = orderSms(purpose, { ...order, amountDue: 2400, customerName: "Walk-in customer" });
+    assert.match(message, /Help: 0757148900$/, `${purpose} omits the shop phone`);
+    assert.equal(smsSegments(message), 1, `${purpose} spills to a second segment: ${gsm7Length(message)} chars`);
+  }
+});
+
+test("no shop phone means no dangling label", () => {
+  const message = orderSms("ORDER_RECEIVED", { ...order, pharmacyPhone: null });
+  assert.ok(!/Help:/.test(message), `left an empty helpline: ${message}`);
 });
 
 test("the pickup message points at the branch holding the order", () => {

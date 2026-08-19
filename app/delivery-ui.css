@@ -219,3 +219,15 @@
 .settings-section-head{flex-wrap:wrap;}
 .settings-section-head button{width:100%;justify-content:center;}
 }
+
+/* Delivery income by band. Income only — courier cost is not recorded yet, and the
+   footer says so rather than letting the figure be read as margin. */
+.delivery-band-breakdown{margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;}
+.delivery-band-breakdown li{position:relative;padding:8px 10px 10px;border:1px solid #ece8ee;border-radius:9px;background:#fff;display:flex;align-items:center;justify-content:space-between;gap:10px;overflow:hidden;}
+.delivery-band-breakdown span{min-width:0;display:flex;flex-direction:column;gap:1px;}
+.delivery-band-breakdown strong{font-size:10.5px;}
+.delivery-band-breakdown small{color:#7a7380;font-size:8px;}
+.delivery-band-breakdown b{font-size:12px;white-space:nowrap;}
+.delivery-band-breakdown i{position:absolute;left:0;bottom:0;height:3px;background:linear-gradient(90deg, #762584, #d92f91);border-radius:0 3px 3px 0;}
+.delivery-band-empty{margin:12px 0 0;color:#7a7380;font-size:9.5px;}
+.delivery-band-footer{margin-top:10px;color:#8a8390;font-size:8px;line-height:1.5;}

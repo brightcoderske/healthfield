@@ -11,6 +11,7 @@ import {
   TriangleAlert,
   Users,
   Send,
+  Truck,
 } from "lucide-react";
 import Link from "next/link";
 type Row = {
@@ -37,9 +38,21 @@ const kenyaDateKey = (date: Date) => {
   const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
   return `${part("year")}-${part("month")}-${part("day")}`;
 };
+type DeliveryRow = {
+  orderId: number;
+  createdAt: string;
+  deliveryFee: string;
+  distanceKm: string | null;
+  bandId: number | null;
+  bandLabel: string | null;
+  bandMinKm: string | null;
+};
+
 export function Dashboard({
   stats,
   analytics = [],
+  deliveries = [],
+  deliveryBands = [],
   recentOrders = [],
   variant = "admin",
   branchName,
@@ -54,6 +67,8 @@ export function Dashboard({
     customers: number;
   };
   analytics?: Row[];
+  deliveries?: DeliveryRow[];
+  deliveryBands?: Array<{ id: number; label: string; minKm: string }>;
   recentOrders?: Order[];
   variant?: "admin" | "staff";
   branchName?: string;
@@ -121,6 +136,44 @@ export function Dashboard({
         .slice(0, 5),
     };
   }, [analytics, range]);
+
+  // Delivery income is deliberately kept out of "Sales value": folding a carriage
+  // charge into product revenue would inflate it and distort average order value and
+  // best sellers. It is counted per order, never per item, because one order carries
+  // one delivery fee however many things are in the basket.
+  const delivery = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - (range - 1));
+    cutoff.setHours(0, 0, 0, 0);
+    const rows = (deliveries ?? []).filter((row) => new Date(row.createdAt) >= cutoff);
+    const bands = new Map<string, { key: string; label: string; income: number; count: number; free: number; order: number }>();
+    for (const band of deliveryBands) {
+      bands.set(`b${band.id}`, { key: `b${band.id}`, label: band.label, income: 0, count: 0, free: 0, order: Number(band.minKm) });
+    }
+    let income = 0, free = 0;
+    for (const row of rows) {
+      const fee = Number(row.deliveryFee) || 0;
+      income += fee;
+      if (fee === 0) free += 1;
+      // Orders priced before distance bands existed, or by the flat fallback, have no
+      // band. They are still income, so they are shown rather than silently dropped.
+      // Orders keep the band id they were priced by, so they land on the right row even
+      // if the label has since been renamed. Unbanded orders share one synthetic row.
+      const key = row.bandId ? `b${row.bandId}` : "flat";
+      const label = row.bandLabel ?? "No band (flat rate)";
+      const entry = bands.get(key) ?? { key, label, income: 0, count: 0, free: 0, order: Number(row.bandMinKm ?? 9999) };
+      entry.income += fee;
+      entry.count += 1;
+      if (fee === 0) entry.free += 1;
+      bands.set(key, entry);
+    }
+    return {
+      income,
+      count: rows.length,
+      free,
+      bands: [...bands.values()].sort((a, b) => a.order - b.order || b.income - a.income),
+    };
+  }, [deliveries, deliveryBands, range]);
   return (
     <main className={`dashboard-page ${styles.root}`}>
       <header className="dashboard-top">
@@ -177,6 +230,18 @@ export function Dashboard({
           value={`${stats.lowStock}`}
           note={staff ? branchName || "Assigned shop" : "Branch records"}
         />
+        {!staff ? (
+          <Metric
+            icon={<Truck />}
+            label="Delivery income"
+            value={money(delivery.income)}
+            note={
+              delivery.count
+                ? `${delivery.count} deliveries${delivery.free ? `, ${delivery.free} free` : ""} in range`
+                : "No deliveries in range"
+            }
+          />
+        ) : null}
         {!staff && stats.sms ? (
           <Metric
             icon={<Send />}
@@ -270,6 +335,35 @@ export function Dashboard({
             </span>
           </Link>
         </article>
+        {!staff ? (
+        <article className="dashboard-card delivery-bands-card">
+          <Card title="Delivery income by band" text="What each distance band collected in range" />
+          {delivery.bands.length ? (
+            <ul className="delivery-band-breakdown">
+              {delivery.bands.map((band) => (
+                <li key={band.key}>
+                  <span>
+                    <strong>{band.label}</strong>
+                    <small>
+                      {band.count} {band.count === 1 ? "delivery" : "deliveries"}
+                      {band.free ? ` · ${band.free} free` : ""}
+                    </small>
+                  </span>
+                  <b>{money(band.income)}</b>
+                  {/* Share of delivery income, so a band that carries the cost is
+                      obvious next to one that barely registers. */}
+                  <i style={{ width: `${delivery.income ? Math.round((band.income / delivery.income) * 100) : 0}%` }} aria-hidden="true" />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="delivery-band-empty">No distance bands configured yet.</p>
+          )}
+          <footer className="delivery-band-footer">
+            Rider and courier costs are not recorded yet, so this is income, not margin.
+          </footer>
+        </article>
+        ) : null}
       </section>
     </main>
   );

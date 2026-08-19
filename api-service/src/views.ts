@@ -24,6 +24,7 @@ import {
   chatMessages,
   consultationMessages,
   consultations,
+  deliveryBands,
   healthConditions,
   offerItems,
   offers,
@@ -1367,6 +1368,8 @@ export async function handleView(request: Request, path: string) {
         [{ newChats }],
         recentOrders,
         analytics,
+        deliveries,
+        bandRows,
       ] = await Promise.all([
         db
           .select({ newOrders: count() })
@@ -1424,6 +1427,28 @@ export async function handleView(request: Request, path: string) {
           .where(
             and(gte(orders.createdAt, since), ne(orders.status, "CANCELLED")),
           ),
+        db
+          .select({
+            orderId: orders.id,
+            createdAt: orders.createdAt,
+            deliveryFee: orders.deliveryFee,
+            distanceKm: orders.deliveryDistanceKm,
+            bandId: orders.deliveryBandId,
+            bandLabel: deliveryBands.label,
+            bandMinKm: deliveryBands.minKm,
+          })
+          .from(orders)
+          .leftJoin(deliveryBands, eq(deliveryBands.id, orders.deliveryBandId))
+          .where(and(
+            eq(orders.fulfilmentMethod, "DELIVERY"),
+            gte(orders.createdAt, since),
+            ne(orders.status, "CANCELLED"),
+          )),
+        db
+          .select({ id: deliveryBands.id, label: deliveryBands.label, minKm: deliveryBands.minKm })
+          .from(deliveryBands)
+          .where(eq(deliveryBands.isActive, true))
+          .orderBy(asc(deliveryBands.displayOrder), asc(deliveryBands.minKm)),
       ]);
       return json({
         newOrders,
@@ -1435,6 +1460,10 @@ export async function handleView(request: Request, path: string) {
         recentOrders,
         analytics,
         sms: await smsDashboardSummary(),
+        deliveries,
+        // Every active band, so the card can show a band that earned nothing rather
+        // than hiding it — a zero is a finding, not an absence.
+        deliveryBands: bandRows,
       });
     }
     if (view === "orders") return json({ orders: await orderListRows() });
