@@ -4,6 +4,7 @@ import { ArrowLeft, Check, CheckCircle2, Clipboard, CreditCard, LoaderCircle, Lo
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { paymentPollDelay } from "@/lib/payment-poll";
+import { createCheckoutToken } from "@/lib/checkout-token";
 import { MapPicker, type PinnedLocation } from "../../../../map-picker";
 import { useDeliveryQuote } from "../../../../use-delivery-quote";
 import type { CustomerPrescriptionData } from "../../types";
@@ -19,7 +20,7 @@ export function PrescriptionCheckoutForm({prescriptionId,data}:{prescriptionId:n
   // The prompt goes to the number typed above unless the patient says otherwise.
   const [phone,setPhone]=useState(customer.phone||""),[billingPhone,setBillingPhone]=useState(customer.phone||""),[billingPhoneTouched,setBillingPhoneTouched]=useState(false);
   const [pin,setPin]=useState<PinnedLocation|null>(null),[address,setAddress]=useState(""),[addressTouched,setAddressTouched]=useState(false),[result,setResult]=useState<CheckoutResult|null>(null);
-  const checkoutToken=useRef(globalThis.crypto.randomUUID()),pollCount=useRef(0);
+  const checkoutToken=useRef(createCheckoutToken()),pollCount=useRef(0);
   const proposalItems=items.filter((item)=>item.availability!=="UNAVAILABLE"&&item.approvedQuantity&&item.unitPrice);
   const subtotal=Number(order!.subtotal);
   // The frozen proposal is priced by the pharmacist; only the delivery leg is quoted here.

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { manualTillPollDelay, paymentPollDelay } from "@/lib/payment-poll";
+import { createCheckoutToken } from "@/lib/checkout-token";
 import styles from "./walk-in-sale-form.module.css";
 
 type Product = { id: number; name: string; sku: string; price: number; discountPrice: number | null };
@@ -30,7 +31,7 @@ export function WalkInSaleForm({ branches, products, stock, payment, backHref = 
   const [sale, setSale] = useState<SaleState | null>(null);
   const [manualProof, setManualProof] = useState("");
   const [copied, setCopied] = useState(false);
-  const checkoutToken = useRef(crypto.randomUUID());
+  const checkoutToken = useRef(createCheckoutToken());
   const pollCount = useRef(0);
 
   const availability = useMemo(() => new Map(stock.filter((row) => row.branchId === branchId).map((row) => [row.productId, row.available])), [stock, branchId]);
@@ -180,7 +181,7 @@ export function WalkInSaleForm({ branches, products, stock, payment, backHref = 
 
   function resetSale(nextMessage = "") {
     setSale(null); setCart({}); setQuery(""); setCustomerName(""); setPhone(""); setEmail(""); setManualProof(""); setMessage(nextMessage);
-    checkoutToken.current = crypto.randomUUID(); pollCount.current = 0; router.refresh();
+    checkoutToken.current = createCheckoutToken(); pollCount.current = 0; router.refresh();
   }
 
   const tillPanel = payment.manualEnabled ? <div className="pos-till-panel"><div><span>M-Pesa Till</span><strong>{payment.tillNumber}</strong><small>{payment.accountName || "Healthfield Pharmacy"} · KES {(sale?.total ?? total).toLocaleString()}</small></div><button type="button" onClick={copyTill}><Clipboard />{copied ? "Copied" : "Copy till"}</button><p>Pay the exact amount. Healthfield will show the payer name, receipt and amount for the seller to confirm.</p><p className="pos-payment-reference"><b>Payment reference: {sale?.orderNumber || "Created after Start till payment"}</b><span>Use this Healthfield reference whenever M-Pesa provides an account/reference field.</span></p></div> : null;

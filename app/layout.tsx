@@ -48,7 +48,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" data-scroll-behavior="smooth">
       <body className={geist.variable}><script type="application/ld+json" dangerouslySetInnerHTML={{__html:JSON.stringify({"@context":"https://schema.org","@type":"Pharmacy",name:"Healthfield Pharmacy",url:process.env.APP_URL??"https://healthfieldpharmacy.co.ke",logo:`${(process.env.APP_URL??"https://healthfieldpharmacy.co.ke").replace(/\/$/,"")}/healthfield-logo-clean.png`,areaServed:["Juja","Nairobi","Kahawa West","Thika Road"],medicalSpecialty:"Pharmacy"}).replace(/</g,"\\u003c")}}/>{children}</body>
     </html>
   );

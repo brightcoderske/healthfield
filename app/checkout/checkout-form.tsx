@@ -20,6 +20,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { manualTillPollDelay, paymentPollDelay } from "@/lib/payment-poll";
 import { prescriptionUploadHref } from "@/lib/prescription-selection";
+import { createCheckoutToken } from "@/lib/checkout-token";
 import { MapPicker, type PinnedLocation } from "../map-picker";
 import { deliveryFeeOf, useDeliveryQuote, type DeliveryOptions } from "../use-delivery-quote";
 
@@ -106,7 +107,7 @@ export function CheckoutForm({
   const [copied, setCopied] = useState(false);
   const [retryPhone, setRetryPhone] = useState(customer?.phone ?? "");
   const checkoutToken = useRef(
-    globalThis.crypto?.randomUUID?.() ?? crypto.randomUUID(),
+    createCheckoutToken(),
   );
   const pollCount = useRef(0);
   const allLines = useMemo(
