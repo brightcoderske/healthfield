@@ -100,6 +100,10 @@ export const products = mysqlTable("products", {
   uniqueIndex("products_slug_unique").on(table.slug),
   uniqueIndex("products_sku_unique").on(table.sku),
   index("products_search_idx").on(table.name, table.brand),
+  // The storefront's hottest query: active products ordered by featured then newest.
+  // Without this it is a full scan plus a filesort on every catalogue load; with it,
+  // MySQL walks the index backwards and sorts nothing.
+  index("products_storefront_idx").on(table.isActive, table.isFeatured, table.createdAt),
 ]);
 
 export const branchInventory = mysqlTable("branch_inventory", {
@@ -307,9 +311,6 @@ export const siteSettings = mysqlTable("site_settings", {
   openingHours: varchar("opening_hours", { length: 255 }),
   deliveryMessage: varchar("delivery_message", { length: 255 }).default("Fast Delivery Across Kenya").notNull(),
   freeDeliveryThreshold: decimal("free_delivery_threshold", { precision: 12, scale: 2 }),
-  bulkSmsApiUrl: varchar("bulk_sms_api_url", { length: 500 }),
-  bulkSmsApiKey: varchar("bulk_sms_api_key", { length: 500 }),
-  bulkSmsSenderId: varchar("bulk_sms_sender_id", { length: 50 }),
   emailApiUrl: varchar("email_api_url", { length: 500 }),
   emailApiKey: varchar("email_api_key", { length: 500 }),
   campaignFromEmail: varchar("campaign_from_email", { length: 190 }),
@@ -524,6 +525,37 @@ export const promotionalBanners = mysqlTable("promotional_banners", {
   createdBy: int("created_by").references(() => users.id, { onDelete: "set null" }),
   ...timestamps,
 }, (table) => [index("promotional_banners_active_idx").on(table.isActive, table.displayOrder), index("promotional_banners_product_idx").on(table.productId)]);
+
+/**
+ * Every SMS the system sends, with what the gateway said about it.
+ *
+ * Celcom exposes delivery reports only one message ID at a time, so there is no list to
+ * fetch — without this table there is no way to answer "what went out, and did it
+ * arrive?". Timestamps are stored as epoch milliseconds rather than nullable TIMESTAMP
+ * columns, because production turns those into NOT NULL zero-dates.
+ */
+export const smsMessages = mysqlTable("sms_messages", {
+  id: int("id").autoincrement().primaryKey(),
+  recipient: varchar("recipient", { length: 20 }).notNull(),
+  purpose: varchar("purpose", { length: 40 }).notNull(),
+  senderId: varchar("sender_id", { length: 30 }).notNull(),
+  channel: mysqlEnum("channel", ["TRANSACTIONAL", "PROMOTIONAL"]).notNull(),
+  message: text("message").notNull(),
+  segments: int("segments").default(1).notNull(),
+  providerMessageId: varchar("provider_message_id", { length: 64 }),
+  status: mysqlEnum("status", ["SENT", "FAILED", "DELIVERED", "UNDELIVERED", "PENDING"]).default("PENDING").notNull(),
+  responseCode: varchar("response_code", { length: 10 }),
+  detail: varchar("detail", { length: 255 }),
+  orderId: int("order_id"),
+  campaignId: int("campaign_id"),
+  deliveredAtMs: bigint("delivered_at_ms", { mode: "number" }),
+  lastCheckedAtMs: bigint("last_checked_at_ms", { mode: "number" }),
+  ...timestamps,
+}, (table) => [
+  index("sms_messages_recent_idx").on(table.createdAt),
+  index("sms_messages_status_idx").on(table.status, table.createdAt),
+  index("sms_messages_provider_idx").on(table.providerMessageId),
+]);
 
 export const campaigns = mysqlTable("campaigns", {
   id: int("id").autoincrement().primaryKey(),

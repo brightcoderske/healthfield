@@ -10,6 +10,7 @@ import {
   TrendingUp,
   TriangleAlert,
   Users,
+  Send,
 } from "lucide-react";
 import Link from "next/link";
 type Row = {
@@ -49,6 +50,7 @@ export function Dashboard({
     pendingPrescriptions: number;
     activeProducts: number;
     lowStock: number;
+  sms?: { configured: boolean; promotionalReady: boolean; segments30Days: number; failed30Days: number };
     customers: number;
   };
   analytics?: Row[];
@@ -175,6 +177,25 @@ export function Dashboard({
           value={`${stats.lowStock}`}
           note={staff ? branchName || "Assigned shop" : "Branch records"}
         />
+        {!staff && stats.sms ? (
+          <Metric
+            icon={<Send />}
+            label="Bulk SMS"
+            href="/admin/sms"
+            value={
+              stats.sms.configured
+                ? `${stats.sms.segments30Days.toLocaleString()} sent`
+                : "Not set up"
+            }
+            note={
+              !stats.sms.configured
+                ? "Add Celcom credentials to start"
+                : stats.sms.failed30Days
+                  ? `${stats.sms.failed30Days} failed in 30 days — open reports`
+                  : "Segments in the last 30 days"
+            }
+          />
+        ) : null}
       </section>
       <section className="dashboard-grid main">
         <article className="dashboard-card sales-chart">
@@ -258,15 +279,30 @@ function Metric(p: {
   label: string;
   value: string;
   note: string;
+  href?: string;
 }) {
-  return (
-    <article>
+  const body = (
+    <>
       <span>{p.icon}</span>
       <div>
         <small>{p.label}</small>
         <strong>{p.value}</strong>
         <em>{p.note}</em>
       </div>
+    </>
+  );
+  // A card with somewhere to go becomes the link itself, so the whole tile is the
+  // target rather than a small chevron in its corner.
+  if (p.href) {
+    return (
+      <Link className="metric-link" href={p.href}>
+        {body}
+      </Link>
+    );
+  }
+  return (
+    <article>
+      {body}
     </article>
   );
 }

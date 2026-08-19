@@ -45,6 +45,7 @@ import {
 import { requireSession, type Session } from "./auth";
 import { handleConsultationThread } from "./consultations";
 import { googleMapsConfigured, loadDeliveryConfiguration } from "./delivery";
+import { smsBalance, smsConfigurationSummary, smsDashboardSummary, smsReport, smsTopUpUrl } from "./sms";
 import { getDb } from "./db";
 import { json, publicImageUrl } from "./http";
 import {
@@ -1433,6 +1434,7 @@ export async function handleView(request: Request, path: string) {
         newChats: Number(newChats),
         recentOrders,
         analytics,
+        sms: await smsDashboardSummary(),
       });
     }
     if (view === "orders") return json({ orders: await orderListRows() });
@@ -1767,11 +1769,37 @@ export async function handleView(request: Request, path: string) {
       });
       return json({ payments, exceptions });
     }
-    if (view === "settings")
+    if (view === "settings") {
+      // Explicit columns rather than select(): the row still carries unused
+      // email_api_key / email_api_url columns, and a blanket select shipped that
+      // credential to the admin browser for no reason. Only what the form edits leaves
+      // the server.
+      const [settings] = await db.select({
+        pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone, whatsapp: siteSettings.whatsapp,
+        supportEmail: siteSettings.supportEmail, address: siteSettings.address, openingHours: siteSettings.openingHours,
+        deliveryMessage: siteSettings.deliveryMessage, freeDeliveryThreshold: siteSettings.freeDeliveryThreshold,
+        facebookUrl: siteSettings.facebookUrl, instagramUrl: siteSettings.instagramUrl,
+        xUrl: siteSettings.xUrl, tiktokUrl: siteSettings.tiktokUrl,
+        licenceTitle: siteSettings.licenceTitle, licenceNumber: siteSettings.licenceNumber,
+        licenceImageUrl: siteSettings.licenceImageUrl, requireTeamTwoFactor: siteSettings.requireTeamTwoFactor,
+        onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled,
+        onlineCodEnabled: siteSettings.onlineCodEnabled, posCashEnabled: siteSettings.posCashEnabled,
+        posMpesaEnabled: siteSettings.posMpesaEnabled, posManualEnabled: siteSettings.posManualEnabled,
+        mpesaTillNumber: siteSettings.mpesaTillNumber, mpesaAccountName: siteSettings.mpesaAccountName,
+      }).from(siteSettings).limit(1);
+      return json({ settings: settings ?? null, paymentRuntime: paymentConfigurationSummary() });
+    }
+    if (view === "sms") {
+      const [report, balance] = await Promise.all([smsReport(200), smsBalance()]);
       return json({
-        settings: (await db.select().from(siteSettings).limit(1))[0] ?? null,
-        paymentRuntime: paymentConfigurationSummary(),
+        ...report,
+        configuration: smsConfigurationSummary(),
+        // Whatever Celcom returns is passed through untouched: their balance payload is
+        // not documented field by field, and guessing a shape would show a wrong number.
+        balance,
+        topUpUrl: smsTopUpUrl(),
       });
+    }
     if (view === "delivery") {
       // Branches are returned whether or not they carry a pin: an unpinned branch is
       // the single most common reason distance pricing silently falls back to a flat
@@ -2279,9 +2307,6 @@ export async function handleView(request: Request, path: string) {
             posManualEnabled: siteSettings.posManualEnabled,
             mpesaTillNumber: siteSettings.mpesaTillNumber,
             mpesaAccountName: siteSettings.mpesaAccountName,
-            bulkSmsApiUrl: siteSettings.bulkSmsApiUrl,
-            bulkSmsApiKey: siteSettings.bulkSmsApiKey,
-            bulkSmsSenderId: siteSettings.bulkSmsSenderId,
           })
           .from(siteSettings)
           .limit(1),
@@ -2305,11 +2330,9 @@ export async function handleView(request: Request, path: string) {
         manualEnabled: Boolean(
           paymentRows[0]?.posManualEnabled && paymentRows[0]?.mpesaTillNumber,
         ),
-        smsEnabled: Boolean(
-          paymentRows[0]?.bulkSmsApiUrl &&
-          paymentRows[0]?.bulkSmsApiKey &&
-          paymentRows[0]?.bulkSmsSenderId,
-        ),
+        // Read from the API environment now, not from settings: nobody in the admin
+        // holds SMS credentials any more.
+        smsEnabled: smsConfigurationSummary().configured,
         tillNumber: paymentRows[0]?.mpesaTillNumber || null,
         accountName: paymentRows[0]?.mpesaAccountName || null,
       },

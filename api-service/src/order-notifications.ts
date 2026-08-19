@@ -8,23 +8,60 @@ import { ReceiptPdf } from "../../app/admin/receipts/orders/[id]/receipt-pdf";
 import { healthfieldReceiptNumber, receiptDownloadFilename, type ReceiptBranch, type ReceiptBusiness, type ReceiptItem, type ReceiptOrder, type ReceiptPayment } from "../../app/admin/receipts/orders/[id]/thermal-receipt-data";
 import { activityLogs, branches, orderItemFulfilments, orderItems, orders, paymentTransactions, products, siteSettings, users } from "../../db/schema";
 import { getDb } from "./db";
+import { sendSms, smsConfiguration } from "./sms";
+import { orderSms, type SmsPurpose } from "../../lib/sms-templates";
 import { orderEmailHtml, posReceiptEmailHtml, sendEmail, shouldAttachOfficialReceipt, type EmailAttachment } from "./email";
 
 export type ReceiptNotificationTrigger = "PAYMENT_CONFIRMED" | "ORDER_COMPLETED";
+
+/**
+ * Sends one order-related SMS.
+ *
+ * Loads only what the wording needs, and never throws: an SMS gateway being out of
+ * credit must not fail an order update. Silent when SMS is unconfigured, so the whole
+ * feature stays dormant until the Celcom account exists.
+ */
+export async function notifyOrderBySms(orderId: number, purpose: SmsPurpose) {
+  if (!smsConfiguration()) return;
+  try {
+    const db = getDb();
+    const [order] = await db
+      .select({
+        orderNumber: orders.orderNumber, phone: orders.phone, customerName: orders.customerName,
+        total: orders.total, paymentStatus: orders.paymentStatus, branchName: branches.name,
+      })
+      .from(orders)
+      .leftJoin(branches, eq(branches.id, orders.suggestedBranchId))
+      .where(eq(orders.id, orderId))
+      .limit(1);
+    if (!order?.phone) return;
+    const [settings] = await db.select({ pharmacyName: siteSettings.pharmacyName }).from(siteSettings).limit(1);
+    const total = Number(order.total);
+    const message = orderSms(purpose, {
+      orderNumber: order.orderNumber,
+      customerName: order.customerName,
+      total,
+      // Only an unpaid order has anything left for the rider to collect.
+      amountDue: order.paymentStatus === "PAID" ? null : total,
+      branchName: order.branchName,
+      pharmacyName: settings?.pharmacyName ?? undefined,
+    });
+    const outcome = await sendSms({ to: order.phone, message, purpose });
+    if (outcome.failed) console.warn("Order SMS was not delivered", { orderId, purpose, detail: outcome.results[0]?.detail });
+  } catch (error) {
+    console.error("Order SMS failed", { orderId, purpose, error });
+  }
+}
+
+export function queueOrderSms(orderId: number, purpose: SmsPurpose) {
+  void notifyOrderBySms(orderId, purpose).catch((error) => console.error("Queued order SMS failed", { orderId, purpose, error }));
+}
 
 function receiptPhone(value: string | null) {
   const phone = (value || "").trim();
   return phone && phone.toLowerCase() !== "walk-in" ? phone : null;
 }
 
-async function sendReceiptSms(input: { apiUrl: string; apiKey: string; senderId: string; phone: string; message: string }) {
-  const response = await fetch(input.apiUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${input.apiKey}` },
-    body: JSON.stringify({ recipients: [input.phone], senderId: input.senderId, message: input.message }),
-  });
-  if (!response.ok) throw new Error(`Bulk SMS provider returned HTTP ${response.status}.`);
-}
 
 function receiptDate(value: Date | string | null | undefined) {
   return value instanceof Date ? value.toISOString() : value || null;
@@ -134,9 +171,6 @@ export async function notifyPaidOrder(orderId: number, trigger: ReceiptNotificat
       phone: siteSettings.phone,
       address: siteSettings.address,
       licenceNumber: siteSettings.licenceNumber,
-      bulkSmsApiUrl: siteSettings.bulkSmsApiUrl,
-      bulkSmsApiKey: siteSettings.bulkSmsApiKey,
-      bulkSmsSenderId: siteSettings.bulkSmsSenderId,
     }).from(siteSettings).limit(1),
     db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)),
   ]);
@@ -205,21 +239,12 @@ export async function notifyPaidOrder(orderId: number, trigger: ReceiptNotificat
     }
   }
 
-  const phone = receiptPhone(order.phone);
-  if (trigger === "PAYMENT_CONFIRMED" && phone && settings?.bulkSmsApiUrl && settings.bulkSmsApiKey && settings.bulkSmsSenderId) {
-    try {
-      await sendReceiptSms({
-        apiUrl: settings.bulkSmsApiUrl,
-        apiKey: settings.bulkSmsApiKey,
-        senderId: settings.bulkSmsSenderId,
-        phone,
-        message: `Healthfield payment confirmed. Order ${order.orderNumber}, payment reference ${paymentReference}, KES ${Number(order.amountPaid).toLocaleString()}. Thank you.`,
-      });
-      await db.insert(activityLogs).values({ actorId: null, action: "PAYMENT_RECEIPT_SMS_SENT", entityType: "order", entityId: String(order.id), metadata: { recipient: phone } });
-    } catch (error) {
-      console.error("Payment receipt SMS failed", { orderId: order.id, error });
-    }
-  }
+  // SMS is no longer sent from here. It used to post to a generic gateway shape that
+  // Celcom does not accept — bearer auth and a `recipients` array — so it had never in
+  // fact delivered anything. Each moment that warrants a message now sends its own
+  // through ./sms: the counter sale, the placed order, and the ready-for-collection or
+  // out-for-delivery update. Routing it per trigger is also what keeps a POS sale from
+  // receiving both a payment confirmation and a sale confirmation for one transaction.
 }
 
 export function queuePaidOrderNotification(orderId: number, trigger: ReceiptNotificationTrigger = "PAYMENT_CONFIRMED") {

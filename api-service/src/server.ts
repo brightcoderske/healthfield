@@ -8,6 +8,7 @@ import { migrate } from "drizzle-orm/mysql2/migrator";
 import { getDb, closeDb, databaseClock } from "./db";
 import { json } from "./http";
 import { handleConsultationAttachment, handleConsultationMessages, handleConsultations } from "./consultations";
+import { handleSmsReportRefresh } from "./sms-routes";
 import { handleDeliveryBands, handleDeliveryPreview, handleDeliveryQuote, handleDeliverySettings } from "./delivery";
 import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";

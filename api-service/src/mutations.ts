@@ -17,13 +17,15 @@ import { DispensingError, dispenseRules, resolveDispenseSelection, type Dispense
 import { createPasswordResetToken, createSessionToken, createUploadToken, hasStoredTimestamp, requireSession, requestSession, revokeSession, revokeUserSessions, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
 import { repriceDeliveryForBranch, resolveDeliveryQuote } from "./delivery";
+import { sendSms, smsConfiguration } from "./sms";
+import { marketingSms } from "../../lib/sms-templates";
 import { apportionBundle, isBundle, loadLiveOffers, offerPriceMap, offerTotal } from "./offers";
 import { orderEmailHtml, orderStatusEmailContent, sendBulkEmail, sendEmail } from "./email";
 import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, emailVerificationTiming } from "./email-verification";
 import { json, publicImageUrl, safeFilename } from "./http";
 import { storageRoot, validatePrescriptionUpload } from "./prescription-files";
 import { extractMpesaReceipt, initiateStkPush, mpesaConfiguration } from "./mpesa";
-import { queuePaidOrderNotification } from "./order-notifications";
+import { queueOrderSms, queuePaidOrderNotification } from "./order-notifications";
 import { reconcileManualPaymentFromIncoming, replayStoredStkCallback, requestKnownTransactionStatus } from "./payment-handlers";
 import { canGrantTeamRole, canManageTeamAccount } from "./staff-access-policy";
 import { secureHashEqual, twoFactorChallengeLifetimeMs, twoFactorCodeHash, twoFactorMaximumAttempts, twoFactorMaximumResends, twoFactorResendCooldownMs, twoFactorTiming } from "./two-factor";
@@ -456,6 +458,8 @@ export async function handleOrders(request: Request, id?: number) {
     }
     if(order.status===status)return json({ok:true,status,delivery:repricing});
     const notificationEmail=details.email===undefined?order.email:details.email,notificationName=details.customerName||order.customerName;
+    if (status === "READY_FOR_PICKUP") queueOrderSms(id, "ORDER_READY_FOR_PICKUP");
+    if (status === "OUT_FOR_DELIVERY") queueOrderSms(id, "ORDER_OUT_FOR_DELIVERY");
     if (status === "COMPLETED") {
       queuePaidOrderNotification(id, "ORDER_COMPLETED");
     } else if (notificationEmail) {
@@ -558,6 +562,9 @@ export async function handleOrders(request: Request, id?: number) {
     return { orderId: created.insertId, paymentId: payment.insertId, orderNumber };
   });
   const orderNumber = result.orderNumber;
+  // Cash on delivery states the amount the rider will collect; every other method just
+  // acknowledges the order, since payment is still being settled.
+  queueOrderSms(result.orderId, parsed.data.paymentMethod === "CASH_ON_DELIVERY" ? "CASH_ON_DELIVERY_DUE" : "ORDER_RECEIVED");
   let paymentStatus: "PENDING" | "FAILED" | "PAID" = "PENDING";
   let paymentMessage = parsed.data.paymentMethod === "CASH_ON_DELIVERY" ? "Order placed. Pay the rider in cash when your medicines arrive." : parsed.data.paymentMethod === "MANUAL_MPESA" ? "Receipt extracted. Healthfield is checking Safaricom before sending it for review." : "Check your phone and enter your M-Pesa PIN.";
   if (parsed.data.paymentMethod === "MPESA_EXPRESS") {
@@ -681,6 +688,9 @@ export async function handleWalkInSales(request: Request) {
     const orderNumber = result.orderNumber;
     if (parsed.data.paymentMethod === "CASH") {
       queuePaidOrderNotification(result.orderId);
+      // The counter sale is settled and handed over, so the customer gets the closing
+      // confirmation rather than an order-received message promising a later update.
+      queueOrderSms(result.orderId, "POS_SALE_COMPLETE");
       return json({ ok: true, paid: true, paymentStatus: "PAID", id: result.orderId, orderNumber, total: subtotal }, { status: 201 });
     }
     let paymentStatus: "PENDING" | "FAILED" | "PAID" = "PENDING";
@@ -1342,13 +1352,24 @@ export async function handleSettings(request: Request) {
   const parsed = z.object({
     pharmacyName: z.string().trim().min(2).max(150), phone: z.string().trim().max(30), whatsapp: z.string().trim().max(30), supportEmail: z.string().trim().email().or(z.literal("")),
     address: z.string().trim().max(1000), openingHours: z.string().trim().max(255), deliveryMessage: z.string().trim().min(2).max(255), freeDeliveryThreshold: z.coerce.number().nonnegative().optional(),
-    bulkSmsApiUrl: z.string().trim().url().or(z.literal("")), bulkSmsApiKey: z.string().trim().max(500), bulkSmsSenderId: z.string().trim().max(50),
     facebookUrl: z.string().trim().url().or(z.literal("")), instagramUrl: z.string().trim().url().or(z.literal("")), xUrl: z.string().trim().url().or(z.literal("")), tiktokUrl: z.string().trim().url().or(z.literal("")), licenceTitle:z.string().trim().max(190),licenceNumber:z.string().trim().max(120),licenceImageUrl:z.string().trim().max(500), requireTeamTwoFactor: z.boolean(),
-    onlineMpesaEnabled:z.boolean(),onlineManualEnabled:z.boolean(),onlineCodEnabled:z.boolean().optional().default(false),posCashEnabled:z.boolean(),posMpesaEnabled:z.boolean(),posManualEnabled:z.boolean(),mpesaTillNumber:z.string().trim().max(30),mpesaAccountName:z.string().trim().max(150),
-  }).safeParse(await body(request));
+    onlineMpesaEnabled:z.boolean(),onlineManualEnabled:z.boolean(),onlineCodEnabled:z.boolean(),posCashEnabled:z.boolean(),posMpesaEnabled:z.boolean(),posManualEnabled:z.boolean(),mpesaTillNumber:z.string().trim().max(30),mpesaAccountName:z.string().trim().max(150),
+  })
+    // Partial so each section of the settings screen can save on its own. A section
+    // sends only its own fields; anything absent is left exactly as it was, which is
+    // what stops one section's save from blanking another's values.
+    .partial()
+    .safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid settings." }, { status: 400 });
   const data = parsed.data;
-  const values = { ...data, phone: data.phone || null, whatsapp: data.whatsapp || null, supportEmail: data.supportEmail || null, address: data.address || null, openingHours: data.openingHours || null, freeDeliveryThreshold: data.freeDeliveryThreshold?.toString() ?? null, bulkSmsApiUrl: data.bulkSmsApiUrl || null, bulkSmsApiKey: data.bulkSmsApiKey || null, bulkSmsSenderId: data.bulkSmsSenderId || null, facebookUrl: data.facebookUrl || null, instagramUrl: data.instagramUrl || null, xUrl: data.xUrl || null, tiktokUrl: data.tiktokUrl || null, mpesaTillNumber:data.mpesaTillNumber||null,mpesaAccountName:data.mpesaAccountName||null, updatedBy: auth.session.userId };
+  // Only keys the caller actually sent are written. Spreading the parsed object would
+  // reintroduce defaults for absent fields and quietly overwrite other sections.
+  const sent = new Set(Object.keys(data));
+  const values = { ...data, phone: data.phone || null, whatsapp: data.whatsapp || null, supportEmail: data.supportEmail || null, address: data.address || null, openingHours: data.openingHours || null, freeDeliveryThreshold: data.freeDeliveryThreshold?.toString() ?? null, facebookUrl: data.facebookUrl || null, instagramUrl: data.instagramUrl || null, xUrl: data.xUrl || null, tiktokUrl: data.tiktokUrl || null, mpesaTillNumber:data.mpesaTillNumber||null,mpesaAccountName:data.mpesaAccountName||null, updatedBy: auth.session.userId };
+  // updatedBy is derived here rather than sent, so it survives the prune; every other
+  // key the caller did not send is dropped so one section cannot blank another's.
+  for (const key of Object.keys(values)) if (key !== "updatedBy" && !sent.has(key)) delete (values as Record<string, unknown>)[key];
+  if (!sent.size) return json({ error: "Nothing to save." }, { status: 400 });
   const [current] = await db.select({ id: siteSettings.id }).from(siteSettings).limit(1);
   if (current) await db.update(siteSettings).set(values).where(eq(siteSettings.id, current.id)); else await db.insert(siteSettings).values(values);
   return json({ ok: true });
@@ -1489,13 +1510,27 @@ export async function handleCampaigns(request: Request) {
   const customers=[...contacts.values()];
   const wantsEmail = parsed.data.channel !== "SMS", wantsSms = parsed.data.channel !== "EMAIL";
   if(wantsEmail&&(!process.env.SMTP_HOST||!process.env.SMTP_USER||!process.env.SMTP_PASSWORD))return json({error:"Configure the cPanel SMTP mailbox in api-service/.env first."},{status:400});
-  if (wantsSms && (!settings?.bulkSmsApiUrl || !settings.bulkSmsApiKey || !settings.bulkSmsSenderId)) return json({ error: "Configure the bulk SMS API first." }, { status: 400 });
+  // Credentials live in the API environment, not in settings: nobody in the admin has
+  // to hold them, and marketing cannot be sent under the transactional sender ID.
+  if (wantsSms && !smsConfiguration()) return json({ error: "Bulk SMS is not configured. Add the Celcom credentials and a promotional sender ID to the API environment." }, { status: 400 });
   const {audience:_audience,lookbackDays:_lookbackDays,...campaignData}=parsed.data;
   const [created] = await db.insert(campaigns).values({ ...campaignData, subject: parsed.data.subject || null, status: "SENDING", recipientCount: customers.length, createdBy: auth.session.userId });
   let successCount = 0, failureCount = 0;
   try {
     if(wantsEmail){const recipients=customers.map(customer=>customer.email).filter((email):email is string=>Boolean(email)),result=await sendBulkEmail({recipients,subject:parsed.data.subject||parsed.data.name,message:parsed.data.message});successCount+=result.successCount;failureCount+=result.failureCount}
-    if (wantsSms) { const recipients = customers.map((customer) => customer.phone).filter((phone): phone is string => Boolean(phone)); const response = await fetch(settings!.bulkSmsApiUrl!, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings!.bulkSmsApiKey}` }, body: JSON.stringify({ recipients, senderId: settings!.bulkSmsSenderId, message: parsed.data.message }) }); response.ok ? successCount += recipients.length : failureCount += recipients.length; }
+    if (wantsSms) {
+      // marketingSms guarantees the opt-out, and MARKETING routes the send through the
+      // promotional sender ID rather than the transactional one.
+      const outcome = await sendSms({
+        to: customers.map((customer) => customer.phone),
+        message: marketingSms(parsed.data.message),
+        purpose: "MARKETING",
+        campaignId: created.insertId,
+      });
+      successCount += outcome.sent;
+      failureCount += outcome.failed;
+      if (outcome.skipped) console.warn("Campaign SMS skipped", { campaign: parsed.data.name, reason: outcome.skipped });
+    }
     await db.update(campaigns).set({ status: failureCount ? "FAILED" : "SENT", successCount, failureCount, sentAt: new Date() }).where(eq(campaigns.id, created.insertId));
   } catch { failureCount = customers.length; await db.update(campaigns).set({ status: "FAILED", successCount, failureCount }).where(eq(campaigns.id, created.insertId)); }
   return json({ ok: failureCount === 0, id: created.insertId, recipientCount: customers.length, successCount, failureCount }, { status: failureCount ? 502 : 201 });

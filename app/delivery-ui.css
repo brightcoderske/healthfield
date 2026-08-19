@@ -123,3 +123,99 @@
 .cod-invoice-total{margin-top:3px;padding-top:8px;border-top:1px solid #eddcc2;color:#181529!important;font-size:12px!important;font-weight:800;}
 .cod-invoice-total b{font-size:14px;color:#89521d;}
 .cod-invoice > small{color:#7a7380;font-size:8.5px;line-height:1.5;}
+
+/* Bulk SMS reports. Credentials are never rendered here — only what was sent. */
+.sms-cards{width:min(1180px, 100%);margin:0 auto 14px;display:grid;grid-template-columns:repeat(4, minmax(0, 1fr));gap:10px;}
+.sms-card{padding:13px 15px;border:1px solid #e5dfe7;border-radius:11px;background:#fff;display:flex;flex-direction:column;gap:4px;}
+.sms-card-label{display:flex;align-items:center;gap:6px;color:#7a7380;font-size:9px;font-weight:750;text-transform:uppercase;letter-spacing:0.06em;}
+.sms-card-label svg{width:14px;}
+.sms-card > strong{font-size:19px;letter-spacing:-0.02em;}
+.sms-card small{color:#7a7380;font-size:8.5px;display:flex;justify-content:space-between;gap:8px;}
+.sms-card small b{color:#2f2b38;font-size:9px;}
+.sms-card code{padding:5px 7px;border-radius:6px;background:#f6f3f7;font-size:8px;word-break:break-all;}
+.sms-card-balance strong{color:#762584;}
+.sms-topup{margin-top:6px;min-height:32px;padding:0 11px;border-radius:8px;color:#fff;background:#762584;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:9.5px;font-weight:800;}
+.sms-topup svg{width:14px;}
+.sms-status-grid{display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:4px 10px;}
+.sms-status-grid span{display:flex;align-items:baseline;gap:5px;color:#7a7380;font-size:8.5px;}
+.sms-status-grid b{color:#2f2b38;font-size:12px;}
+.sms-filter{display:flex;gap:5px;}
+.sms-filter button{min-height:30px;padding:0 11px;border:1px solid #ddd5e0;border-radius:7px;background:#fff;color:#5f5866;font-size:9px;font-weight:750;}
+.sms-filter button.active{color:#fff;background:#762584;border-color:#762584;}
+.sms-row{grid-template-columns:minmax(96px, 0.8fr) minmax(96px, 0.7fr) minmax(120px, 0.9fr) minmax(200px, 2fr) minmax(44px, 0.3fr) minmax(84px, 0.6fr) minmax(140px, 1.1fr);}
+.sms-row > span{min-width:0;display:flex;flex-direction:column;gap:2px;}
+.sms-message,.sms-detail{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sms-detail small{color:#9a939f;font-size:7.5px;}
+.sms-tag{color:#5f5866;font-size:7.5px;text-transform:uppercase;letter-spacing:0.05em;}
+.sms-tag.promo{color:#c0397f;}
+.sms-status{font-weight:750;}
+.sms-status.delivered{color:#19954a;}
+.sms-status.sent{color:#762584;}
+.sms-status.pending{color:#89521d;}
+.sms-status.failed,.sms-status.undelivered{color:#a8322f;}
+.sms-admin > header button{min-height:38px;padding:0 15px;border:1px solid #ddd5e0;border-radius:8px;background:#fff;color:#542064;display:inline-flex;align-items:center;gap:7px;font-size:10px;font-weight:800;}
+.sms-admin > header button:disabled{opacity:0.5;}
+.sms-admin > header button svg{width:15px;}
+@media (max-width: 1000px){
+.sms-cards{grid-template-columns:repeat(2, minmax(0, 1fr));}
+.sms-row{grid-template-columns:1fr;gap:5px;}
+}
+
+/* The way in to a promotional send, dimmed until Celcom has approved the sender ID. */
+.sms-promo-shortcut{width:min(1180px, 100%);margin:0 auto 12px;padding:13px 16px;border:1px solid #f0dcea;border-radius:12px;background:linear-gradient(120deg, #fff 0%, #fdf3f9 100%);display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;}
+.sms-promo-shortcut strong{display:flex;align-items:center;gap:7px;color:#181529;font-size:12px;}
+.sms-promo-shortcut strong svg{width:16px;color:#d92f91;}
+.sms-promo-shortcut small{display:block;margin-top:3px;max-width:62ch;color:#756e79;font-size:9px;line-height:1.5;}
+.sms-promo-shortcut > a{min-height:38px;padding:0 18px;border-radius:999px;color:#fff;background:linear-gradient(90deg, #db1d68, #ec346e);display:inline-flex;align-items:center;font-size:10.5px;font-weight:800;white-space:nowrap;}
+/* Blurred rather than hidden: the capability stays visible so an administrator knows it
+   exists and what is missing, without being able to start a send that would be refused. */
+.sms-promo-shortcut.locked{filter:grayscale(1);opacity:0.62;}
+.sms-promo-shortcut.locked > div{filter:blur(0.2px);}
+.sms-promo-locked{display:inline-flex;align-items:center;gap:6px;padding:0 14px;min-height:36px;border:1px dashed #c9bfcd;border-radius:999px;color:#7a7380;font-size:9.5px;font-weight:750;}
+.sms-promo-locked svg{width:14px;}
+/* A dashboard tile that leads somewhere adopts the same shape as the static ones. */
+/* A tile that leads somewhere borrows the card styling the static <article> tiles get
+   from globals, so it sits in the row rather than beside it. */
+.dashboard-metrics .metric-link{padding:14px;border:1px solid #e5dfe8;border-radius:14px;background:#fff;display:flex;gap:10px;color:inherit;text-decoration:none;transition:transform 160ms ease, box-shadow 160ms ease;}
+.dashboard-metrics .metric-link > span{width:36px;height:36px;flex:none;display:grid;place-items:center;border-radius:10px;color:#792587;background:#f4eaf6;}
+.dashboard-metrics .metric-link:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(66,28,76,0.12);}
+/* The row is five wide by default; the SMS tile makes six, and wrapping it onto a
+   second line pushed the metrics that matter more below the fold. */
+.dashboard-metrics:has(.metric-link){grid-template-columns:repeat(6, minmax(0, 1fr));}
+@media (max-width: 1200px){.dashboard-metrics:has(.metric-link){grid-template-columns:repeat(3, minmax(0, 1fr));}}
+@media (max-width: 760px){.dashboard-metrics:has(.metric-link){grid-template-columns:1fr 1fr;}}
+.dashboard-metrics .metric-link small{color:#77717c;font-size:9px;}
+.dashboard-metrics .metric-link strong{margin-top:3px;font-size:16px;white-space:nowrap;}
+.dashboard-metrics .metric-link em{margin-top:3px;color:#31814a;font-size:8px;font-style:normal;}
+
+/* Settings as separate sections, each saving on its own. The accent is set per section
+   via --section-tone so the page reads as distinct groups rather than one long form. */
+.sectioned-settings .settings-intro{width:min(1180px, 100%);margin:0 auto 14px;color:#756e79;font-size:10px;}
+.settings-section{width:min(1180px, 100%);margin:0 auto 14px;padding:0 0 16px;border:1px solid #e8e2ea;border-left:3px solid var(--section-tone, #762584);border-radius:12px;background:#fff;overflow:hidden;}
+.settings-section-head{padding:13px 18px 10px;display:flex;align-items:center;gap:12px;background:color-mix(in srgb, var(--section-tone, #762584) 5%, #fff);}
+.settings-section-icon{width:32px;height:32px;flex:0 0 32px;border-radius:9px;display:grid;place-items:center;color:var(--section-tone, #762584);background:color-mix(in srgb, var(--section-tone, #762584) 12%, #fff);}
+.settings-section-icon svg{width:17px;}
+.settings-section-head > div{flex:1;min-width:0;}
+.settings-section-head h2{margin:0;font-size:13px;letter-spacing:-0.01em;}
+.settings-section-head p{margin:2px 0 0;color:#756e79;font-size:9px;line-height:1.45;}
+.settings-section-head button{min-height:34px;padding:0 15px;border:0;border-radius:999px;color:#fff;background:var(--section-tone, #762584);display:inline-flex;align-items:center;gap:6px;font-size:9.5px;font-weight:800;white-space:nowrap;}
+.settings-section-head button:disabled{opacity:0.6;}
+.settings-section-head button svg{width:14px;}
+.settings-section-head .spin{animation:map-picker-spin 1s linear infinite;}
+/* The small rounded rule that separates a section's heading from its fields. */
+.settings-section-rule{display:block;width:44px;height:3px;margin:0 0 14px 18px;border-radius:999px;background:var(--section-tone, #762584);opacity:0.5;}
+.settings-section-body{padding:0 18px;}
+.settings-section-body h3{margin:15px 0 7px;color:#4c4650;font-size:10px;text-transform:uppercase;letter-spacing:0.06em;}
+.settings-grid{display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:11px;}
+.settings-grid > .full{grid-column:1/-1;}
+.settings-grid label{display:flex;flex-direction:column;gap:4px;font-size:9.5px;font-weight:750;}
+.settings-grid input,.settings-grid textarea{min-height:38px;padding:9px 11px;border:1px solid #ddd5e0;border-radius:8px;font-size:11px;font-family:inherit;}
+.settings-grid input:focus,.settings-grid textarea:focus{outline:2px solid var(--section-tone, #762584);outline-offset:1px;}
+.settings-grid small{color:#7a7380;font-size:8px;font-weight:500;}
+.settings-section-error{margin:10px 18px 0;padding:9px 11px;border:1px solid #eccbc9;border-radius:8px;color:#a8322f;background:#fdeceb;font-size:9.5px;}
+.settings-grid .settings-section-error{margin:0;}
+@media (max-width: 760px){
+.settings-grid{grid-template-columns:1fr;}
+.settings-section-head{flex-wrap:wrap;}
+.settings-section-head button{width:100%;justify-content:center;}
+}
