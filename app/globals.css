@@ -2828,6 +2828,23 @@ to{transform:rotate(360deg);}
 .pull-recovery-button{min-height:34px;padding:0 11px;border:0;border-radius:7px;color:#fff;background:#762584;display:inline-flex;align-items:center;gap:6px;font-size:9px;font-weight:800;white-space:nowrap;}
 .pull-recovery-button svg{width:14px;height:14px;}
 .pull-recovery-button:disabled{opacity:.58;}
+
+/* Why a Till payment did or did not arrive, said plainly on the page where missing
+   payments are chased. Each row is one link in the chain, green when it can carry a
+   payment and amber when it cannot. */
+.till-delivery{width:min(1180px, 100%);margin:0 auto 14px;padding:14px 16px;border:1px solid #e5dfe7;border-radius:11px;background:#fff;}
+.till-delivery > header{display:flex;align-items:flex-start;gap:10px;}
+.till-delivery > header svg{width:20px;height:20px;padding:4px;border-radius:7px;color:#fff;background:#762584;}
+.till-delivery h2{margin:0;font-size:13px;}
+.till-delivery header p{margin:2px 0 0;color:#7a7380;font-size:9px;}
+.till-delivery ul{margin:12px 0 0;padding:0;display:grid;gap:7px;list-style:none;}
+.till-delivery li{padding:9px 11px;border:1px solid #ece5ee;border-left-width:3px;border-radius:8px;background:#fbf9fc;display:flex;flex-direction:column;gap:3px;}
+.till-delivery li.ok{border-left-color:#2f8b52;}
+.till-delivery li.off{border-left-color:#c98a1d;background:#fffaf0;}
+.till-delivery li b{font-size:10px;}
+.till-delivery li span{color:#6d6672;font-size:9px;line-height:1.55;}
+.till-delivery li small{color:#8d8592;font-size:8px;overflow-wrap:anywhere;}
+.till-delivery > button{margin-top:12px;}
 .unmatched-payments-table,
 .payment-exceptions table{width:100%;border-collapse:collapse;table-layout:fixed;}
 .unmatched-payments-table{min-width:1030px;}

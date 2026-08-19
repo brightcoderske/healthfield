@@ -19,7 +19,7 @@ function ReceiptSeparator({ strong = false }: { strong?: boolean }) {
   return <div className={strong ? "thermal-separator thermal-separator-strong" : "thermal-separator"} aria-hidden="true"/>;
 }
 
-export function ThermalReceipt({ order, items, payment, branch, business, servedBy, receiptNumber, barcodeDataUrl }: ThermalReceiptProps) {
+export function ThermalReceipt({ order, items, payment, branch, business, servedBy, receiptNumber, vatLabel, barcodeDataUrl }: ThermalReceiptProps) {
   const paymentMethod = paymentMethodLabel(payment?.method || order.paymentMethod);
   const mpesaCode = paymentMethod.includes("M-Pesa") ? payment?.receiptNumber || order.paymentReference : null;
   const paid = order.paymentStatus === "PAID";
@@ -71,7 +71,7 @@ export function ThermalReceipt({ order, items, payment, branch, business, served
       <div><dt>Subtotal</dt><dd>{money(order.subtotal)}</dd></div>
       <div><dt>Delivery Fee</dt><dd>{money(order.deliveryFee)}</dd></div>
       {Number(order.discount) !== 0 ? <div><dt>Discount</dt><dd>-{money(order.discount)}</dd></div> : null}
-      {order.vat !== null && order.vat !== undefined ? <div><dt>VAT</dt><dd>{money(order.vat)}</dd></div> : null}
+      {order.vat !== null && order.vat !== undefined ? <div><dt>{vatLabel}</dt><dd>{money(order.vat)}</dd></div> : null}
       {order.amountTendered !== null && order.amountTendered !== undefined ? <div><dt>Amount Tendered</dt><dd>{money(order.amountTendered)}</dd></div> : null}
       {order.change !== null && order.change !== undefined ? <div><dt>Change</dt><dd>{money(order.change)}</dd></div> : null}
     </dl>

@@ -10,6 +10,7 @@ import { activityLogs, branches, orderItemFulfilments, orderItems, orders, payme
 import { getDb } from "./db";
 import { sendSms, smsConfiguration } from "./sms";
 import { orderSms, type SmsPurpose } from "../../lib/sms-templates";
+import { vatIncludedIn, vatLabel } from "../../lib/vat";
 import { orderEmailHtml, posReceiptEmailHtml, sendEmail, shouldAttachOfficialReceipt, type EmailAttachment } from "./email";
 
 export type ReceiptNotificationTrigger = "PAYMENT_CONFIRMED" | "ORDER_COMPLETED";
@@ -107,6 +108,9 @@ async function paidReceiptAttachment(input: {
   const servedBy = servedByRows[0] ? `${servedByRows[0].firstName} ${servedByRows[0].lastName}`.trim() : paymentRow?.channel === "ONLINE" ? "Online order" : "POS terminal";
   const receiptNumber = healthfieldReceiptNumber(input.order.id, branch?.code);
   const barcode = await bwipjs.toBuffer({ bcid: "code128", text: receiptNumber, scale: 2, height: 7, includetext: false, paddingwidth: 0, paddingheight: 0, backgroundcolor: "FFFFFF" });
+  // The emailed receipt is the same document as the printed one, so it discloses VAT
+  // the same way: extracted from the total, and only when the shop has switched it on.
+  const business = input.settings ?? { pharmacyName: "Healthfield Pharmacy", phone: null, address: null, licenceNumber: null };
   const receiptOrder: ReceiptOrder = {
     id: input.order.id,
     orderNumber: input.order.orderNumber,
@@ -124,6 +128,7 @@ async function paidReceiptAttachment(input: {
     total: input.order.total,
     suggestedBranchId: input.order.suggestedBranchId,
     createdAt: receiptDate(input.order.createdAt)!,
+    vat: business.vatEnabled === false ? null : vatIncludedIn(input.order.total, business.vatRate),
   };
   const payment: ReceiptPayment | null = paymentRow ? {
     method: paymentRow.method,
@@ -140,9 +145,10 @@ async function paidReceiptAttachment(input: {
     items: input.items,
     payment,
     branch,
-    business: input.settings ?? { pharmacyName: "Healthfield Pharmacy", phone: null, address: null, licenceNumber: null },
+    business,
     servedBy,
     receiptNumber,
+    vatLabel: vatLabel(business.vatEnabled === false ? 0 : business.vatRate),
     barcodeDataUrl: `data:image/png;base64,${barcode.toString("base64")}`,
     logoDataUrl,
   }) as Parameters<typeof renderToBuffer>[0]);
@@ -172,6 +178,9 @@ export async function notifyPaidOrder(orderId: number, trigger: ReceiptNotificat
       phone: siteSettings.phone,
       address: siteSettings.address,
       licenceNumber: siteSettings.licenceNumber,
+      taxNumber: siteSettings.taxNumber,
+      vatEnabled: siteSettings.vatEnabled,
+      vatRate: siteSettings.vatRate,
     }).from(siteSettings).limit(1),
     db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)),
   ]);
@@ -196,7 +205,7 @@ export async function notifyPaidOrder(orderId: number, trigger: ReceiptNotificat
             items,
             payments,
             fulfilments,
-            settings: settings ? { pharmacyName: settings.pharmacyName, phone: settings.phone, address: settings.address, licenceNumber: settings.licenceNumber } : null,
+            settings: settings ? { pharmacyName: settings.pharmacyName, phone: settings.phone, address: settings.address, licenceNumber: settings.licenceNumber, taxNumber: settings.taxNumber, vatEnabled: settings.vatEnabled, vatRate: settings.vatRate } : null,
           });
           attachment = generatedReceipt.attachment;
           officialReceiptNumber = generatedReceipt.receiptNumber;

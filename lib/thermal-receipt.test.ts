@@ -47,7 +47,25 @@ test("download filename includes buyer, branch code and order sequence without a
   assert.equal(receiptDownloadFilename({ ...base.order, customerName: "" }, "JJC"), "HF-JJC-0001.pdf");
 });
 
-test("VAT remains absent until supplied by backend data", () => {
-  assert.equal(prepareThermalReceipt(base).order.vat, undefined);
+test("VAT stays off the receipt until the shop switches it on", () => {
+  assert.equal(prepareThermalReceipt(base).order.vat, null);
+  assert.equal(prepareThermalReceipt(base).vatLabel, "VAT");
+});
+
+test("a VAT rate discloses the tax inside the total rather than adding to it", () => {
+  const settings = { pharmacyName: "Healthfield", phone: null, address: null, licenceNumber: null, vatEnabled: true, vatRate: "16.00" };
+  const receipt = prepareThermalReceipt({ ...base, receipt: { settings, servedBy: null } });
+  // The total is unchanged; only the disclosure is new.
+  assert.equal(receipt.order.total, base.order.total);
+  assert.equal(receipt.order.vat, Math.round((Number(base.order.total) * 16) / 116 * 100) / 100);
+  assert.equal(receipt.vatLabel, "VAT (16% incl.)");
+});
+
+test("switching VAT off hides the line even while a rate is stored", () => {
+  const settings = { pharmacyName: "Healthfield", phone: null, address: null, licenceNumber: null, vatEnabled: false, vatRate: "16.00" };
+  assert.equal(prepareThermalReceipt({ ...base, receipt: { settings, servedBy: null } }).order.vat, null);
+});
+
+test("a VAT figure supplied with the order is never recalculated", () => {
   assert.equal(prepareThermalReceipt({ ...base, order: { ...base.order, vat: "104.50" } }).order.vat, "104.50");
 });

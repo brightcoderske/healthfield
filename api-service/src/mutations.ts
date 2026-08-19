@@ -19,6 +19,7 @@ import { getDb } from "./db";
 import { repriceDeliveryForBranch, resolveDeliveryQuote } from "./delivery";
 import { sendSms, smsConfiguration } from "./sms";
 import { marketingSms } from "../../lib/sms-templates";
+import { MAX_VAT_RATE, parseVatRate } from "../../lib/vat";
 import { extractContentReferences, isPersonalised, renderContentBlocks, renderMergeFields, type MergeRecipient } from "../../lib/campaign-merge";
 import { campaignContentResolver, loadCampaignContent } from "./campaign-content";
 import { apportionBundle, isBundle, loadLiveOffers, offerPriceMap, offerTotal } from "./offers";
@@ -1397,6 +1398,9 @@ export async function handleSettings(request: Request) {
     address: z.string().trim().max(1000), openingHours: z.string().trim().max(255), deliveryMessage: z.string().trim().min(2).max(255), freeDeliveryThreshold: z.coerce.number().nonnegative().optional(),
     facebookUrl: z.string().trim().url().or(z.literal("")), instagramUrl: z.string().trim().url().or(z.literal("")), xUrl: z.string().trim().url().or(z.literal("")), tiktokUrl: z.string().trim().url().or(z.literal("")), licenceTitle:z.string().trim().max(190),licenceNumber:z.string().trim().max(120),licenceImageUrl:z.string().trim().max(500), requireTeamTwoFactor: z.boolean(),
     onlineMpesaEnabled:z.boolean(),onlineManualEnabled:z.boolean(),onlineCodEnabled:z.boolean(),posCashEnabled:z.boolean(),posMpesaEnabled:z.boolean(),posManualEnabled:z.boolean(),mpesaTillNumber:z.string().trim().max(30),mpesaAccountName:z.string().trim().max(150),
+    // Disclosure only: shelf prices already include VAT, so this changes the receipt
+    // and nothing a customer is charged. 0 keeps the line off the receipt.
+    taxNumber:z.string().trim().max(60),vatEnabled:z.boolean(),vatRate:z.coerce.number().min(0).max(MAX_VAT_RATE),
   })
     // Partial so each section of the settings screen can save on its own. A section
     // sends only its own fields; anything absent is left exactly as it was, which is
@@ -1408,7 +1412,7 @@ export async function handleSettings(request: Request) {
   // Only keys the caller actually sent are written. Spreading the parsed object would
   // reintroduce defaults for absent fields and quietly overwrite other sections.
   const sent = new Set(Object.keys(data));
-  const values = { ...data, phone: data.phone || null, whatsapp: data.whatsapp || null, supportEmail: data.supportEmail || null, address: data.address || null, openingHours: data.openingHours || null, freeDeliveryThreshold: data.freeDeliveryThreshold?.toString() ?? null, facebookUrl: data.facebookUrl || null, instagramUrl: data.instagramUrl || null, xUrl: data.xUrl || null, tiktokUrl: data.tiktokUrl || null, mpesaTillNumber:data.mpesaTillNumber||null,mpesaAccountName:data.mpesaAccountName||null, updatedBy: auth.session.userId };
+  const values = { ...data, phone: data.phone || null, whatsapp: data.whatsapp || null, supportEmail: data.supportEmail || null, address: data.address || null, openingHours: data.openingHours || null, freeDeliveryThreshold: data.freeDeliveryThreshold?.toString() ?? null, taxNumber: data.taxNumber === undefined ? undefined : data.taxNumber.toUpperCase() || null, vatRate: data.vatRate === undefined ? undefined : parseVatRate(data.vatRate).toFixed(2), facebookUrl: data.facebookUrl || null, instagramUrl: data.instagramUrl || null, xUrl: data.xUrl || null, tiktokUrl: data.tiktokUrl || null, mpesaTillNumber:data.mpesaTillNumber||null,mpesaAccountName:data.mpesaAccountName||null, updatedBy: auth.session.userId };
   // updatedBy is derived here rather than sent, so it survives the prune; every other
   // key the caller did not send is dropped so one section cannot blank another's.
   for (const key of Object.keys(values)) if (key !== "updatedBy" && !sent.has(key)) delete (values as Record<string, unknown>)[key];

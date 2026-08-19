@@ -12,7 +12,7 @@ import { handleSmsReportRefresh } from "./sms-routes";
 import { handleDeliveryBands, handleDeliveryPreview, handleDeliveryQuote, handleDeliverySettings } from "./delivery";
 import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
-import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, reconcilePendingStkPayments, recoverMissedMpesaPayments } from "./payment-handlers";
+import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bRegistration, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, reconcilePendingStkPayments, recoverMissedMpesaPayments } from "./payment-handlers";
 import {
   handleAuth, handleBlogs, handleCampaigns, handleChats, handleCustomerOrderReceived, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptionSelection, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
   handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
@@ -123,6 +123,7 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/payments/retry") return responseOf(handlePaymentRetry(request));
   if (url.pathname === "/v1/payments/cancel") return responseOf(handlePaymentCancel(request));
   if (url.pathname === "/v1/payments/mobile-money/recover") return responseOf(handlePullTransactionsRecovery(request));
+  if (url.pathname === "/v1/payments/mobile-money/c2b/register") return responseOf(handleC2bRegistration(request));
   const incomingPaymentMatch = url.pathname.match(/^\/v1\/payments\/incoming\/(\d+)\/match$/);
   if (incomingPaymentMatch) return responseOf(handleIncomingPaymentMatch(request, Number(incomingPaymentMatch[1])));
   const posIncomingPaymentConfirmation = url.pathname.match(/^\/v1\/payments\/incoming\/(\d+)\/confirm-pos$/);

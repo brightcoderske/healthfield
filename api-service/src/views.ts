@@ -58,7 +58,7 @@ import {
   offerTotal,
   type ResolvedOffer,
 } from "./offers";
-import { paymentConfigurationSummary } from "./payment-handlers";
+import { c2bRegistrationState, paymentConfigurationSummary } from "./payment-handlers";
 import { normalizePaymentReference } from "./mpesa";
 import {
   requireTeamPermission,
@@ -687,7 +687,7 @@ async function orderReceiptContext(payments: Array<typeof paymentTransactions.$i
   const db = getDb();
   const payment = payments.find((entry) => entry.status === "PAID") ?? payments[0] ?? null;
   const [settingsRows, servedByRows] = await Promise.all([
-    db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone, address: siteSettings.address, licenceNumber: siteSettings.licenceNumber }).from(siteSettings).limit(1),
+    db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone, address: siteSettings.address, licenceNumber: siteSettings.licenceNumber, taxNumber: siteSettings.taxNumber, vatEnabled: siteSettings.vatEnabled, vatRate: siteSettings.vatRate }).from(siteSettings).limit(1),
     payment?.reviewedBy
       ? db.select({ firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.id, payment.reviewedBy)).limit(1)
       : Promise.resolve([]),
@@ -1252,6 +1252,11 @@ export async function handleView(request: Request, path: string) {
         onlineManualEnabled: Boolean(
           settings?.onlineManualEnabled && settings.mpesaTillNumber,
         ),
+        // Read from the database above but never sent, so the checkout form saw
+        // `undefined` and hid the option however the switch was set in admin. Cash on
+        // delivery has no provider to configure; the form gates it on delivery, and
+        // POST /v1/orders refuses it for a pickup order.
+        onlineCodEnabled: Boolean(settings?.onlineCodEnabled),
         tillNumber: settings?.mpesaTillNumber || null,
         accountName: settings?.mpesaAccountName || null,
       },
@@ -1811,7 +1816,9 @@ export async function handleView(request: Request, path: string) {
               : null;
         return { ...item, suggestion, candidates: amountMatches, sameAmountReceiptCount };
       });
-      return json({ payments, exceptions });
+      // Sent with the page so the screen where missing payments are chased can say why
+      // they are missing, rather than leaving "M-Pesa is configured" to imply delivery.
+      return json({ payments, exceptions, till: await c2bRegistrationState() });
     }
     if (view === "settings") {
       // Explicit columns rather than select(): the row still carries unused
@@ -1828,6 +1835,7 @@ export async function handleView(request: Request, path: string) {
         licenceImageUrl: siteSettings.licenceImageUrl, requireTeamTwoFactor: siteSettings.requireTeamTwoFactor,
         onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled,
         onlineCodEnabled: siteSettings.onlineCodEnabled, posCashEnabled: siteSettings.posCashEnabled,
+        taxNumber: siteSettings.taxNumber, vatEnabled: siteSettings.vatEnabled, vatRate: siteSettings.vatRate,
         posMpesaEnabled: siteSettings.posMpesaEnabled, posManualEnabled: siteSettings.posManualEnabled,
         mpesaTillNumber: siteSettings.mpesaTillNumber, mpesaAccountName: siteSettings.mpesaAccountName,
       }).from(siteSettings).limit(1);

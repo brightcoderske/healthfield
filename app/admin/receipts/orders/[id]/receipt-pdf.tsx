@@ -59,7 +59,7 @@ function time(value: string) {
   return new Intl.DateTimeFormat("en-KE", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Africa/Nairobi" }).format(new Date(value));
 }
 
-export function ReceiptPdf({ order, items, payment, branch, business, servedBy, receiptNumber, barcodeDataUrl, logoDataUrl }: ReceiptPdfProps) {
+export function ReceiptPdf({ order, items, payment, branch, business, servedBy, receiptNumber, vatLabel, barcodeDataUrl, logoDataUrl }: ReceiptPdfProps) {
   const paymentMethod = paymentMethodLabel(payment?.method || order.paymentMethod);
   const mpesaCode = paymentMethod.includes("M-Pesa") ? payment?.receiptNumber || order.paymentReference : null;
   const transactionAt = payment?.verifiedAt || payment?.createdAt || order.createdAt;
@@ -111,7 +111,7 @@ export function ReceiptPdf({ order, items, payment, branch, business, servedBy, 
       <View style={s.totalLine}><Text>Subtotal</Text><Text>{money(order.subtotal)}</Text></View>
       <View style={s.totalLine}><Text>Delivery Fee</Text><Text>{money(order.deliveryFee)}</Text></View>
       {Number(order.discount) !== 0 ? <View style={s.totalLine}><Text>Discount</Text><Text>-{money(order.discount)}</Text></View> : null}
-      {order.vat !== null && order.vat !== undefined ? <View style={s.totalLine}><Text>VAT</Text><Text>{money(order.vat)}</Text></View> : null}
+      {order.vat !== null && order.vat !== undefined ? <View style={s.totalLine}><Text>{vatLabel}</Text><Text>{money(order.vat)}</Text></View> : null}
       {order.amountTendered !== null && order.amountTendered !== undefined ? <View style={s.totalLine}><Text>Amount Tendered</Text><Text>{money(order.amountTendered)}</Text></View> : null}
       {order.change !== null && order.change !== undefined ? <View style={s.totalLine}><Text>Change</Text><Text>{money(order.change)}</Text></View> : null}
       <Text style={s.separator}>{dash}</Text>

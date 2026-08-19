@@ -24,6 +24,16 @@ const nextConfig: NextConfig = {
     // transforms those files through /_next/image.
     unoptimized: true,
   },
+  async redirects() {
+    // Order SMS is billed per character, so the message points at the shortest link that
+    // can carry the meaning. There is no /orders page — the customer's orders are the
+    // first section of the account page — and every message sent so far has pointed at a
+    // 404. Redirecting keeps the short link in the SMS and heals the ones already sent.
+    return [
+      { source: "/orders", destination: "/account#orders", permanent: false },
+      { source: "/account/orders", destination: "/account#orders", permanent: false },
+    ];
+  },
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },

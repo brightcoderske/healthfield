@@ -11,7 +11,7 @@ type SettingsValue = {
   facebookUrl:string|null; instagramUrl:string|null; xUrl:string|null; tiktokUrl:string|null;
   licenceTitle:string|null;licenceNumber:string|null;licenceImageUrl:string|null;
   requireTeamTwoFactor:boolean;
-  onlineMpesaEnabled:boolean;onlineManualEnabled:boolean;onlineCodEnabled:boolean;posCashEnabled:boolean;posMpesaEnabled:boolean;posManualEnabled:boolean;
+  onlineMpesaEnabled:boolean;onlineManualEnabled:boolean;onlineCodEnabled:boolean;posCashEnabled:boolean;posMpesaEnabled:boolean;posManualEnabled:boolean;taxNumber?:string|null;vatEnabled?:boolean;vatRate?:string|number|null;
   mpesaTillNumber:string|null;mpesaAccountName:string|null;
 } | null;
 
@@ -157,7 +157,7 @@ export function SettingsForm({ initial, paymentRuntime }: { initial: SettingsVal
         id="payments" tone="#d92f91" icon={<Banknote />}
         title="Payments"
         description="Methods offered online and at the walk-in till. Provider credentials live in the API environment."
-        onSave={(form) => putSettings(withBooleans(form, ["onlineMpesaEnabled","onlineManualEnabled","onlineCodEnabled","posCashEnabled","posMpesaEnabled","posManualEnabled"]))}
+        onSave={(form) => putSettings(withBooleans(form, ["onlineMpesaEnabled","onlineManualEnabled","onlineCodEnabled","posCashEnabled","posMpesaEnabled","posManualEnabled","vatEnabled"]))}
       >
         <div className={`payment-runtime ${paymentRuntime.mpesaConfigured?"ready":"missing"}`}>
           <strong>{paymentRuntime.mpesaConfigured?"M-Pesa Express and C2B ready":"M-Pesa credentials are missing"}</strong>
@@ -172,6 +172,14 @@ export function SettingsForm({ initial, paymentRuntime }: { initial: SettingsVal
           <label><input name="onlineMpesaEnabled" type="checkbox" defaultChecked={initial?.onlineMpesaEnabled??true}/><span><strong>M-Pesa Express</strong><small>Send an STK prompt and verify automatically.</small></span></label>
           <label><input name="onlineManualEnabled" type="checkbox" defaultChecked={initial?.onlineManualEnabled??true}/><span><strong>Manual M-Pesa</strong><small>Show the till and collect payment proof for approval.</small></span></label>
           <label><input name="onlineCodEnabled" type="checkbox" defaultChecked={initial?.onlineCodEnabled??false}/><span><strong>Cash on delivery</strong><small>Delivery orders only. The customer gets an invoice and the rider collects on arrival.</small></span></label>
+        </div>
+        <h3>VAT on receipts</h3>
+        <div className="payment-toggle-grid">
+          <label><input name="vatEnabled" type="checkbox" defaultChecked={initial?.vatEnabled??false}/><span><strong>Show VAT on receipts</strong><small>Prices already include VAT, so this discloses the tax inside each total. It never changes what a customer is charged.</small></span></label>
+        </div>
+        <div className="settings-grid">
+          <label>VAT rate (%)<input name="vatRate" type="number" min="0" max="100" step="0.01" defaultValue={initial?.vatRate ?? "16"}/><small>Kenya&rsquo;s standard rate is 16%. Printed as &ldquo;VAT (16% incl.)&rdquo; on the receipt and the PDF.</small></label>
+          <label>KRA PIN<input name="taxNumber" defaultValue={initial?.taxNumber ?? ""} maxLength={60} placeholder="P051234567X"/><small>Printed on every receipt beside the licence number. Leave empty to keep it off.</small></label>
         </div>
         <h3>Walk-in checkout</h3>
         <div className="payment-toggle-grid">

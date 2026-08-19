@@ -6,7 +6,7 @@ import { sendEmail } from "./email";
 import { requireTeamPermission } from "./staff-permissions";
 import { getDb } from "./db";
 import { json } from "./http";
-import { classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, selectIncomingPaymentCandidate, selectPaymentForIncoming, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, validDateOrNull, type IncomingMpesaPayment } from "./mpesa";
+import { buildC2bCallbackUrls, classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, registerC2bUrls, selectIncomingPaymentCandidate, selectPaymentForIncoming, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, validDateOrNull, type IncomingMpesaPayment } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -837,12 +837,81 @@ export async function handlePullTransactionsRecovery(request: Request) {
   }
 }
 
+/**
+ * Registers the Till callback URLs with Safaricom.
+ *
+ * This is the step that makes C2B work at all, and it is not a deploy artefact: the
+ * endpoints answer whether or not Safaricom knows about them. It lives behind an admin
+ * action rather than only a shell script because the API runs as a prebuilt bundle on
+ * shared hosting, where nobody has a terminal when a payment stops arriving.
+ */
+export async function handleC2bRegistration(request: Request) {
+  const auth = await requireSession(request, [...admins]);
+  if ("response" in auth) return auth.response;
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  try {
+    const result = await registerC2bUrls();
+    await getDb().insert(activityLogs).values({
+      actorId: auth.session.userId,
+      action: "MPESA_C2B_URLS_REGISTERED",
+      entityType: "payment_configuration",
+      entityId: null,
+      // The secret is the last path segment of both URLs, so only the shape is stored.
+      metadata: { shortcode: result.shortcode, responseCode: result.responseCode, responseDescription: result.responseDescription, actorRole: auth.session.role },
+    });
+    return json({
+      ok: true,
+      message: `${result.responseDescription} Safaricom will now post Till payments for shortcode ${result.shortcode} to this portal.`,
+      responseCode: result.responseCode,
+      shortcode: result.shortcode,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Safaricom did not register the callback URLs.";
+    console.error("M-Pesa C2B registration failed", { error });
+    return json({ error: message }, { status: 409 });
+  }
+}
+
 export function paymentConfigurationSummary() {
+  const config = mpesaConfiguration();
   return {
-    mpesaConfigured: Boolean(mpesaConfiguration()),
-    stkQueryConfigured: Boolean(mpesaConfiguration()),
-    c2bCallbacksConfigured: Boolean(mpesaConfiguration()),
+    mpesaConfigured: Boolean(config),
+    stkQueryConfigured: Boolean(config),
+    // Credentials being present is not the same as Safaricom knowing where to post.
+    // This is only the first half; c2bRegistrationState() reports the half that
+    // decides whether a Till payment ever arrives.
+    c2bCallbacksConfigured: Boolean(config),
     transactionStatusConfigured: Boolean(transactionStatusConfiguration()),
     pullTransactionsConfigured: Boolean(pullTransactionsConfiguration()),
+  };
+}
+
+/**
+ * What the portal needs in order to say why Till payments are or are not arriving.
+ *
+ * Every automatic route into the portal is listed with the reason it is off, because
+ * "M-Pesa is configured" was the only thing shown before and it is true even when no
+ * payment can possibly be delivered.
+ */
+export async function c2bRegistrationState() {
+  const config = mpesaConfiguration();
+  const [registration] = config
+    ? await getDb().select({ createdAt: activityLogs.createdAt, metadata: activityLogs.metadata })
+        .from(activityLogs)
+        .where(eq(activityLogs.action, "MPESA_C2B_URLS_REGISTERED"))
+        .orderBy(desc(activityLogs.createdAt))
+        .limit(1)
+    : [];
+  const urls = config ? buildC2bCallbackUrls(config.callbackBaseUrl, config.callbackSecret) : null;
+  const hidden = (url: string) => url.replace(/\/[^/]+$/, "/…");
+  return {
+    mpesaConfigured: Boolean(config),
+    shortcode: config ? process.env.MPESA_C2B_SHORTCODE?.trim() || config.shortcode : null,
+    confirmationUrl: urls ? hidden(urls.confirmationUrl) : null,
+    validationUrl: urls ? hidden(urls.validationUrl) : null,
+    registeredAt: registration?.createdAt ? new Date(registration.createdAt).toISOString() : null,
+    registrationResponse: registration ? String((registration.metadata as Record<string, unknown> | null)?.responseDescription ?? "") : null,
+    pullConfigured: Boolean(pullTransactionsConfiguration()),
+    transactionStatusConfigured: Boolean(transactionStatusConfiguration()),
   };
 }

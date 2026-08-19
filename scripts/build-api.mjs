@@ -16,6 +16,7 @@ await build({
   entryPoints: {
     server: resolve(service, "src", "server.ts"),
     "register-pull": resolve(service, "src", "register-pull.ts"),
+    "register-c2b": resolve(service, "src", "register-c2b.ts"),
   },
   outdir: output,
   outExtension: { ".js": ".mjs" },

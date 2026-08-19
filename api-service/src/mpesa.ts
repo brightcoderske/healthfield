@@ -405,6 +405,45 @@ export async function queryPulledTransactions(start: Date, end: Date, offset = 0
   }), "Safaricom did not accept the Pull Transactions request.");
 }
 
+/**
+ * Tells Safaricom where to deliver Till payments.
+ *
+ * Without this call the confirmation and validation endpoints exist and answer, but
+ * nothing ever reaches them: Safaricom only posts to URLs registered against the
+ * shortcode. Registration is not part of a deploy — it is a one-off per shortcode, and
+ * has to be repeated whenever the callback host, the callback secret or the Daraja app
+ * changes, because each of those changes the URL Safaricom holds.
+ *
+ * For a Buy Goods till the shortcode registered is the store (head office) number, not
+ * the till the customer types; MPESA_C2B_SHORTCODE overrides it when Safaricom has
+ * provisioned C2B against a different number.
+ */
+export async function registerC2bUrls() {
+  const config = mpesaConfiguration();
+  if (!config) throw new Error("M-Pesa is not configured, so there are no callback URLs to register.");
+  const shortcode = process.env.MPESA_C2B_SHORTCODE?.trim() || config.shortcode;
+  if (!/^\d{5,8}$/.test(shortcode)) throw new Error("MPESA_C2B_SHORTCODE must be the numeric shortcode C2B is provisioned against.");
+  const token = await accessToken(config);
+  const urls = buildC2bCallbackUrls(config.callbackBaseUrl, config.callbackSecret);
+  const data = acceptedRequest(await mpesaJson(`${config.baseUrl}/mpesa/c2b/v2/registerurl`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ShortCode: Number(shortcode),
+      ResponseType: "Completed",
+      ConfirmationURL: urls.confirmationUrl,
+      ValidationURL: urls.validationUrl,
+    }),
+  }), "Safaricom did not register the C2B callback URLs.");
+  return {
+    shortcode,
+    responseCode: String(data.ResponseCode ?? data.responseCode ?? ""),
+    responseDescription: String(data.ResponseDescription || data.ResponseDesc || "C2B callback URLs registered."),
+    confirmationUrl: urls.confirmationUrl,
+    validationUrl: urls.validationUrl,
+  };
+}
+
 export async function registerPullTransactionsCallback() {
   const config = pullTransactionsConfiguration();
   if (!config?.nominatedNumber) throw new Error("Set MPESA_PULL_NOMINATED_NUMBER before registering Pull Transactions.");

@@ -330,6 +330,14 @@ export const siteSettings = mysqlTable("site_settings", {
   // Cash on delivery for online orders. Off by default: it carries real collection
   // risk, so it is a deliberate choice rather than something a shop inherits.
   onlineCodEnabled: boolean("online_cod_enabled").default(false).notNull(),
+  // Shop-wide VAT disclosure. Shelf prices in Kenya are VAT-inclusive, so these change
+  // what a receipt *says*, never what a customer is charged. The switch is separate
+  // from the rate so a shop can stop printing VAT without losing the rate it uses.
+  // The KRA PIN printed on receipts. A VAT figure without the PIN it was collected
+  // under is not much use to a customer claiming it back.
+  taxNumber: varchar("tax_number", { length: 60 }),
+  vatEnabled: boolean("vat_enabled").default(false).notNull(),
+  vatRate: decimal("vat_rate", { precision: 5, scale: 2 }).default("0.00").notNull(),
   mpesaTillNumber: varchar("mpesa_till_number", { length: 30 }),
   mpesaAccountName: varchar("mpesa_account_name", { length: 150 }),
   // Distance-based delivery. The bands themselves live in delivery_bands; these are

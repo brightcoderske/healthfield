@@ -1,3 +1,7 @@
+// Relative, not aliased: lib/thermal-receipt.test.ts runs this file under `node
+// --test`, which has no tsconfig path mapping to resolve "@/lib" with.
+import { vatIncludedIn, vatLabel } from "../../../../../lib/vat.ts";
+
 export type ReceiptMoney = string | number;
 
 export type ReceiptOrder = {
@@ -54,6 +58,10 @@ export type ReceiptBusiness = {
   address: string | null;
   licenceNumber: string | null;
   taxNumber?: string | null;
+  /** The admin switch. Off prints no VAT line whatever the rate says. */
+  vatEnabled?: boolean | null;
+  /** Shop-wide VAT percentage from admin settings; 0 or absent prints no VAT line. */
+  vatRate?: string | number | null;
 };
 
 export type ReceiptApiData = {
@@ -73,6 +81,8 @@ export type ThermalReceiptProps = {
   business: ReceiptBusiness;
   servedBy: string | null;
   receiptNumber: string;
+  /** "VAT (16% incl.)" — carries the rate, so a reprinted receipt still explains itself. */
+  vatLabel: string;
   barcodeDataUrl?: string | null;
   logoDataUrl?: string | null;
 };
@@ -109,14 +119,20 @@ export function prepareThermalReceipt(data: ReceiptApiData): Omit<ThermalReceipt
     address: null,
     licenceNumber: null,
   };
+  // Shelf prices include VAT, so the receipt discloses the tax inside the total rather
+  // than adding to it — the printed total still matches the M-Pesa receipt to the
+  // shilling. A figure already supplied with the order wins, so a POS sale that
+  // recorded its own VAT is never overwritten by today's rate.
+  const vat = business.vatEnabled === false ? null : data.order.vat ?? vatIncludedIn(data.order.total, business.vatRate);
   const servedBy = data.receipt?.servedBy ?? (payment?.channel === "ONLINE" ? "Online order" : payment?.channel === "POS" ? "POS terminal" : null);
   return {
-    order: data.order,
+    order: { ...data.order, vat },
     items: data.items,
     payment,
     branch,
     business,
     servedBy,
     receiptNumber: healthfieldReceiptNumber(data.order.id, branch?.code),
+    vatLabel: vatLabel(business.vatEnabled === false ? 0 : business.vatRate),
   };
 }

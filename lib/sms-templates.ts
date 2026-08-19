@@ -107,7 +107,12 @@ export function smsSegments(message: string) {
   return Math.ceil(length / 153);
 }
 
-/** Where customers are told to follow their order. Kept short: it is billed per character. */
+/**
+ * Where customers are told to follow their order. Kept short: it is billed per
+ * character, and /account#orders would cost eight more on every message. There is no
+ * /orders page — next.config.ts redirects it to the orders section of the account page,
+ * so this link must not be shortened further or changed without that redirect.
+ */
 export const ORDER_TRACKING_URL = "healthfieldpharmacy.co.ke/orders";
 
 export type OrderSmsContext = {
