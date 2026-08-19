@@ -19,8 +19,10 @@ import { getDb } from "./db";
 import { repriceDeliveryForBranch, resolveDeliveryQuote } from "./delivery";
 import { sendSms, smsConfiguration } from "./sms";
 import { marketingSms } from "../../lib/sms-templates";
+import { extractContentReferences, isPersonalised, renderContentBlocks, renderMergeFields, type MergeRecipient } from "../../lib/campaign-merge";
+import { campaignContentResolver, loadCampaignContent } from "./campaign-content";
 import { apportionBundle, isBundle, loadLiveOffers, offerPriceMap, offerTotal } from "./offers";
-import { orderEmailHtml, orderStatusEmailContent, sendBulkEmail, sendEmail } from "./email";
+import { campaignBodyHtml, campaignEmailHtml, orderEmailHtml, orderStatusEmailContent, sendEmail, stripHtml } from "./email";
 import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, emailVerificationTiming } from "./email-verification";
 import { json, publicImageUrl, safeFilename } from "./http";
 import { storageRoot, validatePrescriptionUpload } from "./prescription-files";
@@ -726,12 +728,51 @@ export async function handleWalkInSales(request: Request) {
   }
 }
 
+type DatabaseTransaction = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+/**
+ * Applies the optional stock line from the product form.
+ *
+ * Product editing already requires an administrator, so this does not re-check the
+ * inventory permission; it does write the same activity entry the inventory screen
+ * does, so a stock change made here is just as traceable as one made there.
+ *
+ * Absent or null means "leave stock alone" — the field is optional and a product must
+ * save without it.
+ */
+async function applyProductStock(
+  tx: DatabaseTransaction,
+  productId: number,
+  actorId: number,
+  stock: { branchId: number; quantityAvailable: number; reorderLevel?: number } | null | undefined,
+) {
+  if (!stock) return;
+  const [existing] = await tx.select({ id: branchInventory.id, reorderLevel: branchInventory.reorderLevel })
+    .from(branchInventory)
+    .where(and(eq(branchInventory.branchId, stock.branchId), eq(branchInventory.productId, productId)))
+    .limit(1);
+  const reorderLevel = stock.reorderLevel ?? existing?.reorderLevel ?? 5;
+  if (existing) {
+    await tx.update(branchInventory)
+      .set({ quantityAvailable: stock.quantityAvailable, reorderLevel, updatedBy: actorId })
+      .where(eq(branchInventory.id, existing.id));
+  } else {
+    await tx.insert(branchInventory).values({ branchId: stock.branchId, productId, quantityAvailable: stock.quantityAvailable, quantityReserved: 0, reorderLevel, updatedBy: actorId });
+  }
+  await tx.insert(activityLogs).values({
+    actorId, action: "INVENTORY_UPDATED", entityType: "branch_inventory",
+    entityId: String(existing?.id ?? productId),
+    metadata: { branchId: stock.branchId, productId, quantityAvailable: stock.quantityAvailable, via: "product-form" },
+  });
+}
+
 const productSchema = z.object({
   categoryId: z.coerce.number().int().positive(), name: z.string().trim().min(2).max(220), brand: z.string().trim().max(150).optional().default(""),
   shortDescription: z.string().trim().max(500).optional().default(""), imageUrl: z.string().trim().max(500).optional().default(""),
   description: z.string().trim().max(10000).optional().default(""),
   price: z.coerce.number().nonnegative(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), packSize: z.string().trim().max(100).optional().default(""),
   prescriptionRequired: z.coerce.boolean().default(false), isFeatured: z.coerce.boolean().default(false), conditionIds: z.array(z.coerce.number().int().positive()).optional().default([]),
+  stock: z.object({ branchId: z.coerce.number().int().positive(), quantityAvailable: z.coerce.number().int().nonnegative(), reorderLevel: z.coerce.number().int().nonnegative().optional() }).nullable().optional(),
 });
 
 export async function handleProducts(request: Request, id?: number) {
@@ -753,6 +794,7 @@ export async function handleProducts(request: Request, id?: number) {
       if (values.conditionIds.length) await tx.insert(productHealthConditions).values(values.conditionIds.map((conditionId) => ({ productId: record.insertId, conditionId })));
       const stores = await tx.select({ id: branches.id }).from(branches).where(eq(branches.isActive, true));
       if (stores.length) await tx.insert(branchInventory).values(stores.map((store) => ({ branchId: store.id, productId: record.insertId, quantityAvailable: 0, quantityReserved: 0, reorderLevel: 5, updatedBy: auth.session.userId })));
+      await applyProductStock(tx, record.insertId, auth.session.userId, values.stock);
       return record;
     });
     return json({ ok: true, id: created.insertId }, { status: 201 });
@@ -768,13 +810,14 @@ export async function handleProducts(request: Request, id?: number) {
     return json({ ok: true });
   }
   if (request.method === "PATCH") {
-    const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(10000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), prescriptionRequired: z.boolean().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional() }).safeParse(await body(request));
+    const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(10000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), prescriptionRequired: z.boolean().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional(), stock: z.object({ branchId: z.coerce.number().int().positive(), quantityAvailable: z.coerce.number().int().nonnegative(), reorderLevel: z.coerce.number().int().nonnegative().optional() }).nullable().optional() }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Invalid product update." }, { status: 400 });
     if (parsed.data.price !== undefined && parsed.data.discountPrice !== null && parsed.data.discountPrice !== undefined && parsed.data.discountPrice >= parsed.data.price) return json({ error: "The selling price must be lower than the regular price to create a discount." }, { status: 400 });
-    const { conditionIds, ...update } = parsed.data;
+    const { conditionIds, stock, ...update } = parsed.data;
     const normalized = { ...update, imageUrl: parsed.data.imageUrl === undefined ? undefined : normalizeStoredImageUrl(parsed.data.imageUrl) };
     await db.transaction(async (tx) => {
       await tx.update(products).set({ ...normalized, price: parsed.data.price?.toString(), discountPrice: parsed.data.discountPrice === null ? null : parsed.data.discountPrice?.toString() }).where(eq(products.id, id));
+      await applyProductStock(tx, id, auth.session.userId, stock);
       if (conditionIds) { await tx.delete(productHealthConditions).where(eq(productHealthConditions.productId, id)); if (conditionIds.length) await tx.insert(productHealthConditions).values(conditionIds.map((conditionId) => ({ productId: id, conditionId }))); }
     });
     return json({ ok: true });
@@ -868,8 +911,8 @@ export async function handleBlogs(request: Request, id?: number) {
   const db=getDb();
   if(request.method==="GET"&&!id)return json({posts:await db.select().from(blogPosts).where(eq(blogPosts.isPublished,true)).orderBy(desc(blogPosts.publishedAt))});
   const auth=await requireTeamPermission(request,"BLOGS_MANAGE");if("response" in auth)return auth.response;
-  if(request.method==="POST"&&!id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(50000),imageUrl:z.string().trim().max(500).optional().default(""),metaTitle:z.string().trim().max(220).optional().default(""),metaDescription:z.string().trim().max(500).optional().default(""),isPublished:z.boolean().default(false),category:z.string().trim().max(60).optional().default(""),productIds:z.array(z.number().int().positive()).max(blogProductLimit).optional().default([])}).safeParse(await body(request));if(!parsed.success)return json({error:"Complete the blog title, excerpt and article."},{status:400});const {productIds,...rest}=parsed.data;const fields={...rest,category:rest.category||null};const slug=`${fields.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")}-${Date.now().toString(36)}`,[created]=await db.insert(blogPosts).values({...fields,slug,imageUrl:fields.imageUrl||null,metaTitle:fields.metaTitle||null,metaDescription:fields.metaDescription||null,publishedAt:fields.isPublished?new Date():null,authorId:auth.session.userId});await setBlogProducts(created.insertId,productIds);await db.insert(activityLogs).values({actorId:auth.session.userId,action:"BLOG_CREATED",entityType:"blog",entityId:String(created.insertId),metadata:{title:fields.title,isPublished:fields.isPublished,actorRole:auth.session.role}});return json({id:created.insertId,slug},{status:201})}
-  if(request.method==="PATCH"&&id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(50000),imageUrl:z.string().trim().max(500).nullable(),metaTitle:z.string().trim().max(220).nullable(),metaDescription:z.string().trim().max(500).nullable(),isPublished:z.boolean(),category:z.string().trim().max(60).optional(),productIds:z.array(z.number().int().positive()).max(blogProductLimit).optional()}).safeParse(await body(request));if(!parsed.success)return json({error:"Complete the blog title, excerpt and article."},{status:400});const [existing]=await db.select({slug:blogPosts.slug}).from(blogPosts).where(eq(blogPosts.id,id)).limit(1);if(!existing)return json({error:"Article not found."},{status:404});const {productIds,...rest}=parsed.data;const fields={...rest,...(rest.category===undefined?{}:{category:rest.category||null})};await db.update(blogPosts).set({...fields,publishedAt:fields.isPublished?new Date():null}).where(eq(blogPosts.id,id));if(productIds!==undefined)await setBlogProducts(id,productIds);await db.insert(activityLogs).values({actorId:auth.session.userId,action:"BLOG_UPDATED",entityType:"blog",entityId:String(id),metadata:{title:fields.title,isPublished:fields.isPublished,actorRole:auth.session.role}});return json({ok:true,slug:existing.slug})}
+  if(request.method==="POST"&&!id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(60000),imageUrl:z.string().trim().max(500).optional().default(""),metaTitle:z.string().trim().max(220).optional().default(""),metaDescription:z.string().trim().max(500).optional().default(""),isPublished:z.boolean().default(false),category:z.string().trim().max(60).optional().default(""),productIds:z.array(z.number().int().positive()).max(blogProductLimit).optional().default([])}).safeParse(await body(request));if(!parsed.success){const issue=parsed.error.issues[0];const field=String(issue?.path?.[0]??"field");const labels:Record<string,string>={title:"title",excerpt:"summary",content:"article",imageUrl:"cover image",metaTitle:"meta title",metaDescription:"meta description",category:"category"};const label=labels[field]??field;const detail=issue?.code==="too_big"?`The ${label} is too long. ${field==="content"?"Very large pasted images are the usual cause — upload the image instead of pasting it.":"Shorten it and try again."}`:issue?.code==="too_small"?`The ${label} is too short.`:`Check the ${label}.`;return json({error:detail},{status:400});}const {productIds,...rest}=parsed.data;const fields={...rest,category:rest.category||null};const slug=`${fields.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")}-${Date.now().toString(36)}`,[created]=await db.insert(blogPosts).values({...fields,slug,imageUrl:fields.imageUrl||null,metaTitle:fields.metaTitle||null,metaDescription:fields.metaDescription||null,publishedAt:fields.isPublished?new Date():null,authorId:auth.session.userId});await setBlogProducts(created.insertId,productIds);await db.insert(activityLogs).values({actorId:auth.session.userId,action:"BLOG_CREATED",entityType:"blog",entityId:String(created.insertId),metadata:{title:fields.title,isPublished:fields.isPublished,actorRole:auth.session.role}});return json({id:created.insertId,slug},{status:201})}
+  if(request.method==="PATCH"&&id){const parsed=z.object({title:z.string().trim().min(3).max(220),excerpt:z.string().trim().min(10).max(500),content:z.string().trim().min(20).max(60000),imageUrl:z.string().trim().max(500).nullable(),metaTitle:z.string().trim().max(220).nullable(),metaDescription:z.string().trim().max(500).nullable(),isPublished:z.boolean(),category:z.string().trim().max(60).optional(),productIds:z.array(z.number().int().positive()).max(blogProductLimit).optional()}).safeParse(await body(request));if(!parsed.success){const issue=parsed.error.issues[0];const field=String(issue?.path?.[0]??"field");const labels:Record<string,string>={title:"title",excerpt:"summary",content:"article",imageUrl:"cover image",metaTitle:"meta title",metaDescription:"meta description",category:"category"};const label=labels[field]??field;const detail=issue?.code==="too_big"?`The ${label} is too long. ${field==="content"?"Very large pasted images are the usual cause — upload the image instead of pasting it.":"Shorten it and try again."}`:issue?.code==="too_small"?`The ${label} is too short.`:`Check the ${label}.`;return json({error:detail},{status:400});}const [existing]=await db.select({slug:blogPosts.slug}).from(blogPosts).where(eq(blogPosts.id,id)).limit(1);if(!existing)return json({error:"Article not found."},{status:404});const {productIds,...rest}=parsed.data;const fields={...rest,...(rest.category===undefined?{}:{category:rest.category||null})};await db.update(blogPosts).set({...fields,publishedAt:fields.isPublished?new Date():null}).where(eq(blogPosts.id,id));if(productIds!==undefined)await setBlogProducts(id,productIds);await db.insert(activityLogs).values({actorId:auth.session.userId,action:"BLOG_UPDATED",entityType:"blog",entityId:String(id),metadata:{title:fields.title,isPublished:fields.isPublished,actorRole:auth.session.role}});return json({ok:true,slug:existing.slug})}
   if(request.method==="DELETE"&&id){const [existing]=await db.select({slug:blogPosts.slug}).from(blogPosts).where(eq(blogPosts.id,id)).limit(1);await db.delete(blogPostProducts).where(eq(blogPostProducts.postId,id));await db.delete(blogPosts).where(eq(blogPosts.id,id));await db.insert(activityLogs).values({actorId:auth.session.userId,action:"BLOG_DELETED",entityType:"blog",entityId:String(id),metadata:{actorRole:auth.session.role}});return json({ok:true,slug:existing?.slug})}return json({error:"Method not allowed."},{status:405});
 }
 
@@ -1493,6 +1536,13 @@ export async function handleStores(request: Request, id?: number) {
   return json({ error: "Method not allowed." }, { status: 405 });
 }
 
+/** A recipient whose name fields are safe to drop into HTML. */
+function safeName<T extends { firstName?: string | null; lastName?: string | null; fullName?: string | null }>(customer: T) {
+  const clean = (value: string | null | undefined) =>
+    value === null || value === undefined ? value : String(value).replace(/[<>&"]/g, "");
+  return { ...customer, firstName: clean(customer.firstName), lastName: clean(customer.lastName), fullName: clean(customer.fullName) };
+}
+
 export async function handleCampaigns(request: Request) {
   const auth = await requireSession(request, [...admins]);
   if ("response" in auth) return auth.response;
@@ -1502,11 +1552,11 @@ export async function handleCampaigns(request: Request) {
   const [settings] = await db.select().from(siteSettings).limit(1);
   const since=parsed.data.lookbackDays?new Date(Date.now()-parsed.data.lookbackDays*86400000):null;
   const [registered,orderContacts]=await Promise.all([
-    parsed.data.audience!=="ORDER_CUSTOMERS"?db.select({email:users.email,phone:users.phone}).from(users).where(and(eq(users.role,"CUSTOMER"),eq(users.isActive,true),eq(users.marketingConsent,true),...(since?[gte(users.createdAt,since)]:[]))):Promise.resolve([]),
-    parsed.data.audience!=="MARKETING_CUSTOMERS"?db.select({email:orders.email,phone:orders.phone}).from(orders).where(since?gte(orders.createdAt,since):undefined):Promise.resolve([]),
+    parsed.data.audience!=="ORDER_CUSTOMERS"?db.select({email:users.email,phone:users.phone,firstName:users.firstName,lastName:users.lastName,fullName:sql<string|null>`null`}).from(users).where(and(eq(users.role,"CUSTOMER"),eq(users.isActive,true),eq(users.marketingConsent,true),...(since?[gte(users.createdAt,since)]:[]))):Promise.resolve([]),
+    parsed.data.audience!=="MARKETING_CUSTOMERS"?db.select({email:orders.email,phone:orders.phone,firstName:sql<string|null>`null`,lastName:sql<string|null>`null`,fullName:orders.customerName}).from(orders).where(since?gte(orders.createdAt,since):undefined):Promise.resolve([]),
   ]);
-  const contacts=new Map<string,{email:string|null;phone:string|null}>();
-  for(const contact of [...registered,...orderContacts]){const email=contact.email?.trim().toLowerCase()||null,phone=contact.phone?.trim()||null,key=email?`e:${email}`:phone?`p:${phone}`:"";if(key&&!contacts.has(key))contacts.set(key,{email,phone})}
+  const contacts=new Map<string,{email:string|null;phone:string|null;firstName:string|null;lastName:string|null;fullName:string|null}>();
+  for(const contact of [...registered,...orderContacts]){const email=contact.email?.trim().toLowerCase()||null,phone=contact.phone?.trim()||null,key=email?`e:${email}`:phone?`p:${phone}`:"";if(key&&!contacts.has(key))contacts.set(key,{email,phone,firstName:contact.firstName??null,lastName:contact.lastName??null,fullName:contact.fullName??null})}
   const customers=[...contacts.values()];
   const wantsEmail = parsed.data.channel !== "SMS", wantsSms = parsed.data.channel !== "EMAIL";
   if(wantsEmail&&(!process.env.SMTP_HOST||!process.env.SMTP_USER||!process.env.SMTP_PASSWORD))return json({error:"Configure the cPanel SMTP mailbox in api-service/.env first."},{status:400});
@@ -1517,19 +1567,57 @@ export async function handleCampaigns(request: Request) {
   const [created] = await db.insert(campaigns).values({ ...campaignData, subject: parsed.data.subject || null, status: "SENDING", recipientCount: customers.length, createdBy: auth.session.userId });
   let successCount = 0, failureCount = 0;
   try {
-    if(wantsEmail){const recipients=customers.map(customer=>customer.email).filter((email):email is string=>Boolean(email)),result=await sendBulkEmail({recipients,subject:parsed.data.subject||parsed.data.name,message:parsed.data.message});successCount+=result.successCount;failureCount+=result.failureCount}
+    // Content blocks are fetched once and reused for every recipient; only the merge
+    // fields differ per person, so nothing is queried per customer.
+    const contentIndex = await loadCampaignContent(extractContentReferences(parsed.data.message), storefrontOrigin());
+    const resolveContent = campaignContentResolver(contentIndex);
+    const mergeContext = { pharmacyName: settings?.pharmacyName, pharmacyPhone: settings?.phone, storefrontUrl: storefrontOrigin().replace(/^https?:\/\//, "") };
+    const personalised = isPersonalised(parsed.data.message);
+
+    if (wantsEmail) {
+      const withEmail = customers.filter((customer) => Boolean(customer.email));
+      const subject = parsed.data.subject || parsed.data.name;
+      if (personalised) {
+        // Every body differs, so a single bulk send is impossible — each is composed
+        // and sent for its own recipient.
+        for (const customer of withEmail) {
+          const body = renderContentBlocks(renderMergeFields(campaignBodyHtml(parsed.data.message), safeName(customer), mergeContext), "EMAIL", resolveContent);
+          const outcome = await sendEmail({ to: customer.email as string, subject, message: stripHtml(body), html: campaignEmailHtml(body, mergeContext.pharmacyName || "Healthfield Pharmacy") });
+          if (outcome.sent) successCount += 1; else failureCount += 1;
+        }
+      } else {
+        const body = renderContentBlocks(renderMergeFields(campaignBodyHtml(parsed.data.message), {}, mergeContext), "EMAIL", resolveContent);
+        const html = campaignEmailHtml(body, mergeContext.pharmacyName || "Healthfield Pharmacy");
+        for (const customer of withEmail) {
+          const outcome = await sendEmail({ to: customer.email as string, subject, message: stripHtml(body), html });
+          if (outcome.sent) successCount += 1; else failureCount += 1;
+        }
+      }
+    }
     if (wantsSms) {
       // marketingSms guarantees the opt-out, and MARKETING routes the send through the
       // promotional sender ID rather than the transactional one.
-      const outcome = await sendSms({
-        to: customers.map((customer) => customer.phone),
-        message: marketingSms(parsed.data.message),
-        purpose: "MARKETING",
-        campaignId: created.insertId,
-      });
-      successCount += outcome.sent;
-      failureCount += outcome.failed;
-      if (outcome.skipped) console.warn("Campaign SMS skipped", { campaign: parsed.data.name, reason: outcome.skipped });
+      const compose = (customer: MergeRecipient) =>
+        marketingSms(renderContentBlocks(renderMergeFields(parsed.data.message, customer, mergeContext), "SMS", resolveContent));
+      if (personalised) {
+        // One request per recipient, because each body carries a different name. This
+        // costs more API calls than a bulk send, which is the price of personalisation.
+        for (const customer of customers.filter((entry) => Boolean(entry.phone))) {
+          const outcome = await sendSms({ to: customer.phone as string, message: compose(customer), purpose: "MARKETING", campaignId: created.insertId });
+          successCount += outcome.sent;
+          failureCount += outcome.failed;
+        }
+      } else {
+        const outcome = await sendSms({
+          to: customers.map((customer) => customer.phone),
+          message: compose({}),
+          purpose: "MARKETING",
+          campaignId: created.insertId,
+        });
+        successCount += outcome.sent;
+        failureCount += outcome.failed;
+        if (outcome.skipped) console.warn("Campaign SMS skipped", { campaign: parsed.data.name, reason: outcome.skipped });
+      }
     }
     await db.update(campaigns).set({ status: failureCount ? "FAILED" : "SENT", successCount, failureCount, sentAt: new Date() }).where(eq(campaigns.id, created.insertId));
   } catch { failureCount = customers.length; await db.update(campaigns).set({ status: "FAILED", successCount, failureCount }).where(eq(campaigns.id, created.insertId)); }

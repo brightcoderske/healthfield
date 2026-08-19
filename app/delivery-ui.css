@@ -231,3 +231,82 @@
 .delivery-band-breakdown i{position:absolute;left:0;bottom:0;height:3px;background:linear-gradient(90deg, #762584, #d92f91);border-radius:0 3px 3px 0;}
 .delivery-band-empty{margin:12px 0 0;color:#7a7380;font-size:9.5px;}
 .delivery-band-footer{margin-top:10px;color:#8a8390;font-size:8px;line-height:1.5;}
+
+/* Campaign composer: personalisation tokens and insertable content blocks. */
+.campaign-insert{margin:4px 0 2px;padding:11px 12px;border:1px solid #ece9ef;border-radius:10px;background:#faf8fb;display:flex;flex-direction:column;gap:6px;}
+.campaign-insert-label{display:flex;align-items:center;gap:6px;color:#7a7380;font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;}
+.campaign-insert-label svg{width:13px;}
+.campaign-insert-row{display:flex;flex-wrap:wrap;gap:6px;}
+.campaign-insert-row button{min-height:30px;padding:0 11px;border:1px solid #ddd5e0;border-radius:999px;background:#fff;color:#542064;font-size:9.5px;font-weight:750;cursor:pointer;}
+.campaign-insert-row button:hover{border-color:#762584;background:#f6f1f8;}
+.campaign-insert-picker{display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:0 9px;border:1px solid #ddd5e0;border-radius:999px;background:#fff;}
+.campaign-insert-picker svg{width:13px;color:#d92f91;}
+.campaign-insert-picker select{border:0;background:transparent;color:#542064;font-size:9.5px;font-weight:750;max-width:150px;}
+.campaign-insert-picker select:focus{outline:none;}
+.campaign-insert-help{color:#7a7380;font-size:8px;line-height:1.5;}
+
+/* Rich text editor: the quick-edit bubble, and a phone-sized ribbon. */
+.rich-bubble{display:flex;align-items:center;gap:3px;padding:5px 6px;border:1px solid #e2dbe5;border-radius:999px;background:#fff;box-shadow:0 8px 24px rgba(48,22,54,0.18);}
+.rich-bubble button{width:28px;height:28px;padding:0;border:0;border-radius:50%;color:#4f4654;background:transparent;display:grid;place-items:center;cursor:pointer;}
+.rich-bubble button:hover,.rich-bubble button.is-active{color:#792587;background:#f8edf9;}
+.rich-bubble svg{width:14px;height:14px;}
+.rich-bubble-divider{width:1px;height:18px;margin:0 2px;background:#e2dbe5;}
+.rich-bubble-swatch{width:18px!important;height:18px!important;border:1px solid rgba(0,0,0,0.12)!important;background:var(--swatch)!important;}
+.rich-bubble-swatch.is-active{outline:2px solid #792587;outline-offset:1px;}
+.rich-bubble-clear{font-size:12px;font-weight:800;text-decoration:line-through;}
+
+@media (max-width: 760px){
+/* One scrolling row rather than three wrapped ones. Wrapping was both the reason a row
+   could sit hidden behind the sticky edge and the reason the ribbon ate the screen. */
+.rich-toolbar{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;min-height:38px;padding:4px 6px;gap:4px;}
+.rich-toolbar::-webkit-scrollbar{display:none;}
+.rich-toolbar > *{flex:0 0 auto;}
+.rich-toolbar button{width:27px;height:27px;}
+.rich-toolbar svg{width:13px;height:13px;}
+.rich-toolbar-group{gap:2px;padding-right:4px;}
+.rich-toolbar select{max-width:92px;font-size:9.5px;}
+/* Off the container edge, so the pinned row never reads as clipped. */
+.tiptap-rich-editor .rich-toolbar{top:6px;border-radius:8px;}
+.tiptap-rich-editor{padding-top:2px;}
+.rich-bubble{padding:4px 5px;}
+.rich-bubble button{width:26px;height:26px;}
+}
+
+/* Optional stock entry on the product form: shut until someone wants it. */
+.product-stock-block{margin:2px 0;padding:0;border:1px solid #ece7ee;border-radius:10px;background:#faf8fb;}
+.product-stock-block > summary{padding:10px 12px;display:flex;align-items:center;gap:8px;color:#4c4650;font-size:10px;font-weight:800;cursor:pointer;list-style:none;}
+.product-stock-block > summary::-webkit-details-marker{display:none;}
+.product-stock-block > summary::before{content:"›";display:inline-block;color:#8a278d;font-size:15px;transition:transform 160ms ease;}
+.product-stock-block[open] > summary::before{transform:rotate(90deg);}
+.product-stock-block > summary span{padding:2px 7px;border-radius:999px;color:#7a7380;background:#fff;border:1px solid #e2dbe5;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;}
+.product-stock-block > p{margin:0 12px 9px;color:#7a7380;font-size:9px;line-height:1.5;}
+.product-stock-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 12px 12px;}
+.product-stock-row label{display:flex;flex-direction:column;gap:4px;font-size:9px;font-weight:750;}
+.product-stock-row select,.product-stock-row input{min-height:36px;padding:0 9px;border:1px solid #ddd5e0;border-radius:7px;font-size:11px;}
+.product-stock-row input:disabled{background:#f4f1f5;color:#9a939f;}
+@media (max-width: 620px){.product-stock-row{grid-template-columns:1fr;}}
+
+/* Editing modals on a phone with the keyboard open.
+   `100vh` is the height of the viewport as if no keyboard existed, so the form ran on
+   past the visible area and Save sat under the keyboard, unreachable. `dvh` shrinks
+   with the keyboard, and the footer is pinned inside the scroll box so the buttons are
+   on screen at every scroll position. */
+.product-modal{padding:12px;align-items:start;}
+.product-modal > form{max-height:calc(100dvh - 24px);display:flex;flex-direction:column;}
+.product-modal > form > header{position:sticky;top:0;z-index:3;flex:0 0 auto;background:#fff;}
+.product-modal > form > .product-form-grid,
+.product-modal > form > div:not(header):not(footer){flex:1 1 auto;}
+.product-modal > form > footer{position:sticky;bottom:0;z-index:3;flex:0 0 auto;background:#fff;box-shadow:0 -6px 16px rgba(48,22,54,0.07);}
+
+/* The silent draft notice, and the extra save control. */
+.editor-draft-notice{margin:0 18px 10px;padding:9px 11px;border:1px solid #f0dcc0;border-radius:9px;color:#89521d;background:#fff8ec;display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:9.5px;}
+.editor-draft-notice strong{font-weight:800;}
+.editor-draft-notice button{min-height:28px;padding:0 10px;border:1px solid #e3cba0;border-radius:7px;background:#fff;color:#89521d;font-size:9px;font-weight:750;cursor:pointer;}
+.editor-draft-status{margin-right:auto;color:#7a7380;font-size:8.5px;}
+.product-modal footer button.draft-button{border:1px solid #ddd5e0;color:#542064;background:#fff;}
+@media (max-width: 620px){
+.product-modal{padding:0;}
+.product-modal > form{max-height:100dvh;width:100%;border-radius:0;}
+.product-modal footer{flex-wrap:wrap;}
+.product-modal footer button{flex:1 1 auto;}
+}

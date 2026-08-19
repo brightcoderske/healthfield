@@ -136,6 +136,28 @@ export function googleMapsApiKey() {
 type Suggestion = { placeId: string; primary: string; secondary: string; prediction: PlacePrediction };
 
 /**
+ * The address to show back to the customer once they pick a suggestion.
+ *
+ * Google's formatted address is a postal address, which frequently drops the name that
+ * was actually searched for: "Juja City Mall" comes back as "City Mall, Kalimoni".
+ * Echoing that reads as though the wrong place was selected, so the display name is put
+ * back in front unless the address already contains it.
+ */
+function chosenAddress(place: MapsPlace, suggestion: Suggestion) {
+  const address = String(place.formattedAddress ?? "").trim();
+  const name = String(place.displayName ?? suggestion.primary ?? "").trim();
+  if (!address) return [name, suggestion.secondary].filter(Boolean).join(", ") || name || null;
+  if (!name || address.toLowerCase().includes(name.toLowerCase())) return address;
+  // The postal address usually restates the place under a shorter title — "Juja City
+  // Mall" against "City Mall, Kalimoni". Swapping that opening segment for the fuller
+  // name keeps the place recognisable without repeating it.
+  const segments = address.split(",").map((part) => part.trim()).filter(Boolean);
+  const [first, ...rest] = segments;
+  if (first && name.toLowerCase().includes(first.toLowerCase())) return [name, ...rest].join(", ");
+  return `${name}, ${address}`;
+}
+
+/**
  * Pin-a-location control used at checkout and when saving a branch address.
  *
  * The search box is an ordinary input driving the Places Data API, not Google's
@@ -172,6 +194,8 @@ export function MapPicker({
   // building a second map over the same node bills twice.
   const builtOn = useRef<HTMLElement | null>(null);
   const requestId = useRef(0);
+  // Set when the box is filled programmatically, so that edit does not start a search.
+  const skipNextSearch = useRef(false);
   // Kept in a ref so the map listeners, registered once, always call the current
   // handler rather than the one captured on first render.
   const changeRef = useRef(onChange);
@@ -223,6 +247,7 @@ export function MapPicker({
     // Below three characters there is nothing worth a billed request; the field is
     // cleared by the change handler rather than here, so this effect only ever fetches.
     if (text.length < 3) return;
+    if (skipNextSearch.current) { skipNextSearch.current = false; return; }
     const id = (requestId.current += 1);
     const timer = window.setTimeout(async () => {
       // Resolved inside the timer, not above it: bailing out early left the spinner
@@ -273,8 +298,12 @@ export function MapPicker({
   }, [query, mapsSettled]);
 
   async function choose(suggestion: Suggestion) {
+    // Writing the chosen name back into the box changes `query`, which would otherwise
+    // start a fresh search and reopen the list the customer just dismissed by choosing.
+    skipNextSearch.current = true;
     setQuery(suggestion.primary);
     setSuggestions([]);
+    setSearching(false);
     const place = suggestion.prediction.toPlace();
     await place.fetchFields({ fields: ["location", "formattedAddress", "displayName"] }).catch(() => null);
     // The session closes with the selection; the next search starts a fresh one.
@@ -282,10 +311,7 @@ export function MapPicker({
     const point = place.location;
     if (!point) return;
     mapRef.current?.setZoom(16);
-    const label = place.formattedAddress ?? suggestion.secondary
-      ? [suggestion.primary, suggestion.secondary].filter(Boolean).join(", ")
-      : suggestion.primary;
-    void publish(point.lat(), point.lng(), place.formattedAddress ?? label);
+    void publish(point.lat(), point.lng(), chosenAddress(place, suggestion));
   }
 
   // Drawn on request only, so a customer who found their address by searching never

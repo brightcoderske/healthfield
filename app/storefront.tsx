@@ -253,11 +253,17 @@ export function Storefront({
     ],
   );
 
+  // Prescription medicines are kept out of the browsing catalogue but stay findable:
+  // someone who knows what they were prescribed can search for it by name, while a
+  // casual scroll of the homepage never puts prescription-only medicine in front of
+  // someone who has not been prescribed it. Any active filter counts as intent too.
+  const browsingOnly = !normalizedQuery && !selectedCategory && !selectedCondition && !offersOnly;
   const filtered = useMemo(
     () =>
       searchedProducts.filter(
         (product) =>
           productMatches(product, queryWords, initialCategories) &&
+          (!browsingOnly || !product.prescriptionRequired) &&
           (!selectedCategory || product.categoryId === selectedCategory) &&
           (!selectedCondition ||
             product.conditionIds.includes(selectedCondition)) &&
@@ -267,6 +273,7 @@ export function Storefront({
       searchedProducts,
       initialCategories,
       queryWords,
+      browsingOnly,
       selectedCategory,
       selectedCondition,
       offersOnly,

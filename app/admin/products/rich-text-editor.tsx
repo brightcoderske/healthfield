@@ -7,6 +7,7 @@ import TextAlign from "@tiptap/extension-text-align";
 import { TextStyleKit } from "@tiptap/extension-text-style";
 import { AllSelection, TextSelection } from "@tiptap/pm/state";
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
+import { BubbleMenu } from "@tiptap/react/menus";
 import StarterKit from "@tiptap/starter-kit";
 import {
   AlignCenter,
@@ -67,6 +68,65 @@ function EditorButton({ label, active, disabled = false, onClick, children }: Ed
     onMouseDown={(event) => event.preventDefault()}
     onClick={onClick}
   >{children}</button>;
+}
+
+/**
+ * The quick-edit bar that appears over a selection.
+ *
+ * The ribbon at the top of the editor is a long way from the words being changed,
+ * especially on a phone where it is pinned above a scrolling body. This puts the four
+ * things people reach for most — bold, italic, underline, colour — next to the
+ * selection itself, on every screen size.
+ *
+ * Deliberately small: a bubble that grows into a second ribbon covers the text it is
+ * meant to help you edit.
+ */
+function RichTextBubble({ editor }: { editor: TiptapEditor | null }) {
+  const state = useEditorState({
+    editor,
+    selector: ({ editor: current }) => {
+      if (!current) return null;
+      return {
+        bold: current.isActive("bold"),
+        italic: current.isActive("italic"),
+        underline: current.isActive("underline"),
+        colour: String(current.getAttributes("textStyle").color || "").toLowerCase(),
+      };
+    },
+  });
+  if (!editor) return null;
+  return (
+    <BubbleMenu
+      editor={editor}
+      // An empty selection means a caret, not a selection: showing the bar then would
+      // make it flicker on every click into the text.
+      shouldShow={({ editor: current, from, to }) => from !== to && current.isEditable}
+      options={{ placement: "top", offset: 8 }}
+    >
+      <div className="rich-bubble" role="toolbar" aria-label="Quick formatting">
+        <button type="button" className={state?.bold ? "is-active" : ""} aria-pressed={Boolean(state?.bold)} title="Bold"
+          onClick={() => editor.chain().focus().toggleBold().run()}><Bold /></button>
+        <button type="button" className={state?.italic ? "is-active" : ""} aria-pressed={Boolean(state?.italic)} title="Italic"
+          onClick={() => editor.chain().focus().toggleItalic().run()}><Italic /></button>
+        <button type="button" className={state?.underline ? "is-active" : ""} aria-pressed={Boolean(state?.underline)} title="Underline"
+          onClick={() => editor.chain().focus().toggleUnderline().run()}><Underline /></button>
+        <span className="rich-bubble-divider" aria-hidden="true" />
+        {TEXT_COLOURS.map((colour) => (
+          <button
+            key={colour}
+            type="button"
+            className={`rich-bubble-swatch ${state?.colour === colour ? "is-active" : ""}`}
+            style={{ "--swatch": colour } as React.CSSProperties}
+            title={`Colour ${colour}`}
+            aria-label={`Text colour ${colour}`}
+            onClick={() => editor.chain().focus().setColor(colour).run()}
+          />
+        ))}
+        <button type="button" className="rich-bubble-clear" title="Clear colour" aria-label="Clear colour"
+          onClick={() => editor.chain().focus().unsetColor().run()}>A</button>
+      </div>
+    </BubbleMenu>
+  );
 }
 
 function RichTextToolbar({ editor }: { editor: TiptapEditor | null }) {
@@ -319,6 +379,7 @@ export function RichTextEditor({
 
   return <div className="rich-editor tiptap-rich-editor">
     <RichTextToolbar editor={editor}/>
+    <RichTextBubble editor={editor}/>
     <EditorContent editor={editor} style={{ minHeight: `${Math.max(5, rows) * 22}px` }}/>
     <input ref={hiddenInputRef} type="hidden" name={name} defaultValue={initialHtml}/>
     <RichTextStatus editor={editor} helper={helper} maxLength={maxLength} initialCharacters={richTextToPlainText(initialHtml).length}/>

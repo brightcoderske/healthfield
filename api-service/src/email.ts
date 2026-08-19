@@ -87,3 +87,33 @@ export async function sendBulkEmail(input: { recipients: string[]; subject: stri
   config.transport.close();
   return { successCount, failureCount };
 }
+
+/**
+ * Escapes admin-authored campaign text and turns line breaks into markup.
+ *
+ * Run BEFORE content blocks are injected, never after: the product and offer cards are
+ * trusted HTML built by campaign-content.ts, and escaping the combined string would
+ * render them as visible angle brackets. Escaping first means the only markup that
+ * survives is the markup we generated ourselves.
+ */
+export function campaignBodyHtml(text: string) {
+  return escapeHtml(String(text ?? "")).replace(/\r?\n/g, "<br />");
+}
+
+/** Plain-text alternative, so the message is readable where HTML is not shown. */
+export function stripHtml(html: string) {
+  return String(html ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|tr|table)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&rarr;/g, "->")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** The shell a campaign body is placed into, matching the order emails. */
+export function campaignEmailHtml(bodyHtml: string, pharmacyName: string) {
+  const origin = (process.env.APP_URL || "https://healthfieldpharmacy.co.ke").replace(/\/$/, "");
+  return `<!doctype html><html><body style="margin:0;background:#f6f3f7;font-family:Arial,sans-serif"><table role="presentation" width="100%"><tr><td style="padding:28px 12px"><table role="presentation" width="100%" style="max-width:620px;margin:auto;background:#fff;border-radius:14px;overflow:hidden"><tr><td style="padding:22px 28px;color:#fff;background:#70227e"><b style="font-size:12px;letter-spacing:.08em">${escapeHtml(pharmacyName.toUpperCase())}</b></td></tr><tr><td style="padding:28px;color:#4c4650;font-size:15px;line-height:1.6">${bodyHtml}</td></tr><tr><td style="padding:16px 28px;color:#817985;background:#faf8fb;font-size:11px">${escapeHtml(pharmacyName)} · <a href="${origin}" style="color:#817985">${origin.replace(/^https?:\/\//, "")}</a><br>You are receiving this because you opted in to updates. Reply STOP to unsubscribe.</td></tr></table></td></tr></table></body></html>`;
+}

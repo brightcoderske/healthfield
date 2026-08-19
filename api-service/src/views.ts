@@ -6,6 +6,7 @@ import {
   eq,
   gte,
   inArray,
+  isNotNull,
   isNull,
   like,
   ne,
@@ -1625,14 +1626,25 @@ export async function handleView(request: Request, path: string) {
     }
     if (view === "prescriptions") return json(await prescriptionQueue());
     if (view === "consultations") return json(await consultationQueue());
-    if (view === "campaigns")
+    if (view === "campaigns") {
+      // The composer offers products, offers and blogs as insertable blocks, so the
+      // pickers need something to list. Only live items: a campaign must never link a
+      // customer to a deactivated product or an unpublished draft.
+      const [campaignRows, productRows, offerRows, blogRows] = await Promise.all([
+        db.select().from(campaigns).orderBy(desc(campaigns.createdAt)).limit(60),
+        db.select({ id: products.id, name: products.name }).from(products).where(eq(products.isActive, true)).orderBy(asc(products.name)).limit(300),
+        db.select({ id: offers.id, title: offers.title }).from(offers).where(eq(offers.isActive, true)).orderBy(desc(offers.id)).limit(100),
+        db.select({ id: blogPosts.id, title: blogPosts.title }).from(blogPosts).where(isNotNull(blogPosts.publishedAt)).orderBy(desc(blogPosts.publishedAt)).limit(100),
+      ]);
       return json({
-        campaigns: await db
-          .select()
-          .from(campaigns)
-          .orderBy(desc(campaigns.createdAt))
-          .limit(30),
+        campaigns: campaignRows,
+        insertables: {
+          products: productRows,
+          offers: offerRows.map((row) => ({ id: row.id, name: row.title })),
+          blogs: blogRows.map((row) => ({ id: row.id, name: row.title })),
+        },
       });
+    }
     if (view === "stores")
       return json({
         stores: await db
@@ -1963,7 +1975,7 @@ export async function handleView(request: Request, path: string) {
       });
     }
     if (view === "products") {
-      const [catalog, categoryRows, conditions, mappings] = await Promise.all([
+      const [catalog, categoryRows, conditions, mappings, branchRows, stockRows] = await Promise.all([
         db.select().from(products).orderBy(desc(products.createdAt)),
         db
           .select()
@@ -1976,8 +1988,14 @@ export async function handleView(request: Request, path: string) {
           .where(eq(healthConditions.isActive, true))
           .orderBy(asc(healthConditions.displayOrder)),
         db.select().from(productHealthConditions),
+        // The modal offers an optional stock line, so it needs the shops to choose from
+        // and whatever is already recorded for the product being edited.
+        db.select({ id: branches.id, name: branches.name }).from(branches).where(eq(branches.isActive, true)).orderBy(asc(branches.name)),
+        db.select({ id: branchInventory.id, branchId: branchInventory.branchId, productId: branchInventory.productId, quantityAvailable: branchInventory.quantityAvailable, quantityReserved: branchInventory.quantityReserved, reorderLevel: branchInventory.reorderLevel }).from(branchInventory),
       ]);
       return json({
+        branches: branchRows,
+        stock: stockRows,
         products: catalog.map((product) => ({
           ...product,
           imageUrl: publicImageUrl(product.imageUrl),
