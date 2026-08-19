@@ -1,0 +1,112 @@
+/* Editing modals on a phone: width, height, and the keyboard.
+
+   Three separate faults met in the blog and product editors on a handset.
+
+   Width: the formatting ribbon was one non-wrapping row of roughly three thousand
+   pixels of buttons, and nothing between it and the form carried `min-width:0`, so its
+   intrinsic width set the width of the grid column instead. On a 375px phone every
+   field in the article editor measured over 1,100px: the modal read as "too broad" and
+   had to be dragged sideways to be used. The ribbon now wraps into a compact block, and
+   the containers refuse to be widened by anything inside them. Sideways scrolling is
+   switched off outright, so the only movement left in an editor is up and down.
+
+   Height: `100vh` is the viewport as if the browser's own bars were not there, so the
+   footer holding Save sat underneath them. The modal is now sized to the *visual*
+   viewport, published as `--editor-viewport` by useModalViewport, which is the only
+   measurement that shrinks for the on-screen keyboard as well.
+
+   Keyboard: with the modal bound to the visual viewport and the footer pinned inside
+   it, Save stays on screen while typing rather than being pushed below the keyboard. */
+
+:root{--editor-safe-bottom:env(safe-area-inset-bottom, 0px);}
+
+/* Sized to what is actually visible, and following it: iOS scrolls the visual viewport
+   inside the layout viewport when the keyboard opens, which `position:fixed` alone does
+   not track. The fallbacks keep this sane before the hook's first measurement. */
+.blog-modal,.product-modal{
+  top:var(--editor-viewport-top, 0px);
+  bottom:auto;
+  height:var(--editor-viewport, 100dvh);
+  overscroll-behavior:contain;
+}
+.blog-modal > form,.product-modal > form{max-height:100%;overflow-x:hidden;}
+
+/* Nothing inside an editor may dictate the width of the form, and nothing may scroll it
+   sideways. */
+.blog-editor-body,
+.blog-editor-body > section,
+.blog-editor-body > aside,
+.product-form-grid,
+.product-form-grid > *,
+.rich-text-field,
+.rich-editor,
+.rich-toolbar{min-width:0;max-width:100%;}
+.blog-editor-body,.product-form-grid{overflow-x:hidden;}
+.product-form-grid{grid-template-columns:minmax(0, 1fr) minmax(0, 1fr);}
+@media (max-width: 700px){.product-form-grid{grid-template-columns:minmax(0, 1fr);}}
+.blog-editor-body{grid-template-columns:minmax(0, 1fr) 260px;}
+@media (max-width: 760px){.blog-editor-body{grid-template-columns:minmax(0, 1fr);}}
+
+/* The article editor gains the pinned header and footer the product editor already had,
+   so Save is reachable from every scroll position instead of living at the bottom of a
+   long form, under the browser's own bar. */
+.polished-blog-editor{margin:0;display:flex;flex-direction:column;}
+.polished-blog-editor > header{flex:0 0 auto;}
+.polished-blog-editor > .blog-editor-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;}
+.polished-blog-editor > .blog-save-message,
+.polished-blog-editor > footer{flex:0 0 auto;}
+.polished-blog-editor > footer{padding-bottom:calc(11px + var(--editor-safe-bottom));}
+.product-modal > form > footer{padding-bottom:calc(14px + var(--editor-safe-bottom));}
+
+/* A failed save has to look like one: the message strip was green whatever it said. */
+.blog-save-message.is-error{color:#8a2036;background:#fdeef1;}
+
+@media (max-width: 760px){
+  /* A thin, compact ribbon that wraps. It was a single row you dragged sideways, which
+     is the one gesture an editor on a phone should never need — but a wrapped ribbon at
+     desktop sizes ate a quarter of the sheet, so everything in it shrinks too: smaller
+     keys, hairline gaps, no separator padding, and the two palettes trimmed to what
+     fits beside the custom picker. Three short rows instead of five. */
+  .rich-toolbar{flex-wrap:wrap;overflow:visible;min-height:0;padding:3px 4px;gap:2px;border-radius:8px 8px 0 0;}
+  .rich-toolbar > *{flex:0 0 auto;}
+  .rich-toolbar button{width:22px;height:22px;border-radius:5px;}
+  .rich-toolbar svg{width:11px;height:11px;}
+  .rich-toolbar-group{gap:1px;padding-right:2px;}
+  /* The swatches themselves stay finger-sized: they live in the panel behind the
+     colour key, not in the ribbon, so they cost the ribbon nothing. */
+  .rich-colour-panel{padding:6px;gap:5px;}
+  .rich-colour-panel .rich-colour-swatch,.rich-colour-panel .rich-highlight-swatch{width:22px;height:22px;}
+  .rich-toolbar .rich-custom-colour{width:22px;height:22px;}
+  .rich-toolbar .rich-toolbar-label-icon{width:12px;height:12px;margin:0 1px;}
+  .rich-toolbar select{max-width:74px;min-height:22px;height:22px;padding:0 3px;font-size:9px;}
+  .rich-editor-status{padding:4px 8px;}
+}
+
+@media (max-width: 620px){
+  /* Kept a margin off the screen edge rather than going edge to edge: the sheet should
+     read as a sheet, and the gap is where a thumb lands to dismiss it. */
+  .blog-modal{padding:10px;}
+  .product-modal{padding:10px;}
+  .polished-blog-editor,.product-modal > form{width:100%;max-height:100%;border-radius:12px!important;}
+  .polished-blog-editor > header{min-height:56px;padding:10px 12px;}
+  .polished-blog-editor > header h2{font-size:16px;}
+  .blog-editor-body{padding:12px;gap:12px;}
+  /* Fingers, not cursors. */
+  .polished-blog-editor > footer{min-height:auto;padding:10px 12px calc(10px + var(--editor-safe-bottom));gap:8px;}
+  .polished-blog-editor > footer button{flex:1 1 auto;min-height:44px;}
+  .product-modal > form > footer button{min-height:44px;}
+  .blog-save-message{margin:0 12px 8px;}
+}
+
+
+/* While the keyboard is up the header is the first thing worth giving back: it costs a
+   line of the little that is left, and the field being typed into needs it more. */
+.keyboard-open .polished-blog-editor > header,
+.keyboard-open .product-modal > form > header{
+  min-height:0;
+  padding-top:6px;
+  padding-bottom:6px;
+}
+.keyboard-open .polished-blog-editor > header h2{font-size:14px;}
+.keyboard-open .polished-blog-editor > header small,
+.keyboard-open .product-modal > form > header p{display:none;}

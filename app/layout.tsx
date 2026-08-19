@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
 import "./payment-settings.css";
@@ -25,8 +25,20 @@ import "./thermal-receipt.css";
 import "./consultations-ui.css";
 import "./delivery-ui.css";
 import "./prescription-hero.css";
+import "./editor-modal-mobile.css";
 
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
+
+/**
+ * `resizes-content` makes Android Chrome shrink the layout viewport when the keyboard
+ * opens, instead of sliding it out of sight. Sticky footers inside the admin editors
+ * then stay where they are put, which is half of keeping Save reachable while typing.
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  interactiveWidget: "resizes-content",
+};
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.APP_URL ?? "http://localhost:3000"),

@@ -27,7 +27,7 @@ import {
   Undo2,
   Unlink,
 } from "lucide-react";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { richTextToPlainText, richTextToSafeHtml } from "@/lib/rich-text-content";
 
 const TEXT_COLOURS = ["#2a1730", "#7c2382", "#c2185b", "#15803d", "#1d4ed8", "#b45309"];
@@ -130,6 +130,7 @@ function RichTextBubble({ editor }: { editor: TiptapEditor | null }) {
 }
 
 function RichTextToolbar({ editor }: { editor: TiptapEditor | null }) {
+  const [palette, setPalette] = useState(false);
   const state = useEditorState({
     editor,
     selector: ({ editor: current }) => {
@@ -193,49 +194,21 @@ function RichTextToolbar({ editor }: { editor: TiptapEditor | null }) {
       <EditorButton label="Strikethrough" active={state?.strike} disabled={!editor} onClick={() => void editor?.chain().focus().toggleStrike().run()}><Strikethrough/></EditorButton>
     </span>
 
-    <span className="rich-toolbar-group rich-palette-group" aria-label="Text colours">
-      {TEXT_COLOURS.map((colour) => <button
-        key={colour}
+    {/* Colours live behind one key rather than eleven. Two palettes spread across the
+        ribbon pushed everything else onto extra rows, which on a phone cost more of the
+        editor than the colours were worth. The key shows the colour it would apply. */}
+    <span className="rich-toolbar-group rich-colour-control">
+      <button
         type="button"
-        className={`rich-colour-swatch${state?.colour === colour ? " is-active" : ""}`}
-        style={{ "--swatch": colour } as React.CSSProperties}
-        aria-label={`Text colour ${colour}`}
-        title={`Text colour ${colour}`}
+        className={`rich-colour-toggle${palette ? " is-active" : ""}`}
+        aria-label="Text and highlight colours"
+        title="Text and highlight colours"
+        aria-expanded={palette}
         disabled={!editor}
+        style={{ "--current-text-colour": state?.colour || "#2a1730", "--current-highlight": state?.highlight || "transparent" } as React.CSSProperties}
         onMouseDown={(event) => event.preventDefault()}
-        onClick={() => void editor?.chain().focus().setColor(colour).run()}
-      />)}
-      <label
-        className="rich-custom-colour"
-        title="Choose any text colour"
-        style={{ "--current-text-colour": state?.colour || "#2a1730" } as React.CSSProperties}
-      >
-        <span>A</span>
-        <input
-          type="color"
-          aria-label="Choose any text colour"
-          value={/^#[0-9a-f]{6}$/i.test(state?.colour || "") ? state!.colour : "#2a1730"}
-          disabled={!editor}
-          onChange={(event) => void editor?.chain().focus().setColor(event.target.value).run()}
-        />
-      </label>
-      <EditorButton label="Remove text colour" disabled={!editor || !state?.colour} onClick={() => void editor?.chain().focus().unsetColor().run()}><RemoveFormatting/></EditorButton>
-    </span>
-
-    <span className="rich-toolbar-group rich-palette-group" aria-label="Highlight colours">
-      <Highlighter aria-hidden="true" className="rich-toolbar-label-icon"/>
-      {HIGHLIGHT_COLOURS.map((colour) => <button
-        key={colour}
-        type="button"
-        className={`rich-highlight-swatch${state?.highlight === colour ? " is-active" : ""}`}
-        style={{ "--swatch": colour } as React.CSSProperties}
-        aria-label={`Highlight ${colour}`}
-        title={`Highlight ${colour}`}
-        disabled={!editor}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => void editor?.chain().focus().toggleHighlight({ color: colour }).run()}
-      />)}
-      <EditorButton label="Remove highlight" disabled={!editor || !state?.highlight} onClick={() => void editor?.chain().focus().unsetHighlight().run()}><RemoveFormatting/></EditorButton>
+        onClick={() => setPalette((open) => !open)}
+      >A</button>
     </span>
 
     <select
@@ -287,6 +260,46 @@ function RichTextToolbar({ editor }: { editor: TiptapEditor | null }) {
       <EditorButton label="Undo" disabled={!editor || !state?.canUndo} onClick={() => void editor?.chain().focus().undo().run()}><Undo2/></EditorButton>
       <EditorButton label="Redo" disabled={!editor || !state?.canRedo} onClick={() => void editor?.chain().focus().redo().run()}><Redo2/></EditorButton>
     </span>
+
+    {palette ? <div className="rich-colour-panel">
+      <div className="rich-colour-row" aria-label="Text colours">
+        <span className="rich-colour-row-label">Text</span>
+        {TEXT_COLOURS.map((colour) => <button
+          key={colour}
+          type="button"
+          className={`rich-colour-swatch${state?.colour === colour ? " is-active" : ""}`}
+          style={{ "--swatch": colour } as React.CSSProperties}
+          aria-label={`Text colour ${colour}`}
+          title={`Text colour ${colour}`}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => void editor?.chain().focus().setColor(colour).run()}
+        />)}
+        <label className="rich-custom-colour" title="Choose any text colour" style={{ "--current-text-colour": state?.colour || "#2a1730" } as React.CSSProperties}>
+          <span>A</span>
+          <input
+            type="color"
+            aria-label="Choose any text colour"
+            value={/^#[0-9a-f]{6}$/i.test(state?.colour || "") ? state!.colour : "#2a1730"}
+            onChange={(event) => void editor?.chain().focus().setColor(event.target.value).run()}
+          />
+        </label>
+        <EditorButton label="Remove text colour" disabled={!state?.colour} onClick={() => void editor?.chain().focus().unsetColor().run()}><RemoveFormatting/></EditorButton>
+      </div>
+      <div className="rich-colour-row" aria-label="Highlight colours">
+        <span className="rich-colour-row-label"><Highlighter aria-hidden="true" className="rich-toolbar-label-icon"/></span>
+        {HIGHLIGHT_COLOURS.map((colour) => <button
+          key={colour}
+          type="button"
+          className={`rich-highlight-swatch${state?.highlight === colour ? " is-active" : ""}`}
+          style={{ "--swatch": colour } as React.CSSProperties}
+          aria-label={`Highlight ${colour}`}
+          title={`Highlight ${colour}`}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => void editor?.chain().focus().toggleHighlight({ color: colour }).run()}
+        />)}
+        <EditorButton label="Remove highlight" disabled={!state?.highlight} onClick={() => void editor?.chain().focus().unsetHighlight().run()}><RemoveFormatting/></EditorButton>
+      </div>
+    </div> : null}
   </div>;
 }
 

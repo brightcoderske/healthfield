@@ -3,6 +3,7 @@
 import { ArrowLeft, ChevronLeft, ChevronRight, ImageOff, Package, Plus, Search, Trash2, X } from "lucide-react";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useEditorDraft } from "../use-editor-draft";
+import { useModalViewport } from "../use-modal-viewport";
 import { RichTextEditor } from "./rich-text-editor";
 
 type Product = {
@@ -27,6 +28,9 @@ export function ProductManager({ initialProducts, categories, conditions, branch
   const [category, setCategory] = useState("all");
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Product | "new" | null>(null);
+  // Sizes the sheet to what the phone is actually showing, keyboard included, and keeps
+  // the focused field above it.
+  useModalViewport(editing !== null);
   const [message, setMessage] = useState("");
   const [savingId, setSavingId] = useState<number | "new" | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -186,7 +190,13 @@ export function ProductManager({ initialProducts, categories, conditions, branch
       {!visibleProducts.length&&<div className="compact-table-empty"><Package/><strong>No matching products</strong><span>Try another search or category.</span></div>}
     </div>
     <nav className="compact-pagination" aria-label="Product table pages"><button type="button" onClick={()=>setPage((value)=>Math.max(1,value-1))} disabled={currentPage===1}><ChevronLeft/> Previous</button><span>Page <strong>{currentPage}</strong> of {pageCount} · showing {visibleProducts.length} of {filtered.length}</span><button type="button" onClick={()=>setPage((value)=>Math.min(pageCount,value+1))} disabled={currentPage===pageCount}>Next <ChevronRight/></button></nav>
-    {editing && <div className="product-modal" onClick={()=>setEditing(null)}><form ref={formRef} onInput={captureForm} onSubmit={save} onClick={(event)=>event.stopPropagation()}><header><div><span><h2>{editing==="new"?"Add product":"Edit product"}</h2><p>Changes update only this product row.</p></span></div><button type="button" onClick={()=>setEditing(null)}><X/></button></header>
+    {editing && <div className="product-modal" onClick={()=>setEditing(null)}><form ref={formRef} onInput={captureForm} onSubmit={save} onInvalidCapture={(event)=>{
+      // A required field the browser refuses to submit is often off screen on a phone,
+      // so the press on Save looked like it did nothing at all.
+      const field = event.target as HTMLElement;
+      field.scrollIntoView?.({ block: "center", behavior: "smooth" });
+      setMessage("Fill in the highlighted field, then press save again.");
+    }} onClick={(event)=>event.stopPropagation()}><header><div><span><h2>{editing==="new"?"Add product":"Edit product"}</h2><p>Changes update only this product row.</p></span></div><button type="button" onClick={()=>setEditing(null)}><X/></button></header>
       {draft.recovered ? (
         <div className="editor-draft-notice" role="status">
           <strong>Unsaved work from {draft.recovered.age}</strong>

@@ -2726,6 +2726,17 @@ to{transform:rotate(360deg);}
   .rich-custom-colour>input{position:absolute;inset:0;width:100%;height:100%;padding:0;border:0;opacity:0;cursor:pointer;}
 .rich-custom-colour:focus-within{border-color:#8a278c;outline:2px solid rgba(121,37,135,.12);}
 .rich-toolbar-label-icon{margin:0 2px;color:#6f6173;}
+
+/* Colours behind a single key: an "A" underlined in the colour it would apply, and the
+   two palettes revealed under the ribbon when it is pressed. Eleven swatches sitting in
+   the ribbon pushed the rest of the controls onto extra rows, which on a phone cost
+   more of the editor than the colours were worth. */
+.rich-colour-toggle{position:relative;font-size:12px;font-weight:850;line-height:1;color:var(--current-text-colour, #2a1730);}
+.rich-colour-toggle:after{content:"";position:absolute;right:4px;bottom:3px;left:4px;height:3px;border-radius:2px;background:var(--current-text-colour, #2a1730);}
+.rich-colour-toggle.is-active{border-color:#8a278c;background:#f8edf9;}
+.rich-colour-panel{flex:1 0 100%;margin-top:5px;padding:8px;border:1px solid #ece5ee;border-radius:8px;background:#fff;display:flex;flex-direction:column;gap:7px;}
+.rich-colour-row{display:flex;align-items:center;flex-wrap:wrap;gap:5px;}
+.rich-colour-row-label{min-width:26px;color:#7b727e;display:inline-flex;align-items:center;font-size:9px;font-weight:750;}
 .tiptap-rich-editor .tiptap{min-height:inherit;}
   .rich-editor-surface{width:100%;padding:13px;overflow-y:auto;border:0;outline:0;color:#352f39;background:#fff;caret-color:#792587;font-family:inherit;font-size:12px;font-weight:400;line-height:1.65;cursor:text;}
 .rich-editor-surface:focus{box-shadow:inset 0 0 0 2px rgba(121,37,135,.12);}
