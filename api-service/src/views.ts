@@ -46,7 +46,7 @@ import {
 } from "../../db/schema";
 import { requireSession, type Session } from "./auth";
 import { handleConsultationThread } from "./consultations";
-import { googleMapsConfigured, loadDeliveryConfiguration } from "./delivery";
+import { googleMapsBrowserKey, googleMapsConfigured, loadDeliveryConfiguration } from "./delivery";
 import { smsBalance, smsConfigurationSummary, smsDashboardSummary, smsReport, smsTopUpUrl } from "./sms";
 import { getDb } from "./db";
 import { json, publicImageUrl } from "./http";
@@ -1237,6 +1237,9 @@ export async function handleView(request: Request, path: string) {
       // The customer must pin a location before a delivery fee exists at all, so the
       // form needs to know whether distance pricing is live before it renders.
       delivery: {
+        // Sent with the page so the address search works the moment the key exists on
+        // the API host, with no frontend rebuild.
+        mapsApiKey: googleMapsBrowserKey(),
         distancePricing: deliveryConfiguration.settings.enabled,
         flatFee: deliveryConfiguration.settings.fallbackFee,
         freeDeliveryThreshold: deliveryConfiguration.settings.freeDeliveryThreshold,

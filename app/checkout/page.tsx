@@ -28,6 +28,7 @@ type Data = {
     accountName: string | null;
   };
   delivery: {
+    mapsApiKey?: string;
     distancePricing: boolean;
     flatFee: number;
     freeDeliveryThreshold: number | null;

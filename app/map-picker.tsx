@@ -129,8 +129,17 @@ function loadGoogleMaps(apiKey: string) {
   return mapsLoader;
 }
 
-export function googleMapsApiKey() {
-  return process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
+/**
+ * The browser Maps key.
+ *
+ * NEXT_PUBLIC_* values are inlined when the site is BUILT, not read when it runs, so a
+ * key added to the host after the last deploy is still missing from the shipped
+ * JavaScript — the page then renders a search box that can never work. Callers pass the
+ * key down from the server instead, which is read at request time; the build-time value
+ * remains only as a fallback for local development.
+ */
+export function googleMapsApiKey(supplied?: string | null) {
+  return (supplied || process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "").trim();
 }
 
 type Suggestion = { placeId: string; primary: string; secondary: string; prediction: PlacePrediction };
@@ -174,13 +183,16 @@ export function MapPicker({
   onChange,
   height = 240,
   searchPlaceholder = "Search your estate, road or landmark",
+  apiKey: suppliedKey,
 }: {
   value: PinnedLocation | null;
   onChange: (location: PinnedLocation | null) => void;
   height?: number;
   searchPlaceholder?: string;
+  /** Supplied by the server so the key survives a deploy without a rebuild. */
+  apiKey?: string | null;
 }) {
-  const apiKey = googleMapsApiKey();
+  const apiKey = googleMapsApiKey(suppliedKey);
   const listboxId = useId();
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapsMap | null>(null);
@@ -208,7 +220,7 @@ export function MapPicker({
   const [mapsAvailable, setMapsAvailable] = useState(false);
   // The load has finished, one way or the other. Distinguishes "still loading" from
   // "genuinely unavailable", which decides whether the search box reports a fault.
-  const [mapsSettled, setMapsSettled] = useState(!googleMapsApiKey());
+  const [mapsSettled, setMapsSettled] = useState(!apiKey);
   const [mapOpen, setMapOpen] = useState(false);
   const [locating, setLocating] = useState(false);
   const [hint, setHint] = useState("");

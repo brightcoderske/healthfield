@@ -67,6 +67,20 @@ export function googleMapsConfigured() {
 }
 
 /**
+ * The key the browser uses for the map and address search.
+ *
+ * Served at request time rather than baked into the frontend build: a NEXT_PUBLIC_
+ * value is inlined at build time, so adding it to the host after a deploy leaves the
+ * shipped JavaScript with an empty key and a search box that silently cannot work.
+ *
+ * Separate from GOOGLE_MAPS_API_KEY, which is the server-side Routes key and must never
+ * reach a browser. This one is public by design and should be referrer-restricted.
+ */
+export function googleMapsBrowserKey() {
+  return (process.env.GOOGLE_MAPS_BROWSER_KEY || "").trim();
+}
+
+/**
  * Routed driving distance from Google, in kilometres.
  *
  * Uses the Routes API rather than the older Distance Matrix endpoint: Google no longer

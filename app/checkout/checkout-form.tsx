@@ -619,8 +619,7 @@ export function CheckoutForm({
                   value={pin}
                   onChange={pinLocation}
                   height={220}
-                  searchPlaceholder="Estate, road, building or landmark"
-                />
+                  searchPlaceholder="Estate, road, building or landmark" apiKey={delivery.mapsApiKey}/>
                 <label className="full">
                   Directions for the rider
                   <textarea

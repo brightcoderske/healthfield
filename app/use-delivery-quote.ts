@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import type { PinnedLocation } from "./map-picker";
 
 export type DeliveryOptions = {
+  /** Browser Maps key, served at request time so no rebuild is needed. */
+  mapsApiKey?: string;
   /** False when the shop is still on a flat fee; the pin is then informational only. */
   distancePricing: boolean;
   flatFee: number;
