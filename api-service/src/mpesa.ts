@@ -417,15 +417,21 @@ export async function queryPulledTransactions(start: Date, end: Date, offset = 0
  * For a Buy Goods till the shortcode registered is the store (head office) number, not
  * the till the customer types; MPESA_C2B_SHORTCODE overrides it when Safaricom has
  * provisioned C2B against a different number.
+ *
+ * The API version is a setting because both versions answer ResponseCode 0 and take the
+ * same payload, yet a shortcode provisioned under v1 can accept a v2 registration and
+ * never deliver a callback. MPESA_C2B_API_VERSION=v1 makes that a two-minute experiment
+ * rather than a support ticket.
  */
 export async function registerC2bUrls() {
   const config = mpesaConfiguration();
   if (!config) throw new Error("M-Pesa is not configured, so there are no callback URLs to register.");
   const shortcode = process.env.MPESA_C2B_SHORTCODE?.trim() || config.shortcode;
   if (!/^\d{5,8}$/.test(shortcode)) throw new Error("MPESA_C2B_SHORTCODE must be the numeric shortcode C2B is provisioned against.");
+  const version = process.env.MPESA_C2B_API_VERSION?.trim().toLowerCase() === "v1" ? "v1" : "v2";
   const token = await accessToken(config);
   const urls = buildC2bCallbackUrls(config.callbackBaseUrl, config.callbackSecret);
-  const data = acceptedRequest(await mpesaJson(`${config.baseUrl}/mpesa/c2b/v2/registerurl`, {
+  const data = acceptedRequest(await mpesaJson(`${config.baseUrl}/mpesa/c2b/${version}/registerurl`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -437,6 +443,7 @@ export async function registerC2bUrls() {
   }), "Safaricom did not register the C2B callback URLs.");
   return {
     shortcode,
+    version,
     responseCode: String(data.ResponseCode ?? data.responseCode ?? ""),
     responseDescription: String(data.ResponseDescription || data.ResponseDesc || "C2B callback URLs registered."),
     confirmationUrl: urls.confirmationUrl,

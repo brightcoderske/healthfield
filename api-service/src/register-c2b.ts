@@ -17,6 +17,7 @@ console.log("Registering the Healthfield C2B callback URLs", {
 const response = await registerC2bUrls();
 console.log("Safaricom C2B registration response", {
   shortcode: response.shortcode,
+  version: response.version,
   responseCode: response.responseCode,
   responseDescription: response.responseDescription,
 });

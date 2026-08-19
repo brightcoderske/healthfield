@@ -17,8 +17,19 @@ export type TillDelivery = {
   registeredAt: string | null;
   registrationResponse: string | null;
   pullConfigured: boolean;
+  pullEnabled?: boolean;
+  pullNumberDigits?: number;
+  pullNumberValid?: boolean;
   transactionStatusConfigured: boolean;
 };
+
+/** Names the half that is wrong, rather than restating the whole setup. */
+function pullReason(till: TillDelivery) {
+  if (till.pullConfigured) return "Enabled — Fetch missed Till payments can query Safaricom for the last 24 hours.";
+  if (till.pullEnabled === false) return "MPESA_PULL_ENABLED is not “true” in the environment the API actually started with. A value set in cPanel’s Node.js app table overrides api-service/.env, because loadEnvFile never replaces a variable that already exists.";
+  if (till.pullNumberValid === false) return `MPESA_PULL_NOMINATED_NUMBER must be 12 digits — 254, then 7 or 1, then eight more. The API sees ${till.pullNumberDigits ?? 0}.`;
+  return "Off. Set MPESA_PULL_ENABLED=true and MPESA_PULL_NOMINATED_NUMBER in the API environment, then register the pull callback.";
+}
 
 export function UnmatchedPaymentsManager({ initialPayments, exceptions, till }: { initialPayments: UnmatchedPayment[]; exceptions: PaymentException[]; till?: TillDelivery }) {
   const [payments, setPayments] = useState(initialPayments);
@@ -81,7 +92,7 @@ export function UnmatchedPaymentsManager({ initialPayments, exceptions, till }: 
       <ul>
         <li className={till.mpesaConfigured ? "ok" : "off"}><b>Daraja credentials</b><span>{till.mpesaConfigured ? `Configured for shortcode ${till.shortcode}` : "Missing — the API has no M-Pesa credentials, so nothing can be delivered or queried."}</span></li>
         <li className={registeredAt ? "ok" : "off"}><b>Till callbacks registered</b><span>{registeredAt ? `Registered ${new Date(registeredAt).toLocaleString("en-KE")}${till.registrationResponse ? ` · ${till.registrationResponse}` : ""}` : "Never registered from this portal. Safaricom only posts to URLs registered against the shortcode, so payments arrive nowhere until this is done."}</span>{till.confirmationUrl ? <small>{till.confirmationUrl}</small> : null}</li>
-        <li className={till.pullConfigured ? "ok" : "off"}><b>Pull Transactions (missed payment recovery)</b><span>{till.pullConfigured ? "Enabled — Fetch missed Till payments can query Safaricom for the last 24 hours." : "Off. Set MPESA_PULL_ENABLED=true and MPESA_PULL_NOMINATED_NUMBER in the API environment, then register the pull callback."}</span></li>
+        <li className={till.pullConfigured ? "ok" : "off"}><b>Pull Transactions (missed payment recovery)</b><span>{pullReason(till)}</span>{till.pullConfigured && till.pullNumberValid === false ? <small>No nominated number, so the pull callback cannot be registered yet.</small> : null}</li>
         <li className={till.transactionStatusConfigured ? "ok" : "off"}><b>Transaction Status lookups</b><span>{till.transactionStatusConfigured ? "Enabled — a pasted receipt can be verified with Safaricom directly." : "Off. Set MPESA_INITIATOR_NAME and MPESA_SECURITY_CREDENTIAL to verify receipts without waiting for a callback."}</span></li>
       </ul>
       <button type="button" className="pull-recovery-button" disabled={registering || !till.mpesaConfigured} onClick={registerTillCallbacks}><PlugZap/>{registering ? "Registering with Safaricom…" : registeredAt ? "Register Till callbacks again" : "Register Till callbacks with Safaricom"}</button>

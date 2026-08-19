@@ -857,11 +857,11 @@ export async function handleC2bRegistration(request: Request) {
       entityType: "payment_configuration",
       entityId: null,
       // The secret is the last path segment of both URLs, so only the shape is stored.
-      metadata: { shortcode: result.shortcode, responseCode: result.responseCode, responseDescription: result.responseDescription, actorRole: auth.session.role },
+      metadata: { shortcode: result.shortcode, version: result.version, responseCode: result.responseCode, responseDescription: result.responseDescription, actorRole: auth.session.role },
     });
     return json({
       ok: true,
-      message: `${result.responseDescription} Safaricom will now post Till payments for shortcode ${result.shortcode} to this portal.`,
+      message: `${result.responseDescription} Registered on the ${result.version} API for shortcode ${result.shortcode}; Safaricom will now post Till payments to this portal.`,
       responseCode: result.responseCode,
       shortcode: result.shortcode,
     });
@@ -904,7 +904,15 @@ export async function c2bRegistrationState() {
     : [];
   const urls = config ? buildC2bCallbackUrls(config.callbackBaseUrl, config.callbackSecret) : null;
   const hidden = (url: string) => url.replace(/\/[^/]+$/, "/…");
+  // Read exactly what pullTransactionsConfiguration() branches on, so the screen can
+  // name the half that is wrong instead of repeating the setup instructions. Only
+  // shapes leave the server: a flag, and how many digits the number has.
+  const pullEnabled = process.env.MPESA_PULL_ENABLED?.trim().toLowerCase() === "true";
+  const pullDigits = (process.env.MPESA_PULL_NOMINATED_NUMBER || "").replace(/\D/g, "");
   return {
+    pullEnabled,
+    pullNumberDigits: pullDigits.length,
+    pullNumberValid: /^254[17]\d{8}$/.test(pullDigits),
     mpesaConfigured: Boolean(config),
     shortcode: config ? process.env.MPESA_C2B_SHORTCODE?.trim() || config.shortcode : null,
     confirmationUrl: urls ? hidden(urls.confirmationUrl) : null,
