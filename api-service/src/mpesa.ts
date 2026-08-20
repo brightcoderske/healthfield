@@ -406,6 +406,26 @@ export async function queryPulledTransactions(start: Date, end: Date, offset = 0
 }
 
 /**
+ * Words Safaricom's C2B gateway refuses to deliver to.
+ *
+ * From the Daraja C2B documentation, FAQ 8 ("Why am I not receiving notifications"):
+ * URLs containing mpesa, safaricom, exe, exec, cmd, sql or query — "or any of their
+ * variants" — are silently not called, as are public tunnels. This matters most for the
+ * callback secret, which is a random string sitting in the path: a rotation that
+ * happens to contain "exe" or "cmd" would kill every callback with nothing to see.
+ */
+const FORBIDDEN_CALLBACK_WORDS = ["mpesa", "m-pesa", "safaricom", "exec", "exe", "cmd", "sql", "query", "ngrok", "mockbin", "requestbin"];
+
+export function forbiddenCallbackWord(...urls: string[]) {
+  for (const url of urls) {
+    const value = url.toLowerCase();
+    const found = FORBIDDEN_CALLBACK_WORDS.find((word) => value.includes(word));
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
  * Tells Safaricom where to deliver Till payments.
  *
  * Without this call the confirmation and validation endpoints exist and answer, but
@@ -429,8 +449,11 @@ export async function registerC2bUrls() {
   const shortcode = process.env.MPESA_C2B_SHORTCODE?.trim() || config.shortcode;
   if (!/^\d{5,8}$/.test(shortcode)) throw new Error("MPESA_C2B_SHORTCODE must be the numeric shortcode C2B is provisioned against.");
   const version = process.env.MPESA_C2B_API_VERSION?.trim().toLowerCase() === "v1" ? "v1" : "v2";
-  const token = await accessToken(config);
   const urls = buildC2bCallbackUrls(config.callbackBaseUrl, config.callbackSecret);
+  const forbidden = forbiddenCallbackWord(urls.confirmationUrl, urls.validationUrl);
+  // Registration would succeed and deliver nothing, which is the worst of both.
+  if (forbidden) throw new Error(`The callback URL contains "${forbidden}", which Safaricom will not deliver to. Change MPESA_CALLBACK_SECRET or MPESA_CALLBACK_BASE_URL so neither URL contains it.`);
+  const token = await accessToken(config);
   const data = acceptedRequest(await mpesaJson(`${config.baseUrl}/mpesa/c2b/${version}/registerurl`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },

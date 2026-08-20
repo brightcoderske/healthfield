@@ -2844,6 +2844,7 @@ to{transform:rotate(360deg);}
 .till-delivery li b{font-size:10px;}
 .till-delivery li span{color:#6d6672;font-size:9px;line-height:1.55;}
 .till-delivery li small{color:#8d8592;font-size:8px;overflow-wrap:anywhere;}
+.till-delivery li small.till-warning{color:#8a2036;font-weight:700;}
 .till-delivery > button{margin-top:12px;}
 .unmatched-payments-table,
 .payment-exceptions table{width:100%;border-collapse:collapse;table-layout:fixed;}

@@ -6,7 +6,7 @@ import { sendEmail } from "./email";
 import { requireTeamPermission } from "./staff-permissions";
 import { getDb } from "./db";
 import { json } from "./http";
-import { buildC2bCallbackUrls, classifyStkQueryResult, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, registerC2bUrls, selectIncomingPaymentCandidate, selectPaymentForIncoming, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, validDateOrNull, type IncomingMpesaPayment } from "./mpesa";
+import { buildC2bCallbackUrls, classifyStkQueryResult, forbiddenCallbackWord, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, registerC2bUrls, selectIncomingPaymentCandidate, selectPaymentForIncoming, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, validDateOrNull, type IncomingMpesaPayment } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -903,6 +903,9 @@ export async function c2bRegistrationState() {
         .limit(1)
     : [];
   const urls = config ? buildC2bCallbackUrls(config.callbackBaseUrl, config.callbackSecret) : null;
+  // Safaricom silently declines to call URLs containing certain words, so the screen
+  // says so rather than leaving a registered-but-dead callback looking healthy.
+  const forbidden = urls ? forbiddenCallbackWord(urls.confirmationUrl, urls.validationUrl) : null;
   const hidden = (url: string) => url.replace(/\/[^/]+$/, "/…");
   // Read exactly what pullTransactionsConfiguration() branches on, so the screen can
   // name the half that is wrong instead of repeating the setup instructions. Only
@@ -910,6 +913,7 @@ export async function c2bRegistrationState() {
   const pullEnabled = process.env.MPESA_PULL_ENABLED?.trim().toLowerCase() === "true";
   const pullDigits = (process.env.MPESA_PULL_NOMINATED_NUMBER || "").replace(/\D/g, "");
   return {
+    forbiddenCallbackWord: forbidden,
     pullEnabled,
     pullNumberDigits: pullDigits.length,
     pullNumberValid: /^254[17]\d{8}$/.test(pullDigits),

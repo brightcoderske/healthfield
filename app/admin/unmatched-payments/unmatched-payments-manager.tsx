@@ -16,6 +16,7 @@ export type TillDelivery = {
   validationUrl: string | null;
   registeredAt: string | null;
   registrationResponse: string | null;
+  forbiddenCallbackWord?: string | null;
   pullConfigured: boolean;
   pullEnabled?: boolean;
   pullNumberDigits?: number;
@@ -91,7 +92,7 @@ export function UnmatchedPaymentsManager({ initialPayments, exceptions, till }: 
     {till ? <section className="till-delivery"><header><PlugZap/><div><h2>Till payment delivery</h2><p>How a Safaricom payment reaches this portal without anyone pasting an SMS.</p></div></header>
       <ul>
         <li className={till.mpesaConfigured ? "ok" : "off"}><b>Daraja credentials</b><span>{till.mpesaConfigured ? `Configured for shortcode ${till.shortcode}` : "Missing — the API has no M-Pesa credentials, so nothing can be delivered or queried."}</span></li>
-        <li className={registeredAt ? "ok" : "off"}><b>Till callbacks registered</b><span>{registeredAt ? `Registered ${new Date(registeredAt).toLocaleString("en-KE")}${till.registrationResponse ? ` · ${till.registrationResponse}` : ""}` : "Never registered from this portal. Safaricom only posts to URLs registered against the shortcode, so payments arrive nowhere until this is done."}</span>{till.confirmationUrl ? <small>{till.confirmationUrl}</small> : null}</li>
+        <li className={registeredAt ? "ok" : "off"}><b>Till callbacks registered</b><span>{registeredAt ? `Registered ${new Date(registeredAt).toLocaleString("en-KE")}${till.registrationResponse ? ` · ${till.registrationResponse}` : ""}` : "Never registered from this portal. Safaricom only posts to URLs registered against the shortcode, so payments arrive nowhere until this is done."}</span>{till.confirmationUrl ? <small>{till.confirmationUrl}</small> : null}{till.forbiddenCallbackWord ? <small className="till-warning">This URL contains &ldquo;{till.forbiddenCallbackWord}&rdquo;, which Safaricom will not deliver to. Change the callback secret or host until it does not.</small> : null}</li>
         <li className={till.pullConfigured ? "ok" : "off"}><b>Pull Transactions (missed payment recovery)</b><span>{pullReason(till)}</span>{till.pullConfigured && till.pullNumberValid === false ? <small>No nominated number, so the pull callback cannot be registered yet.</small> : null}</li>
         <li className={till.transactionStatusConfigured ? "ok" : "off"}><b>Transaction Status lookups</b><span>{till.transactionStatusConfigured ? "Enabled — a pasted receipt can be verified with Safaricom directly." : "Off. Set MPESA_INITIATOR_NAME and MPESA_SECURITY_CREDENTIAL to verify receipts without waiting for a callback."}</span></li>
       </ul>
