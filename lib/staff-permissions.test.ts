@@ -32,3 +32,9 @@ test("prescribing rights are never granted by default",()=>{
   assert.equal(hasStaffPermission("STAFF",[...DEFAULT_STAFF_PERMISSIONS],"CONSULTATIONS_PROCESS"),false);
   assert.equal(STAFF_PERMISSION_VALUES.includes("CONSULTATIONS_PROCESS"),true);
 });
+
+test("new staff receive an assignable POS role and land on the POS when it is their first permission",()=>{
+  assert.equal(STAFF_PERMISSION_VALUES.includes("POS_USE"),true);
+  assert.equal(DEFAULT_STAFF_PERMISSIONS.includes("POS_USE"),true);
+  assert.equal(firstStaffPath("STAFF",["POS_USE"]),"/staff/sales");
+});

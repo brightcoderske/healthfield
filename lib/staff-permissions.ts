@@ -28,7 +28,7 @@ export const STAFF_PERMISSION_GROUPS: ReadonlyArray<{
     { value:"PRODUCTS_VIEW", label:"View products", description:"Browse the active product catalogue and prices." },
   ] },
   { label: "Sales and orders", permissions: [
-    { value:"POS_USE", label:"Make counter sales", description:"Use the shop-scoped point of sale and its payment flow." },
+    { value:"POS_USE", label:"Use point of sale (POS)", description:"Open cashier sessions and use sales, payments, held sales, expenses, stock receiving and session reports for the assigned shop." },
     { value:"ORDERS_VIEW", label:"View active orders", description:"Open the shared active-order queue and order details." },
     { value:"ORDERS_PROCESS", label:"Process orders", description:"Change order details, fulfilment shops and statuses." },
     { value:"PAST_ORDERS_VIEW", label:"View past orders", description:"Open dispatched, completed and cancelled orders." },

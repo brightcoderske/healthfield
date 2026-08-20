@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseVatRate, vatIncludedIn, vatLabel } from "./vat.ts";
+import { parseVatRate, vatIncludedIn, vatLabel, vatOnNet, vatRateLabel } from "./vat.ts";
 
 test("VAT is extracted from a tax-inclusive total, never added to it", () => {
   // 1,160 inclusive of 16% carries 160 of VAT; adding 16% would print 185.60.
@@ -29,4 +29,21 @@ test("the label carries the rate that was in force", () => {
   assert.equal(vatLabel(16), "VAT (16% incl.)");
   assert.equal(vatLabel("14.50"), "VAT (14.5% incl.)");
   assert.equal(vatLabel(0), "VAT");
+});
+
+test("VAT is added on top of a net amount", () => {
+  assert.equal(vatOnNet(1000, 16), 160);
+  assert.equal(vatOnNet("1000.00", "16.00"), 160);
+  assert.equal(vatOnNet(999.99, 16), 160);
+});
+
+test("an additive VAT line is left off when there is nothing to charge", () => {
+  assert.equal(vatOnNet(1000, 0), null);
+  assert.equal(vatOnNet(0, 16), null);
+  assert.equal(vatOnNet("not money", 16), null);
+});
+
+test("the exclusive label omits the inclusive wording", () => {
+  assert.equal(vatRateLabel(16), "VAT (16%)");
+  assert.equal(vatRateLabel(0), "VAT");
 });

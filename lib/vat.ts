@@ -34,6 +34,30 @@ export function vatIncludedIn(total: unknown, rate: unknown): number | null {
   return Math.round((amount * percentage) / (100 + percentage) * 100) / 100;
 }
 
+/**
+ * VAT added on top of a VAT-exclusive net amount, rounded to cents.
+ *
+ * Healthfield's shelf prices are net of VAT, so tax is added after the goods are
+ * totalled rather than extracted from the total. Returns null when there is no rate
+ * or nothing to charge it on, which keeps the line off a screen rather than showing
+ * "VAT 0.00".
+ */
+export function vatOnNet(net: unknown, rate: unknown): number | null {
+  const percentage = parseVatRate(rate);
+  if (!percentage) return null;
+  const amount = typeof net === "number" ? net : Number(String(net ?? "").trim());
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return Math.round((amount * percentage) / 100 * 100) / 100;
+}
+
+/** "VAT (16%)" — the label carries the rate so an old record stays readable. */
+export function vatRateLabel(rate: unknown): string {
+  const percentage = parseVatRate(rate);
+  if (!percentage) return "VAT";
+  const shown = Number.isInteger(percentage) ? String(percentage) : String(Number(percentage.toFixed(2)));
+  return `VAT (${shown}%)`;
+}
+
 /** "VAT (16% incl.)" — the label carries the rate so an old receipt stays readable. */
 export function vatLabel(rate: unknown): string {
   const percentage = parseVatRate(rate);

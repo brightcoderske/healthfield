@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, getTableColumns, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { activityLogs, branchInventory, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions, siteSettings, users } from "../../db/schema";
 import { requestSession, requireSession } from "./auth";
 import { sendEmail } from "./email";
@@ -8,6 +8,7 @@ import { getDb } from "./db";
 import { json } from "./http";
 import { buildC2bCallbackUrls, classifyStkQueryResult, forbiddenCallbackWord, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, registerC2bUrls, selectIncomingPaymentCandidate, selectPaymentForIncoming, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, validDateOrNull, type IncomingMpesaPayment } from "./mpesa";
 import { queuePaidOrderNotification } from "./order-notifications";
+import { consumePosBatches } from "./pos-inventory";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
@@ -67,12 +68,13 @@ async function finalizePosInventory(tx: DatabaseTransaction, orderId: number, ac
       quantityReserved: plan.reserved ? plan.stock.quantityReserved - plan.item.quantity : plan.stock.quantityReserved,
       updatedBy: actorId,
     }).where(eq(branchInventory.id, plan.stock.id));
+    await consumePosBatches(tx, plan.fulfilment.branchId, plan.item.productId!, plan.item.quantity);
     await tx.update(orderItemFulfilments).set({ quantityReserved: 0, quantityPacked: plan.item.quantity, status: "READY" }).where(eq(orderItemFulfilments.id, plan.fulfilment.id));
   }
   return true;
 }
 
-async function markPaymentPaid(transactionId: number, details: { receiptNumber: string | null; amount: number; phone?: string | null; providerPayload?: Record<string, unknown>; actorId?: number | null; incomingPaymentId?: number }) {
+export async function markPaymentPaid(transactionId: number, details: { receiptNumber: string | null; amount: number; phone?: string | null; providerPayload?: Record<string, unknown>; actorId?: number | null; incomingPaymentId?: number }) {
   const db = getDb();
   const result = await db.transaction(async (tx) => {
     const [payment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.id, transactionId)).limit(1).for("update");
@@ -101,17 +103,44 @@ async function markPaymentPaid(transactionId: number, details: { receiptNumber: 
       await tx.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", receiptNumber: details.receiptNumber, resultDescription: "A second payment was received for an order that was already paid.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
       return { orderId: order.id, newlyPaid: false, inventoryFinalized: true };
     }
-    const inventoryFinalized = payment.channel !== "POS" || await finalizePosInventory(tx, order.id, details.actorId ?? null);
+    // A split sale has one payment row per tender. Confirming one component must never
+    // complete the order or release stock as sold until all verified components equal
+    // the final discounted total.
+    const otherPaid = await tx.select({ amount: paymentTransactions.amount }).from(paymentTransactions).where(and(eq(paymentTransactions.orderId, order.id), eq(paymentTransactions.status, "PAID"), ne(paymentTransactions.id, payment.id)));
+    const paidTotal = Math.round((otherPaid.reduce((sum, row) => sum + Number(row.amount), 0) + details.amount) * 100) / 100;
+    const orderTotal = Number(order.total);
+    if (paidTotal - orderTotal > 0.001) {
+      await tx.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", receiptNumber: details.receiptNumber, resultDescription: "Verified payment would exceed the order total.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
+      throw new Error("Verified payments exceed the order total.");
+    }
+    const fullyPaid = Math.abs(paidTotal - orderTotal) < 0.001;
+    const inventoryFinalized = fullyPaid && (payment.channel !== "POS" || await finalizePosInventory(tx, order.id, details.actorId ?? null));
     const paidAt = new Date();
-    await tx.update(paymentTransactions).set({ status: "PAID", receiptNumber: details.receiptNumber, phone: details.phone || payment.phone, verifiedAt: paidAt, reviewedBy: details.actorId ?? payment.reviewedBy, reviewedAt: details.actorId ? paidAt : validDateOrNull(payment.reviewedAt), resultCode: "0", resultDescription: inventoryFinalized ? "Payment confirmed" : "Payment confirmed after stock was released; fulfilment requires review.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
+    await tx.update(paymentTransactions).set({ status: "PAID", receiptNumber: details.receiptNumber, phone: details.phone || payment.phone, verifiedAt: paidAt, reviewedBy: details.actorId ?? payment.reviewedBy, reviewedAt: details.actorId ? paidAt : validDateOrNull(payment.reviewedAt), resultCode: "0", resultDescription: fullyPaid ? inventoryFinalized ? "Payment confirmed" : "Payment confirmed after stock was released; fulfilment requires review." : "Payment component confirmed; waiting for the remaining split payment.", providerPayload: details.providerPayload }).where(eq(paymentTransactions.id, payment.id));
     if (details.incomingPaymentId) await tx.update(mpesaIncomingPayments).set({ matchedTransactionId: payment.id }).where(and(eq(mpesaIncomingPayments.id, details.incomingPaymentId), isNull(mpesaIncomingPayments.matchedTransactionId)));
+    if (!fullyPaid) {
+      await tx.update(orders).set({ amountPaid: paidTotal.toFixed(2), status: "AWAITING_PAYMENT", paymentStatus: "PENDING" }).where(eq(orders.id, order.id));
+      await tx.insert(activityLogs).values({ actorId: details.actorId ?? null, action: "SPLIT_PAYMENT_COMPONENT_CONFIRMED", entityType: "order", entityId: String(order.id), metadata: { transactionId: payment.id, method: payment.method, receiptNumber: details.receiptNumber, amount: details.amount, amountPaid: paidTotal, total: orderTotal } });
+      return { orderId: order.id, newlyPaid: false, inventoryFinalized: false, componentPaid: true, fullyPaid: false };
+    }
     const paidOrderStatus = payment.channel === "POS" ? inventoryFinalized ? "COMPLETED" : "UNDER_REVIEW" : ["NEW", "AWAITING_PAYMENT", "CANCELLED"].includes(order.status) ? "CONFIRMED" : order.status;
-    await tx.update(orders).set({ paymentStatus: "PAID", paymentReference: details.receiptNumber, amountPaid: details.amount.toFixed(2), status: paidOrderStatus }).where(eq(orders.id, order.id));
-    await tx.insert(activityLogs).values({ actorId: details.actorId ?? null, action: inventoryFinalized ? "PAYMENT_CONFIRMED" : "PAYMENT_CONFIRMED_STOCK_REVIEW", entityType: "order", entityId: String(order.id), metadata: { transactionId: payment.id, method: payment.method, receiptNumber: details.receiptNumber, amount: details.amount } });
-    return { orderId: order.id, newlyPaid: true, inventoryFinalized };
+    await tx.update(orders).set({ paymentStatus: "PAID", paymentReference: details.receiptNumber, amountPaid: paidTotal.toFixed(2), status: paidOrderStatus }).where(eq(orders.id, order.id));
+    await tx.insert(activityLogs).values({ actorId: details.actorId ?? null, action: inventoryFinalized ? "PAYMENT_CONFIRMED" : "PAYMENT_CONFIRMED_STOCK_REVIEW", entityType: "order", entityId: String(order.id), metadata: { transactionId: payment.id, method: payment.method, receiptNumber: details.receiptNumber, amount: details.amount, amountPaid: paidTotal } });
+    return { orderId: order.id, newlyPaid: true, inventoryFinalized, componentPaid: true, fullyPaid: true };
   });
   if (result.newlyPaid) queuePaidOrderNotification(result.orderId);
   return result;
+}
+
+/** A failed split component leaves already accepted cash visible and the order open. */
+async function markOrderPaymentAttemptFailed(orderId: number) {
+  const db = getDb();
+  const paid = await db.select({ amount: paymentTransactions.amount }).from(paymentTransactions).where(and(eq(paymentTransactions.orderId, orderId), eq(paymentTransactions.status, "PAID")));
+  const paidTotal = paid.reduce((sum, row) => sum + Number(row.amount), 0);
+  await db.update(orders).set(paidTotal > 0
+    ? { paymentStatus: "PENDING", status: "UNDER_REVIEW", amountPaid: paidTotal.toFixed(2) }
+    : { paymentStatus: "FAILED" })
+    .where(and(eq(orders.id, orderId), eq(orders.paymentStatus, "PENDING")));
 }
 
 function chooseIncomingPayment<T extends { receiptNumber: string; amount: string; accountReference: string | null; createdAt: Date }>(
@@ -242,18 +271,24 @@ export async function handlePaymentRetry(request: Request) {
   const nextToken = candidate.checkoutToken || randomUUID();
   const phone = (input?.billingPhone || candidate.phone || "").trim();
   let paymentId = 0;
+  let retryAmount = Number(candidate.total);
   try {
     paymentId = await db.transaction(async (tx) => {
       const [order] = await tx.select().from(orders).where(eq(orders.id, candidate.id)).limit(1).for("update");
       if (!order) throw new PaymentRetryError("Order not found.", 404);
       if (order.paymentStatus === "PAID") throw new PaymentRetryError("This order is already paid.");
       if (order.status === "CANCELLED" || order.paymentStatus === "REFUNDED") throw new PaymentRetryError("This order cannot be paid again.");
-      if (order.paymentStatus !== "FAILED") throw new PaymentRetryError("A payment attempt is already active for this order.");
-      const [latest] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
-      if (latest && ["INITIATED", "PENDING", "REQUIRES_REVIEW"].includes(latest.status)) throw new PaymentRetryError("A payment attempt is already active for this order.");
-      const [created] = await tx.insert(paymentTransactions).values({ orderId: order.id, method: "MPESA_EXPRESS", channel: isPos ? "POS" : "ONLINE", status: "INITIATED", amount: order.total, phone });
-      await tx.update(orders).set({ checkoutToken: nextToken, paymentMethod: "MPESA_EXPRESS", paymentStatus: "PENDING", paymentReference: null }).where(eq(orders.id, order.id));
-      await tx.insert(activityLogs).values({ actorId: session?.userId ?? null, action: "PAYMENT_RETRIED", entityType: "order", entityId: String(order.id), metadata: { transactionId: created.insertId, channel: isPos ? "POS" : "ONLINE" } });
+      const attempts = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt));
+      const active = attempts.find((attempt) => ["INITIATED", "PENDING", "REQUIRES_REVIEW", "CANCEL_REQUESTED"].includes(attempt.status));
+      if (active) throw new PaymentRetryError("A payment attempt is already active for this order.");
+      const paidTotal = attempts.filter((attempt) => attempt.status === "PAID").reduce((sum, attempt) => sum + Number(attempt.amount), 0);
+      const splitRetry = isPos && order.paymentMethod === "SPLIT" && paidTotal > 0;
+      if (order.paymentStatus !== "FAILED" && !splitRetry) throw new PaymentRetryError("A payment attempt is already active for this order.");
+      retryAmount = Math.round((Number(order.total) - paidTotal) * 100) / 100;
+      if (retryAmount <= 0) throw new PaymentRetryError("This order has no unpaid balance.");
+      const [created] = await tx.insert(paymentTransactions).values({ orderId: order.id, method: "MPESA_EXPRESS", channel: isPos ? "POS" : "ONLINE", status: "INITIATED", amount: retryAmount.toFixed(2), phone });
+      await tx.update(orders).set({ checkoutToken: nextToken, paymentMethod: splitRetry ? "SPLIT" : "MPESA_EXPRESS", paymentStatus: "PENDING", paymentReference: splitRetry ? order.paymentReference : null }).where(eq(orders.id, order.id));
+      await tx.insert(activityLogs).values({ actorId: session?.userId ?? null, action: "PAYMENT_RETRIED", entityType: "order", entityId: String(order.id), metadata: { transactionId: created.insertId, channel: isPos ? "POS" : "ONLINE", amount: retryAmount, splitRetry } });
       return created.insertId;
     });
   } catch (error) {
@@ -262,7 +297,7 @@ export async function handlePaymentRetry(request: Request) {
   }
 
   try {
-    const stk = await initiateStkPush({ orderNumber: candidate.orderNumber, phone, amount: Number(candidate.total) });
+    const stk = await initiateStkPush({ orderNumber: candidate.orderNumber, phone, amount: retryAmount });
     await db.update(paymentTransactions).set({ status: "PENDING", checkoutRequestId: stk.checkoutRequestId, merchantRequestId: stk.merchantRequestId, phone: stk.phone, resultDescription: stk.customerMessage, providerPayload: stk.providerPayload }).where(eq(paymentTransactions.id, paymentId));
     await replayStoredStkCallback(stk.checkoutRequestId);
     const status = await paymentStatus(nextToken);
@@ -270,7 +305,7 @@ export async function handlePaymentRetry(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "M-Pesa Express could not start.";
     await db.update(paymentTransactions).set({ status: "FAILED", resultDescription: message }).where(eq(paymentTransactions.id, paymentId));
-    await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, candidate.id), eq(orders.paymentStatus, "PENDING")));
+    await markOrderPaymentAttemptFailed(candidate.id);
     return json({ error: message, paymentStatus: "FAILED" }, { status: 409 });
   }
 }
@@ -342,6 +377,13 @@ async function finalizeCancellation(orderId: number, paymentId: number, actorId:
     const [payment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.id, paymentId)).limit(1).for("update");
     const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
     if (!payment || !order || payment.status !== "CANCEL_REQUESTED" || order.paymentStatus === "PAID") return false;
+    const [paidComponent] = await tx.select({ id: paymentTransactions.id }).from(paymentTransactions).where(and(eq(paymentTransactions.orderId, order.id), eq(paymentTransactions.status, "PAID"), ne(paymentTransactions.id, payment.id))).limit(1);
+    if (paidComponent) {
+      await tx.update(paymentTransactions).set({ status: "REQUIRES_REVIEW", resultDescription: "Cancellation blocked because another split-payment component is already paid." }).where(eq(paymentTransactions.id, payment.id));
+      await tx.update(orders).set({ status: "UNDER_REVIEW", paymentStatus: "PENDING" }).where(eq(orders.id, order.id));
+      await tx.insert(activityLogs).values({ actorId, action: "SPLIT_PAYMENT_CANCELLATION_BLOCKED", entityType: "order", entityId: String(order.id), metadata: { paymentId: payment.id, paidComponentId: paidComponent.id } });
+      return false;
+    }
     const items = await tx.select({ id: orderItems.id, productId: orderItems.productId }).from(orderItems).where(eq(orderItems.orderId, order.id));
     const fulfilments = items.length ? await tx.select().from(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map((item) => item.id))) : [];
     for (const fulfilment of fulfilments) {
@@ -418,7 +460,7 @@ export async function handlePaymentReconcile(request: Request) {
       return json({ ok: true, paid: false, cancelled: true, message: outcome.resultDescription || "M-Pesa payment was not completed.", ...(await paymentStatus(checkoutToken)) });
     }
     await db.update(paymentTransactions).set({ status: "FAILED", resultCode: outcome.resultCode, resultDescription: outcome.resultDescription || "M-Pesa payment was not completed.", providerPayload: result }).where(and(eq(paymentTransactions.id, payment.id), eq(paymentTransactions.status, "PENDING")));
-    await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
+    await markOrderPaymentAttemptFailed(payment.orderId);
     const latestStatus = await paymentStatus(checkoutToken);
     if (latestStatus?.order.paymentStatus === "PAID") return json({ ok: true, paid: true, ...latestStatus });
     return json({ ok: true, paid: false, failed: true, message: outcome.resultDescription || "M-Pesa payment was not completed.", ...latestStatus });
@@ -462,7 +504,7 @@ export async function reconcilePendingStkPayments() {
           console.info("Background STK reconciliation confirmed payment", { transactionId: payment.id, channel: payment.channel, checkoutRequestId: payment.checkoutRequestId });
         } else if (outcome.state === "FAILED") {
           await db.update(paymentTransactions).set({ status: "FAILED", resultCode: outcome.resultCode, resultDescription: outcome.resultDescription || "M-Pesa payment was not completed.", providerPayload: result }).where(and(eq(paymentTransactions.id, payment.id), inArray(paymentTransactions.status, ["PENDING", "REQUIRES_REVIEW"])));
-          await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
+          await markOrderPaymentAttemptFailed(payment.orderId);
           failed += 1;
         } else {
           await db.update(paymentTransactions).set({ resultCode: outcome.resultCode || payment.resultCode, resultDescription: outcome.resultDescription || payment.resultDescription, providerPayload: result }).where(and(eq(paymentTransactions.id, payment.id), inArray(paymentTransactions.status, ["PENDING", "REQUIRES_REVIEW"])));
@@ -495,7 +537,9 @@ export async function handlePaymentReview(request: Request, transactionId: numbe
       const [lockedOrder] = await tx.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1).for("update");
       if (!lockedPayment || !lockedOrder || lockedPayment.status === "PAID" || lockedOrder.paymentStatus === "PAID") return false;
       await tx.update(paymentTransactions).set({ status: "FAILED", reviewedBy: auth.session.userId, reviewedAt: new Date(), resultDescription: input.note?.trim() || "Payment proof rejected by administrator." }).where(eq(paymentTransactions.id, lockedPayment.id));
-      await tx.update(orders).set({ paymentStatus: "FAILED" }).where(eq(orders.id, lockedOrder.id));
+      const otherPaid = await tx.select({ amount: paymentTransactions.amount }).from(paymentTransactions).where(and(eq(paymentTransactions.orderId, lockedOrder.id), eq(paymentTransactions.status, "PAID"), ne(paymentTransactions.id, lockedPayment.id)));
+      const otherPaidTotal = otherPaid.reduce((sum, row) => sum + Number(row.amount), 0);
+      await tx.update(orders).set(otherPaidTotal > 0 ? { paymentStatus: "PENDING", status: "UNDER_REVIEW", amountPaid: otherPaidTotal.toFixed(2) } : { paymentStatus: "FAILED" }).where(eq(orders.id, lockedOrder.id));
       await tx.insert(activityLogs).values({ actorId:auth.session.userId, action:"PAYMENT_REJECTED", entityType:"order", entityId:String(lockedOrder.id), metadata:{ transactionId:lockedPayment.id, amount:lockedPayment.amount, actorRole:auth.session.role } });
       return true;
     });
@@ -516,6 +560,8 @@ export async function handlePaymentCancel(request: Request) {
   const [latest] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
   if (!latest || latest.channel !== "POS") return json({ error: "Pending counter sale not found." }, { status: 404 });
   if (order.paymentStatus === "PAID") return json({ error: "A paid sale cannot be cancelled here." }, { status: 409 });
+  const [paidComponent] = await db.select({ id: paymentTransactions.id }).from(paymentTransactions).where(and(eq(paymentTransactions.orderId, order.id), eq(paymentTransactions.status, "PAID"))).limit(1);
+  if (paidComponent) return json({ error: "This split sale already accepted part of the payment. Complete the remaining part or ask an administrator to process a refund; it cannot be silently cancelled." }, { status: 409 });
   if (latest.status === "REQUIRES_REVIEW" && latest.resultCode === "0") return json({ error: "Safaricom reports this payment as successful. It cannot be cancelled while the receipt is pending." }, { status: 409 });
   const reconciliation = await handlePaymentReconcile(new Request(request.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ checkoutToken }) }));
   const reconciliationData = await reconciliation.clone().json().catch(() => ({})) as { paid?: boolean; providerConfirmed?: boolean; candidatePayment?: unknown; order?: { paymentStatus?: string } };
@@ -560,7 +606,7 @@ export async function handleStkNotification(request: Request) {
     if (payment.status === "CANCEL_REQUESTED") await finalizeCancellation(payment.orderId, payment.id, payment.reviewedBy);
     else {
       await db.update(paymentTransactions).set({ status: "FAILED", resultCode: parsed.resultCode, resultDescription: parsed.resultDescription, providerPayload: payload }).where(and(eq(paymentTransactions.id, payment.id), eq(paymentTransactions.status, "PENDING")));
-      await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
+      await markOrderPaymentAttemptFailed(payment.orderId);
     }
   }
   if (callbackId && processed) await db.update(mpesaStkCallbacks).set({ processedTransactionId: payment.id }).where(eq(mpesaStkCallbacks.id, callbackId));
@@ -579,7 +625,7 @@ export async function replayStoredStkCallback(checkoutRequestId: string) {
     if (payment.status === "CANCEL_REQUESTED") await finalizeCancellation(payment.orderId, payment.id, payment.reviewedBy);
     else {
       await db.update(paymentTransactions).set({ status: "FAILED", resultCode: parsed.resultCode, resultDescription: parsed.resultDescription, providerPayload: stored.providerPayload }).where(and(eq(paymentTransactions.id, payment.id), eq(paymentTransactions.status, "PENDING")));
-      await db.update(orders).set({ paymentStatus: "FAILED" }).where(and(eq(orders.id, payment.orderId), eq(orders.paymentStatus, "PENDING")));
+      await markOrderPaymentAttemptFailed(payment.orderId);
     }
   }
   await db.update(mpesaStkCallbacks).set({ processedTransactionId: payment.id }).where(eq(mpesaStkCallbacks.id, stored.id));
@@ -857,13 +903,14 @@ export async function handleC2bRegistration(request: Request) {
       entityType: "payment_configuration",
       entityId: null,
       // The secret is the last path segment of both URLs, so only the shape is stored.
-      metadata: { shortcode: result.shortcode, version: result.version, responseCode: result.responseCode, responseDescription: result.responseDescription, actorRole: auth.session.role },
+      metadata: { shortcode: result.shortcode, version: result.version, originatorConversationId: result.originatorConversationId, responseCode: result.responseCode, responseDescription: result.responseDescription, actorRole: auth.session.role },
     });
     return json({
       ok: true,
       message: `${result.responseDescription} Registered on the ${result.version} API for shortcode ${result.shortcode}; Safaricom will now post Till payments to this portal.`,
       responseCode: result.responseCode,
       shortcode: result.shortcode,
+      originatorConversationId: result.originatorConversationId,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Safaricom did not register the callback URLs.";
@@ -923,6 +970,7 @@ export async function c2bRegistrationState() {
     validationUrl: urls ? hidden(urls.validationUrl) : null,
     registeredAt: registration?.createdAt ? new Date(registration.createdAt).toISOString() : null,
     registrationResponse: registration ? String((registration.metadata as Record<string, unknown> | null)?.responseDescription ?? "") : null,
+    registrationReference: registration ? String((registration.metadata as Record<string, unknown> | null)?.originatorConversationId ?? "") || null : null,
     pullConfigured: Boolean(pullTransactionsConfiguration()),
     transactionStatusConfigured: Boolean(transactionStatusConfiguration()),
   };

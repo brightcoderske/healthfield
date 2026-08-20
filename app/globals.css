@@ -83,8 +83,10 @@
 .compact-admin-page > header a svg{width:15px;}
 .compact-admin-page h1{margin:5px 0 0;font-size:27px;}
 .compact-admin-page header p{margin:3px 0 0;color:#756e79;font-size:10px;}
-.compact-admin-page > header > button{min-height:38px;padding:0 14px;border:0;border-radius:8px;color:#fff;background:#792587;display:flex;align-items:center;gap:6px;font-weight:750;}
-.compact-admin-page > header > button svg{width:16px;}
+.compact-admin-page > header > button,
+.compact-admin-page > header > .product-header-actions > button{min-height:38px;padding:0 14px;border:0;border-radius:8px;color:#fff;background:#792587;display:flex;align-items:center;gap:6px;font-weight:750;}
+.compact-admin-page > header > button svg,
+.compact-admin-page > header > .product-header-actions > button svg{width:16px;}
 .compact-table-tools{margin-top:15px;padding:8px;border:1px solid #e5dfe7;border-radius:10px 10px 0 0;background:#fff;display:flex;align-items:center;gap:8px;}
 .compact-table-tools label{min-width:230px;flex:1;height:34px;padding:0 9px;border:1px solid #e2dde4;border-radius:7px;display:flex;align-items:center;gap:6px;}
 .compact-table-tools label svg{width:14px;color:#8a828d;}
@@ -987,6 +989,7 @@ body{background:white;padding-bottom:78px;}
 .product-modal footer{padding:14px 18px;border-top:1px solid #ece7ee;display:flex;justify-content:flex-end;gap:8px;}
 .product-modal footer button{min-height:37px;padding:0 14px;border:1px solid #e3dee5;border-radius:8px;background:white;}
 .product-modal footer button:last-child{border:0;color:white;background:#792587;}
+.product-code-field>span{display:grid;grid-template-columns:1fr auto;gap:7px}.product-code-field>span button{min-height:38px;padding:0 12px;border:1px solid #cdaed2;border-radius:8px;background:#f8eef9;color:#70227e;font-size:9px;font-weight:800;display:flex;align-items:center;gap:5px}.product-code-field>span svg{width:15px}.product-code-scanner{position:fixed;z-index:120;inset:0;padding:16px;display:grid;place-items:center;background:#1c111fbb}.product-code-scanner>div{position:relative;width:min(620px,100%);padding:12px;border-radius:14px;background:#fff}.product-code-scanner header{min-height:42px;display:flex;align-items:center;justify-content:space-between}.product-code-scanner header span{display:flex;align-items:center;gap:7px}.product-code-scanner header svg{width:18px}.product-code-scanner header button{width:32px;height:32px;border:0;border-radius:7px}.product-code-scanner video{width:100%;max-height:70dvh;border-radius:10px;background:#111}.product-code-scanner>div>i{position:absolute;inset:28% 16% 22%;border:2px solid #c12f8c;border-radius:12px;pointer-events:none}.product-code-scanner p{margin:10px;text-align:center;font-size:10px}@media(max-width:560px){.product-code-field>span{grid-template-columns:1fr}.product-code-field>span button{justify-content:center}.product-code-scanner{padding:0;align-items:end}.product-code-scanner>div{border-radius:16px 16px 0 0}}
 /*Checkout.*/
 .checkout-page{min-height:100vh;background:#f8f5f9;}
 .checkout-page > header{height:70px;padding:0 max(20px, calc((100% - 1100px) / 2));border-bottom:1px solid #e8e3ea;background:white;display:flex;align-items:center;justify-content:space-between;}
@@ -2608,6 +2611,13 @@ body:has(.approved-app){padding-bottom:0;}
 .line-chart line{stroke:#eee8ef;stroke-width:0.5;}
 .line-chart polyline{fill:none;stroke:#792587;stroke-width:1.4;}
 .line-chart .orders{stroke:#1d4d83;stroke-dasharray:2 1;}
+/* Profit rides the sales axis, so it needs a colour of its own rather than a dash. */
+.line-chart .profit{stroke:#2f8b52;stroke-width:1.2;}
+.chart-legend .profit-key i{background:#2f8b52;}
+.report-send{margin-top:12px;padding-top:11px;border-top:1px solid #f0eaf1;display:flex;align-items:center;flex-wrap:wrap;gap:9px;}
+.report-send button{min-height:32px;padding:0 12px;border:1px solid #ddd2e0;border-radius:7px;color:#69216f;background:#fff;font-size:9px;font-weight:800;cursor:pointer;}
+.report-send button:disabled{opacity:.6;cursor:default;}
+.report-send small{color:#6d6672;font-size:9px;}
 .line-chart circle{fill:#fff;stroke:#792587;stroke-width:1;cursor:pointer;}
 .chart-labels{display:flex;justify-content:space-between;}
 .chart-labels small{font-size:8px;color:#817783;}

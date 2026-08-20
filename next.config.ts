@@ -4,7 +4,9 @@ const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(self)" },
+  // The POS and the product manager scan barcodes with the device camera, so it is allowed for
+  // this origin only — never for embedded third parties. Microphone stays fully disabled.
+  { key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=(self)" },
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
 ];
 

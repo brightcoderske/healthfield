@@ -23,6 +23,7 @@ import { prescriptionUploadHref } from "@/lib/prescription-selection";
 import { createCheckoutToken } from "@/lib/checkout-token";
 import { MapPicker, type PinnedLocation } from "../map-picker";
 import { deliveryFeeOf, useDeliveryQuote, type DeliveryOptions } from "../use-delivery-quote";
+import { parseVatRate, vatOnNet, vatRateLabel } from "@/lib/vat";
 
 type Product = {
   id: number;
@@ -75,6 +76,7 @@ export function CheckoutForm({
   initialOffers = [],
   customer,
   payment,
+  vat,
   delivery,
 }: {
   initialCart: Record<number, number>;
@@ -82,6 +84,8 @@ export function CheckoutForm({
   initialOffers?: CheckoutOffer[];
   customer: Customer;
   payment: PaymentOptions;
+  /** Optional: the API service deploys separately, so an older build omits it. */
+  vat?: { enabled: boolean; rate: number };
   delivery: DeliveryOptions;
 }) {
   const initialPayment: PaymentMethod = payment.onlineMpesaEnabled
@@ -179,7 +183,10 @@ export function CheckoutForm({
   });
   const deliveryFee = deliveryFeeOf(deliveryQuote, delivery, method === "DELIVERY");
   const deliveryBlocked = method === "DELIVERY" && Boolean(deliveryQuote && !deliveryQuote.available);
-  const total = subtotal + deliveryFee;
+  // VAT is charged on the medicines only; the delivery fee is added after it.
+  const vatRate = vat?.enabled ? parseVatRate(vat.rate) : 0;
+  const vatAmount = vatRate ? vatOnNet(subtotal, vatRate) ?? 0 : 0;
+  const total = Math.round((subtotal + deliveryFee + vatAmount) * 100) / 100;
 
   useEffect(() => {
     if (!result || !["WAITING", "REVIEW"].includes(result.state)) return;
@@ -748,6 +755,11 @@ export function CheckoutForm({
                   {deliveryQuote.branchName ? ` from ${deliveryQuote.branchName}` : ""}
                 </span>
               ) : null}
+              {vatAmount > 0 ? (
+                <span>
+                  {vatRateLabel(vatRate)}<b>KES {vatAmount.toLocaleString()}</b>
+                </span>
+              ) : null}
               <span className="cod-invoice-total">
                 Amount due on delivery<b>KES {total.toLocaleString()}</b>
               </span>
@@ -877,6 +889,11 @@ export function CheckoutForm({
                 {!deliveryQuote.free && deliveryQuote.freeAboveSubtotal !== null
                   ? ` · Free above KES ${deliveryQuote.freeAboveSubtotal.toLocaleString()}`
                   : ""}
+              </span>
+            ) : null}
+            {vatAmount > 0 ? (
+              <span>
+                {vatRateLabel(vatRate)}<b>KES {vatAmount.toLocaleString()}</b>
               </span>
             ) : null}
             <span>

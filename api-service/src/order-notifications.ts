@@ -10,7 +10,7 @@ import { activityLogs, branches, orderItemFulfilments, orderItems, orders, payme
 import { getDb } from "./db";
 import { sendSms, smsConfiguration } from "./sms";
 import { orderSms, type SmsPurpose } from "../../lib/sms-templates";
-import { vatIncludedIn, vatLabel } from "../../lib/vat";
+import { vatRateLabel } from "../../lib/vat";
 import { orderEmailHtml, posReceiptEmailHtml, sendEmail, shouldAttachOfficialReceipt, type EmailAttachment } from "./email";
 
 export type ReceiptNotificationTrigger = "PAYMENT_CONFIRMED" | "ORDER_COMPLETED";
@@ -128,7 +128,9 @@ async function paidReceiptAttachment(input: {
     total: input.order.total,
     suggestedBranchId: input.order.suggestedBranchId,
     createdAt: receiptDate(input.order.createdAt)!,
-    vat: business.vatEnabled === false ? null : vatIncludedIn(input.order.total, business.vatRate),
+    // The VAT actually charged, stored with the order, so the receipt reproduces the
+    // sale rather than reapplying today's rate to an old total.
+    vat: Number(input.order.vat) > 0 ? Number(input.order.vat) : null,
   };
   const payment: ReceiptPayment | null = paymentRow ? {
     method: paymentRow.method,
@@ -148,7 +150,7 @@ async function paidReceiptAttachment(input: {
     business,
     servedBy,
     receiptNumber,
-    vatLabel: vatLabel(business.vatEnabled === false ? 0 : business.vatRate),
+    vatLabel: vatRateLabel(Number(input.order.vatRate) || business.vatRate),
     barcodeDataUrl: `data:image/png;base64,${barcode.toString("base64")}`,
     logoDataUrl,
   }) as Parameters<typeof renderToBuffer>[0]);

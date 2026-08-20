@@ -467,6 +467,9 @@ export async function registerC2bUrls() {
   return {
     shortcode,
     version,
+    // Safaricom's own field name carries the typo; accept both spellings. This is the
+    // reference their support asks for when a registration has to be traced.
+    originatorConversationId: String(data.OriginatorCoversationID || data.OriginatorConversationID || ""),
     responseCode: String(data.ResponseCode ?? data.responseCode ?? ""),
     responseDescription: String(data.ResponseDescription || data.ResponseDesc || "C2B callback URLs registered."),
     confirmationUrl: urls.confirmationUrl,

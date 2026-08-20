@@ -19,7 +19,7 @@ import { getDb } from "./db";
 import { repriceDeliveryForBranch, resolveDeliveryQuote } from "./delivery";
 import { sendSms, smsConfiguration } from "./sms";
 import { marketingSms } from "../../lib/sms-templates";
-import { MAX_VAT_RATE, parseVatRate } from "../../lib/vat";
+import { MAX_VAT_RATE, parseVatRate, vatOnNet } from "../../lib/vat";
 import { extractContentReferences, isPersonalised, renderContentBlocks, renderMergeFields, type MergeRecipient } from "../../lib/campaign-merge";
 import { campaignContentResolver, loadCampaignContent } from "./campaign-content";
 import { apportionBundle, isBundle, loadLiveOffers, offerPriceMap, offerTotal } from "./offers";
@@ -33,6 +33,20 @@ import { reconcileManualPaymentFromIncoming, replayStoredStkCallback, requestKno
 import { canGrantTeamRole, canManageTeamAccount } from "./staff-access-policy";
 import { secureHashEqual, twoFactorChallengeLifetimeMs, twoFactorCodeHash, twoFactorMaximumAttempts, twoFactorMaximumResends, twoFactorResendCooldownMs, twoFactorTiming } from "./two-factor";
 import { requireTeamPermission, sessionHasPermission } from "./staff-permissions";
+
+/**
+ * VAT for an order the site prices itself. Shelf prices are net, so the tax is added to
+ * the goods; delivery, where there is any, is added after it and is not taxed.
+ */
+async function onlineVatFor(net: number) {
+  const [settings] = await getDb()
+    .select({ vatEnabled: siteSettings.vatEnabled, vatRate: siteSettings.vatRate })
+    .from(siteSettings)
+    .limit(1);
+  const rate = settings?.vatEnabled ? parseVatRate(settings.vatRate) : 0;
+  const amount = rate ? vatOnNet(net, rate) ?? 0 : 0;
+  return { rate, amount, payable: Math.round((net + amount) * 100) / 100 };
+}
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -491,7 +505,7 @@ export async function handleOrders(request: Request, id?: number) {
   const db = getDb();
   const [duplicate] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, total: orders.total, paymentStatus: orders.paymentStatus, paymentMethod: orders.paymentMethod }).from(orders).where(eq(orders.checkoutToken, parsed.data.checkoutToken)).limit(1);
   if (duplicate) return json({ ok: true, id: duplicate.id, orderNumber: duplicate.orderNumber, total: Number(duplicate.total), paymentStatus: duplicate.paymentStatus, paymentMethod: duplicate.paymentMethod, duplicate: true });
-  const [paymentSettings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, onlineCodEnabled: siteSettings.onlineCodEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber }).from(siteSettings).limit(1);
+  const [paymentSettings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, onlineCodEnabled: siteSettings.onlineCodEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber, vatEnabled: siteSettings.vatEnabled, vatRate: siteSettings.vatRate }).from(siteSettings).limit(1);
   // Cash on delivery is only offered where there is a delivery to collect it on, and
   // only while the shop has it switched on.
   if (parsed.data.paymentMethod === "CASH_ON_DELIVERY") {
@@ -545,23 +559,27 @@ export async function handleOrders(request: Request, id?: number) {
     : null;
   if (deliveryQuote && !deliveryQuote.quote.available) return json({ error: deliveryQuote.quote.message, code: "DELIVERY_UNAVAILABLE" }, { status: 409 });
   const deliveryFee = deliveryQuote?.quote.fee ?? 0;
-  if (parsed.data.paymentMethod === "MPESA_EXPRESS" && !Number.isInteger(subtotal + deliveryFee)) return json({ error: "M-Pesa Express requires a whole-shilling total. Choose manual M-Pesa for this order." }, { status: 409 });
+  const vatRate = paymentSettings?.vatEnabled ? parseVatRate(paymentSettings.vatRate) : 0;
+  const vat = vatRate ? vatOnNet(subtotal, vatRate) ?? 0 : 0;
+  const payable = Math.round((subtotal + deliveryFee + vat) * 100) / 100;
+  if (parsed.data.paymentMethod === "MPESA_EXPRESS" && !Number.isInteger(payable)) return json({ error: "M-Pesa Express requires a whole-shilling total. Choose manual M-Pesa for this order." }, { status: 409 });
   const session = await requestSession(request);
   const customerSession = session?.role === "CUSTOMER" ? session : null;
   if (!customerSession && !parsed.data.email) return json({ error: "Enter your email so this guest order can be linked if you create an account later." }, { status: 400 });
   const requiresPrescription = catalog.some(product => product.prescriptionRequired) || (parsed.data.offerItems || []).some((requested) => liveOffers.find((offer) => offer.id === requested.offerId)?.items.some((item) => item.prescriptionRequired));
   if (requiresPrescription) return json({ error: "Prescription medicines must be submitted for pharmacist review before they can be priced or paid for.", code: "PRESCRIPTION_REVIEW_REQUIRED" }, { status: 409 });
   const orderEmail = customerSession ? customerSession.email.trim().toLowerCase() : (parsed.data.email || "").trim().toLowerCase();
+  const costs = await productCosts([...lines.map((line) => line.product.id), ...bundleLines.map((line) => line.productId)]);
   const result = await db.transaction(async (tx) => {
     const temporaryOrderNumber = `TMP-${randomUUID().replaceAll("-", "").slice(0, 20).toUpperCase()}`;
-    const [created] = await tx.insert(orders).values({ orderNumber: temporaryOrderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, paymentMethod: parsed.data.paymentMethod, paymentReference: manualReceipt, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: "NEW", prescriptionStatus: "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", total: (subtotal + deliveryFee).toString(), suggestedBranchId: deliveryQuote?.branch?.id ?? null, deliveryDistanceKm: deliveryQuote ? deliveryQuote.quote.distanceKm.toFixed(2) : null, deliveryDurationMinutes: deliveryQuote?.durationMinutes ?? null, deliveryBandId: deliveryQuote?.quote.band?.id ?? null, deliveryCourier: deliveryQuote?.quote.courier ?? null });
+    const [created] = await tx.insert(orders).values({ orderNumber: temporaryOrderNumber, checkoutToken: parsed.data.checkoutToken, customerId: customerSession?.userId ?? null, customerName: parsed.data.fullName, phone: parsed.data.phone, email: orderEmail || null, fulfilmentMethod: parsed.data.fulfilmentMethod, paymentMethod: parsed.data.paymentMethod, paymentReference: manualReceipt, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, status: "NEW", prescriptionStatus: "NOT_REQUIRED", subtotal: subtotal.toString(), deliveryFee: deliveryFee.toString(), discount: "0", vat: vat.toFixed(2), vatRate: vatRate.toFixed(2), total: payable.toFixed(2), suggestedBranchId: deliveryQuote?.branch?.id ?? null, deliveryDistanceKm: deliveryQuote ? deliveryQuote.quote.distanceKm.toFixed(2) : null, deliveryDurationMinutes: deliveryQuote?.durationMinutes ?? null, deliveryBandId: deliveryQuote?.quote.band?.id ?? null, deliveryCourier: deliveryQuote?.quote.courier ?? null });
     const orderNumber = healthfieldOrderNumber("WEB", created.insertId);
     await tx.update(orders).set({ orderNumber }).where(eq(orders.id, created.insertId));
     await tx.insert(orderItems).values([
-      ...lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString() })),
-      ...bundleLines.map((line) => ({ orderId: created.insertId, productId: line.productId, productName: line.productName, quantity: line.quantity, unitPrice: line.unitPrice.toString(), lineTotal: line.total.toString(), offerId: line.offerId, offerTitle: line.offerTitle })),
+      ...lines.map((line) => ({ orderId: created.insertId, productId: line.product.id, productName: line.product.name, quantity: line.quantity, unitPrice: line.price.toString(), lineTotal: line.total.toString(), unitCost: costs.get(line.product.id) ?? null })),
+      ...bundleLines.map((line) => ({ orderId: created.insertId, productId: line.productId, productName: line.productName, quantity: line.quantity, unitPrice: line.unitPrice.toString(), lineTotal: line.total.toString(), unitCost: costs.get(line.productId) ?? null, offerId: line.offerId, offerTitle: line.offerTitle })),
     ]);
-    const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "CASH_ON_DELIVERY" ? "PENDING" : parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: (subtotal + deliveryFee).toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
+    const [payment] = await tx.insert(paymentTransactions).values({ orderId: created.insertId, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "CASH_ON_DELIVERY" ? "PENDING" : parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: payable.toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
     return { orderId: created.insertId, paymentId: payment.insertId, orderNumber };
   });
   const orderNumber = result.orderNumber;
@@ -572,7 +590,7 @@ export async function handleOrders(request: Request, id?: number) {
   let paymentMessage = parsed.data.paymentMethod === "CASH_ON_DELIVERY" ? "Order placed. Pay the rider in cash when your medicines arrive." : parsed.data.paymentMethod === "MANUAL_MPESA" ? "Receipt extracted. Healthfield is checking Safaricom before sending it for review." : "Check your phone and enter your M-Pesa PIN.";
   if (parsed.data.paymentMethod === "MPESA_EXPRESS") {
     try {
-      const stk = await initiateStkPush({ orderNumber, phone: parsed.data.billingPhone || parsed.data.phone, amount: subtotal + deliveryFee });
+      const stk = await initiateStkPush({ orderNumber, phone: parsed.data.billingPhone || parsed.data.phone, amount: payable });
       await db.update(paymentTransactions).set({ status: "PENDING", checkoutRequestId: stk.checkoutRequestId, merchantRequestId: stk.merchantRequestId, phone: stk.phone, resultDescription: stk.customerMessage, providerPayload: stk.providerPayload }).where(eq(paymentTransactions.id, result.paymentId));
       await replayStoredStkCallback(stk.checkoutRequestId);
       paymentMessage = stk.customerMessage;
@@ -597,12 +615,12 @@ Your order ${orderNumber} is confirmed for cash on delivery.
 
 Medicines: KES ${subtotal.toLocaleString()}
 Delivery: KES ${deliveryFee.toLocaleString()}
-Amount due on delivery: KES ${(subtotal + deliveryFee).toLocaleString()}
+Amount due on delivery: KES ${payable.toLocaleString()}
 
 Please have the exact amount ready for the rider.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"CASH ON DELIVERY"}), channel:"orders" });
-  if (orderEmail && parsed.data.paymentMethod === "MANUAL_MPESA" && paymentStatus !== "PAID") void sendEmail({ to: orderEmail, subject: `Payment proof received for ${orderNumber}`, message: `Hello ${parsed.data.fullName},\n\nWe received your payment proof for order ${orderNumber}. Total: KES ${(subtotal + deliveryFee).toLocaleString()}. We will confirm it before processing the order.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"PAYMENT REVIEW"}), channel:"orders" });
-  if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${(subtotal + deliveryFee).toLocaleString()}.`, channel:"orders" });
-  return json({ ok: true, id: result.orderId, orderNumber, total: subtotal + deliveryFee, paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
+  if (orderEmail && parsed.data.paymentMethod === "MANUAL_MPESA" && paymentStatus !== "PAID") void sendEmail({ to: orderEmail, subject: `Payment proof received for ${orderNumber}`, message: `Hello ${parsed.data.fullName},\n\nWe received your payment proof for order ${orderNumber}. Total: KES ${payable.toLocaleString()}. We will confirm it before processing the order.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"PAYMENT REVIEW"}), channel:"orders" });
+  if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${payable.toLocaleString()}.`, channel:"orders" });
+  return json({ ok: true, id: result.orderId, orderNumber, total: payable, vat, paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
 }
 
 export async function handleCustomerOrderReceived(request: Request, id: number) {
@@ -676,7 +694,7 @@ export async function handleWalkInSales(request: Request) {
       for (const item of itemList) {
         const product = catalog.find((entry) => entry.id === item.productId)!;
         const unitPrice = Number(product.discountPrice ?? product.price);
-        const [createdItem] = await tx.insert(orderItems).values({ orderId: created.insertId, productId: product.id, productName: product.name, quantity: item.quantity, unitPrice: unitPrice.toFixed(2), lineTotal: (unitPrice * item.quantity).toFixed(2) });
+        const [createdItem] = await tx.insert(orderItems).values({ orderId: created.insertId, productId: product.id, productName: product.name, quantity: item.quantity, unitPrice: unitPrice.toFixed(2), lineTotal: (unitPrice * item.quantity).toFixed(2), unitCost: product.costPrice ?? null });
         insertedItems.push({ id: createdItem.insertId, productId: item.productId, quantity: item.quantity });
       }
       for (const item of insertedItems) {
@@ -741,13 +759,27 @@ type DatabaseTransaction = Parameters<Parameters<ReturnType<typeof getDb>["trans
  * Absent or null means "leave stock alone" — the field is optional and a product must
  * save without it.
  */
+type ProductStockEntry = { branchId: number; quantityAvailable: number; reorderLevel?: number };
+
+/**
+ * Writes stock for one shop, or for every shop the caller sent.
+ *
+ * The product form used to make you pick a single shop from a dropdown, which meant
+ * three shops took three saves and no way to see the other two while typing. It now
+ * sends a row per shop, so this takes a list; a lone entry is still accepted because
+ * other callers have no reason to change.
+ */
 async function applyProductStock(
   tx: DatabaseTransaction,
   productId: number,
   actorId: number,
-  stock: { branchId: number; quantityAvailable: number; reorderLevel?: number } | null | undefined,
+  stock: ProductStockEntry | ProductStockEntry[] | null | undefined,
 ) {
   if (!stock) return;
+  if (Array.isArray(stock)) {
+    for (const entry of stock) await applyProductStock(tx, productId, actorId, entry);
+    return;
+  }
   const [existing] = await tx.select({ id: branchInventory.id, reorderLevel: branchInventory.reorderLevel })
     .from(branchInventory)
     .where(and(eq(branchInventory.branchId, stock.branchId), eq(branchInventory.productId, productId)))
@@ -767,13 +799,31 @@ async function applyProductStock(
   });
 }
 
+/**
+ * Buying prices for a set of products, keyed by id.
+ *
+ * Order lines snapshot the cost in force when they sold, so a later change of supplier
+ * cannot rewrite a profit report that has already been sent. Read outside the writing
+ * transaction because it is reference data, not part of what is being written.
+ */
+async function productCosts(ids: Array<number | null | undefined>) {
+  const unique = [...new Set(ids.filter((id): id is number => Number.isInteger(id) && Number(id) > 0))];
+  if (!unique.length) return new Map<number, string>();
+  const rows = await getDb().select({ id: products.id, costPrice: products.costPrice }).from(products).where(inArray(products.id, unique));
+  return new Map(rows.flatMap((row) => (row.costPrice == null ? [] : [[row.id, row.costPrice] as const])));
+}
+
+const stockEntrySchema = z.object({ branchId: z.coerce.number().int().positive(), quantityAvailable: z.coerce.number().int().nonnegative().max(1_000_000), reorderLevel: z.coerce.number().int().nonnegative().optional() });
+const productStockSchema = z.union([stockEntrySchema, z.array(stockEntrySchema).max(50)]).nullable().optional();
+
 const productSchema = z.object({
   categoryId: z.coerce.number().int().positive(), name: z.string().trim().min(2).max(220), brand: z.string().trim().max(150).optional().default(""),
+  barcode: z.string().trim().max(100).optional().default(""),
   shortDescription: z.string().trim().max(500).optional().default(""), imageUrl: z.string().trim().max(500).optional().default(""),
   description: z.string().trim().max(10000).optional().default(""),
-  price: z.coerce.number().nonnegative(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), packSize: z.string().trim().max(100).optional().default(""),
+  price: z.coerce.number().nonnegative(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), packSize: z.string().trim().max(100).optional().default(""),
   prescriptionRequired: z.coerce.boolean().default(false), isFeatured: z.coerce.boolean().default(false), conditionIds: z.array(z.coerce.number().int().positive()).optional().default([]),
-  stock: z.object({ branchId: z.coerce.number().int().positive(), quantityAvailable: z.coerce.number().int().nonnegative(), reorderLevel: z.coerce.number().int().nonnegative().optional() }).nullable().optional(),
+  stock: productStockSchema,
 });
 
 export async function handleProducts(request: Request, id?: number) {
@@ -787,18 +837,28 @@ export async function handleProducts(request: Request, id?: number) {
     const parsed = productSchema.safeParse(await body(request));
     if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid product." }, { status: 400 });
     const values = parsed.data;
-    if (values.discountPrice !== null && values.discountPrice !== undefined && values.discountPrice >= values.price) return json({ error: "The selling price must be lower than the regular price to create a discount." }, { status: 400 });
+    // A manager can price a product; only the owner decides what it cost.
+    if (auth.session.role !== "SUPER_ADMIN") values.costPrice = undefined;
+    if (values.discountPrice !== null && values.discountPrice !== undefined && values.discountPrice > values.price) return json({ error: "The selling price cannot be higher than the regular price." }, { status: 400 });
+    // Equal prices are not a discount, they are one price typed twice — which is what
+    // pricing straight off a buying price produces.
+    if (values.discountPrice === values.price) values.discountPrice = null;
+    if (values.barcode) {
+      const [duplicate] = await db.select({ id: products.id }).from(products).where(eq(products.barcode, values.barcode)).limit(1);
+      if (duplicate) return json({ error: "That barcode or QR code is already assigned to another product." }, { status: 409 });
+    }
     const suffix = Date.now().toString(36);
+    const generatedSku = `HF-${suffix.toUpperCase()}`;
     const baseSlug = values.name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const created = await db.transaction(async (tx) => {
-      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: `HF-${suffix.toUpperCase()}`, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: values.isFeatured, isActive: true });
+      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: generatedSku, barcode: values.barcode || null, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), costPrice: values.costPrice == null ? null : values.costPrice.toFixed(2), costPriceEstimated: values.costPrice == null, packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: values.isFeatured, isActive: true });
       if (values.conditionIds.length) await tx.insert(productHealthConditions).values(values.conditionIds.map((conditionId) => ({ productId: record.insertId, conditionId })));
       const stores = await tx.select({ id: branches.id }).from(branches).where(eq(branches.isActive, true));
       if (stores.length) await tx.insert(branchInventory).values(stores.map((store) => ({ branchId: store.id, productId: record.insertId, quantityAvailable: 0, quantityReserved: 0, reorderLevel: 5, updatedBy: auth.session.userId })));
       await applyProductStock(tx, record.insertId, auth.session.userId, values.stock);
       return record;
     });
-    return json({ ok: true, id: created.insertId }, { status: 201 });
+    return json({ ok: true, id: created.insertId, sku: generatedSku }, { status: 201 });
   }
   if (!id || !Number.isInteger(id)) return json({ error: "Invalid product." }, { status: 400 });
   if (request.method === "DELETE") {
@@ -811,19 +871,102 @@ export async function handleProducts(request: Request, id?: number) {
     return json({ ok: true });
   }
   if (request.method === "PATCH") {
-    const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(10000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), prescriptionRequired: z.boolean().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional(), stock: z.object({ branchId: z.coerce.number().int().positive(), quantityAvailable: z.coerce.number().int().nonnegative(), reorderLevel: z.coerce.number().int().nonnegative().optional() }).nullable().optional() }).safeParse(await body(request));
+    const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), barcode: z.string().trim().max(100).nullable().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(10000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), prescriptionRequired: z.boolean().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional(), stock: productStockSchema }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Invalid product update." }, { status: 400 });
-    if (parsed.data.price !== undefined && parsed.data.discountPrice !== null && parsed.data.discountPrice !== undefined && parsed.data.discountPrice >= parsed.data.price) return json({ error: "The selling price must be lower than the regular price to create a discount." }, { status: 400 });
+    if (auth.session.role !== "SUPER_ADMIN") parsed.data.costPrice = undefined;
+    if (parsed.data.price !== undefined && parsed.data.discountPrice !== null && parsed.data.discountPrice !== undefined && parsed.data.discountPrice > parsed.data.price) return json({ error: "The selling price cannot be higher than the regular price." }, { status: 400 });
+    if (parsed.data.price !== undefined && parsed.data.discountPrice === parsed.data.price) parsed.data.discountPrice = null;
+    if (parsed.data.barcode) {
+      const [duplicate] = await db.select({ id: products.id }).from(products).where(and(eq(products.barcode, parsed.data.barcode), ne(products.id, id))).limit(1);
+      if (duplicate) return json({ error: "That barcode or QR code is already assigned to another product." }, { status: 409 });
+    }
     const { conditionIds, stock, ...update } = parsed.data;
     const normalized = { ...update, imageUrl: parsed.data.imageUrl === undefined ? undefined : normalizeStoredImageUrl(parsed.data.imageUrl) };
     await db.transaction(async (tx) => {
-      await tx.update(products).set({ ...normalized, price: parsed.data.price?.toString(), discountPrice: parsed.data.discountPrice === null ? null : parsed.data.discountPrice?.toString() }).where(eq(products.id, id));
+      await tx.update(products).set({
+        ...normalized,
+        price: parsed.data.price?.toString(),
+        discountPrice: parsed.data.discountPrice === null ? null : parsed.data.discountPrice?.toString(),
+        costPrice: parsed.data.costPrice === undefined ? undefined : parsed.data.costPrice === null ? null : parsed.data.costPrice.toFixed(2),
+        // A buying price someone typed is confirmed; that is what takes the row off the
+        // estimated list the profit report counts.
+        costPriceEstimated: parsed.data.costPrice === undefined ? undefined : parsed.data.costPrice === null,
+      }).where(eq(products.id, id));
       await applyProductStock(tx, id, auth.session.userId, stock);
       if (conditionIds) { await tx.delete(productHealthConditions).where(eq(productHealthConditions.productId, id)); if (conditionIds.length) await tx.insert(productHealthConditions).values(conditionIds.map((conditionId) => ({ productId: id, conditionId }))); }
     });
     return json({ ok: true });
   }
   return json({ error: "Method not allowed." }, { status: 405 });
+}
+
+/**
+ * Saves a page of the bulk product editor in one transaction.
+ *
+ * Everything is validated before anything is written, and the whole page lands or none
+ * of it does: a hundred rows half-applied is worse than a hundred rows rejected, because
+ * nobody can tell afterwards which half took. Rows arrive already filtered to the ones
+ * that were actually edited, so an untouched row cannot be overwritten by a stale value
+ * the browser happened to be holding.
+ */
+export async function handleProductsBulk(request: Request) {
+  // Owner only. The table carries buying prices, which is the shop's margin laid out
+  // in one screen — the same reason the profit card is not shown to managers.
+  const auth = await requireSession(request, ["SUPER_ADMIN"]);
+  if ("response" in auth) return auth.response;
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  const parsed = z.object({
+    rows: z.array(z.object({
+      id: z.coerce.number().int().positive(),
+      name: z.string().trim().min(2).max(220).optional(),
+      costPrice: z.coerce.number().nonnegative().nullable().optional(),
+      price: z.coerce.number().nonnegative().optional(),
+      discountPrice: z.coerce.number().nonnegative().nullable().optional(),
+      stock: z.array(stockEntrySchema).max(50).optional(),
+    })).min(1).max(200),
+  }).safeParse(await body(request));
+  if (!parsed.success) return json({ error: "Some rows could not be read. Check the changed figures and try again." }, { status: 400 });
+
+  const rows = parsed.data.rows;
+  const ids = [...new Set(rows.map((row) => row.id))];
+  if (ids.length !== rows.length) return json({ error: "The same product appears twice in this save." }, { status: 400 });
+  const db = getDb();
+  const existing = await db.select({ id: products.id, price: products.price, discountPrice: products.discountPrice }).from(products).where(inArray(products.id, ids));
+  const known = new Map(existing.map((row) => [row.id, row]));
+
+  // Validated as a set first, naming the row rather than failing anonymously halfway.
+  for (const row of rows) {
+    const current = known.get(row.id);
+    if (!current) return json({ error: `Product ${row.id} no longer exists. Reload the page and try again.` }, { status: 409 });
+    const price = row.price ?? Number(current.price);
+    const selling = row.discountPrice === undefined ? (current.discountPrice === null ? null : Number(current.discountPrice)) : row.discountPrice;
+    if (selling !== null && selling > price) return json({ error: `${row.name || `Product ${row.id}`}: the selling price cannot be higher than the crossed-out price.` }, { status: 400 });
+  }
+
+  await db.transaction(async (tx) => {
+    for (const row of rows) {
+      const current = known.get(row.id)!;
+      const price = row.price ?? Number(current.price);
+      const selling = row.discountPrice === undefined ? undefined : row.discountPrice;
+      await tx.update(products).set({
+        name: row.name,
+        price: row.price === undefined ? undefined : row.price.toFixed(2),
+        // Equal prices are one price typed twice, not a discount worth crossing out.
+        discountPrice: selling === undefined ? undefined : selling === null || selling === price ? null : selling.toFixed(2),
+        costPrice: row.costPrice === undefined ? undefined : row.costPrice === null ? null : row.costPrice.toFixed(2),
+        costPriceEstimated: row.costPrice === undefined ? undefined : row.costPrice === null,
+      }).where(eq(products.id, row.id));
+      if (row.stock?.length) await applyProductStock(tx, row.id, auth.session.userId, row.stock);
+    }
+    await tx.insert(activityLogs).values({
+      actorId: auth.session.userId,
+      action: "PRODUCTS_BULK_UPDATED",
+      entityType: "product",
+      entityId: null,
+      metadata: { products: rows.length, stockRows: rows.reduce((sum, row) => sum + (row.stock?.length ?? 0), 0), actorRole: auth.session.role },
+    });
+  });
+  return json({ ok: true, updated: rows.length });
 }
 
 export async function handleReviews(request: Request, productId: number) {
@@ -1187,6 +1330,11 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
             const approvedLines=(normalizedItems||[]).filter((item)=>item.availability!=="UNAVAILABLE"&&item.approvedQuantity&&item.unitPrice);
             if(!approvedLines.length)throw new PrescriptionWorkflowError("At least one available, priced medicine is required for approval.",400);
             const subtotal=approvedLines.reduce((sum,item)=>sum+Number(item.unitPrice)*Number(item.approvedQuantity),0);
+            const prescriptionVat=await onlineVatFor(subtotal);
+            // Buying prices as they stand now, snapshotted onto the lines this approval creates.
+            const approvedProductIds=[...new Set(approvedLines.map((item)=>item.productId).filter((value): value is number=>Number.isInteger(value)&&Number(value)>0))];
+            const approvedCostRows=approvedProductIds.length?await tx.select({id:products.id,costPrice:products.costPrice}).from(products).where(inArray(products.id,approvedProductIds)):[];
+            const prescriptionCosts=new Map(approvedCostRows.flatMap((row)=>row.costPrice==null?[]:[[row.id,row.costPrice] as const]));
             const linkedOrder=record.orderId?(await tx.select().from(orders).where(eq(orders.id,record.orderId)).limit(1).for("update"))[0]:undefined;
             if(linkedOrder?.paymentStatus==="PAID"){
               orderId=linkedOrder.id;orderNumber=linkedOrder.orderNumber;orderTotal=Number(linkedOrder.total);
@@ -1196,17 +1344,17 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
                 const attempts=await tx.select({status:paymentTransactions.status}).from(paymentTransactions).where(eq(paymentTransactions.orderId,linkedOrder.id));
                 if(attempts.some((payment)=>!["FAILED","CANCELLED"].includes(payment.status)))throw new PrescriptionWorkflowError("This linked order already has a payment awaiting confirmation and cannot be repriced.");
                 await tx.delete(orderItems).where(eq(orderItems.orderId,linkedOrder.id));
-                await tx.update(orders).set({checkoutToken:null,customerName:`${customer.firstName} ${customer.lastName}`.trim(),phone:customer.phone||"",email:customer.email,fulfilmentMethod:"PICKUP",deliveryAddress:null,deliveryArea:null,deliveryLatitude:null,deliveryLongitude:null,status:"AWAITING_PAYMENT",paymentStatus:"PENDING",paymentMethod:"PENDING",paymentReference:null,amountPaid:"0",prescriptionStatus:"APPROVED",subtotal:subtotal.toFixed(2),deliveryFee:"0",discount:"0",total:subtotal.toFixed(2)}).where(eq(orders.id,linkedOrder.id));
+                await tx.update(orders).set({checkoutToken:null,customerName:`${customer.firstName} ${customer.lastName}`.trim(),phone:customer.phone||"",email:customer.email,fulfilmentMethod:"PICKUP",deliveryAddress:null,deliveryArea:null,deliveryLatitude:null,deliveryLongitude:null,status:"AWAITING_PAYMENT",paymentStatus:"PENDING",paymentMethod:"PENDING",paymentReference:null,amountPaid:"0",prescriptionStatus:"APPROVED",subtotal:subtotal.toFixed(2),deliveryFee:"0",discount:"0",vat:prescriptionVat.amount.toFixed(2),vatRate:prescriptionVat.rate.toFixed(2),total:prescriptionVat.payable.toFixed(2)}).where(eq(orders.id,linkedOrder.id));
                 orderId=linkedOrder.id;orderNumber=linkedOrder.orderNumber;
               }else{
                 const temporaryOrderNumber=`TMP-${randomUUID().replaceAll("-","").slice(0,20).toUpperCase()}`;
-                const [created]=await tx.insert(orders).values({orderNumber:temporaryOrderNumber,customerId:customer.id,customerName:`${customer.firstName} ${customer.lastName}`.trim(),phone:customer.phone||"",email:customer.email,fulfilmentMethod:"PICKUP",status:"AWAITING_PAYMENT",paymentStatus:"PENDING",paymentMethod:"PENDING",prescriptionStatus:"APPROVED",subtotal:subtotal.toFixed(2),deliveryFee:"0",discount:"0",total:subtotal.toFixed(2)});
+                const [created]=await tx.insert(orders).values({orderNumber:temporaryOrderNumber,customerId:customer.id,customerName:`${customer.firstName} ${customer.lastName}`.trim(),phone:customer.phone||"",email:customer.email,fulfilmentMethod:"PICKUP",status:"AWAITING_PAYMENT",paymentStatus:"PENDING",paymentMethod:"PENDING",prescriptionStatus:"APPROVED",subtotal:subtotal.toFixed(2),deliveryFee:"0",discount:"0",vat:prescriptionVat.amount.toFixed(2),vatRate:prescriptionVat.rate.toFixed(2),total:prescriptionVat.payable.toFixed(2)});
                 orderNumber=healthfieldOrderNumber("RX",created.insertId);
                 await tx.update(orders).set({orderNumber}).where(eq(orders.id,created.insertId));
                 orderId=created.insertId;
               }
-              await tx.insert(orderItems).values(approvedLines.map((item)=>({orderId:orderId!,productId:item.productId,productName:item.productName,quantity:item.approvedQuantity!,unitPrice:item.unitPrice!,lineTotal:(Number(item.unitPrice)*Number(item.approvedQuantity)).toFixed(2)})));
-              orderTotal=subtotal;
+              await tx.insert(orderItems).values(approvedLines.map((item)=>({orderId:orderId!,productId:item.productId,productName:item.productName,quantity:item.approvedQuantity!,unitPrice:item.unitPrice!,unitCost:prescriptionCosts.get(item.productId!)??null,lineTotal:(Number(item.unitPrice)*Number(item.approvedQuantity)).toFixed(2)})));
+              orderTotal=prescriptionVat.payable;
             }
           }
           const reviewVersion=record.reviewVersion+1;
@@ -1677,6 +1825,11 @@ export async function handlePrescriptionSelection(request: Request, prescription
         ? await tx.select({ productId: branchInventory.productId, available: sql<number>`sum(greatest(${branchInventory.quantityAvailable} - ${branchInventory.quantityReserved}, 0))` }).from(branchInventory).where(inArray(branchInventory.productId, productIds)).groupBy(branchInventory.productId)
         : [];
       const stock = new Map(stockRows.map((row) => [row.productId, Number(row.available)]));
+      // Same snapshot rule as every other order line.
+      const costRows = productIds.length
+        ? await tx.select({ id: products.id, costPrice: products.costPrice }).from(products).where(inArray(products.id, productIds))
+        : [];
+      const checkoutCosts = new Map(costRows.flatMap((row) => (row.costPrice == null ? [] : [[row.id, row.costPrice] as const])));
       const short = lines.filter((line) => (stock.get(line.item.productId!) || 0) < line.quantity);
       if (short.length) throw new PrescriptionWorkflowError(`Only limited stock remains for ${short.map((line) => line.item.productName).join(", ")}. Reduce the quantity or ask the pharmacy to recheck.`);
 
@@ -1684,6 +1837,7 @@ export async function handlePrescriptionSelection(request: Request, prescription
         await tx.update(prescriptionRequestItems).set({ selectedQuantity: line.quantity, deferred: line.deferred }).where(eq(prescriptionRequestItems.id, line.id));
 
       const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0);
+      const selectionVat = await onlineVatFor(subtotal);
       await tx.delete(orderItems).where(eq(orderItems.orderId, order.id));
       await tx.insert(orderItems).values(lines.map((line) => ({
         orderId: order.id,
@@ -1692,9 +1846,10 @@ export async function handlePrescriptionSelection(request: Request, prescription
         quantity: line.quantity,
         unitPrice: line.item.unitPrice!,
         lineTotal: line.lineTotal.toFixed(2),
+        unitCost: checkoutCosts.get(line.item.productId!) ?? null,
       })));
       // The checkout token is cleared so a stale tab cannot pay the previous total.
-      await tx.update(orders).set({ checkoutToken: null, subtotal: subtotal.toFixed(2), total: subtotal.toFixed(2) }).where(eq(orders.id, order.id));
+      await tx.update(orders).set({ checkoutToken: null, subtotal: subtotal.toFixed(2), vat: selectionVat.amount.toFixed(2), vatRate: selectionVat.rate.toFixed(2), total: selectionVat.payable.toFixed(2) }).where(eq(orders.id, order.id));
       await tx.insert(activityLogs).values({
         actorId: auth.session.userId, action: "PRESCRIPTION_SELECTION_UPDATED", entityType: "prescription", entityId: String(prescriptionId),
         metadata: { orderId: order.id, buyingNow: chosen.length, deferred: resolved.length - chosen.length, subtotal },

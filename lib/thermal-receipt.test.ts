@@ -52,13 +52,12 @@ test("VAT stays off the receipt until the shop switches it on", () => {
   assert.equal(prepareThermalReceipt(base).vatLabel, "VAT");
 });
 
-test("a VAT rate discloses the tax inside the total rather than adding to it", () => {
+test("a rate in settings never adds VAT to an order that did not charge it", () => {
   const settings = { pharmacyName: "Healthfield", phone: null, address: null, licenceNumber: null, vatEnabled: true, vatRate: "16.00" };
   const receipt = prepareThermalReceipt({ ...base, receipt: { settings, servedBy: null } });
-  // The total is unchanged; only the disclosure is new.
+  // Prices are net of VAT, so tax is charged at the sale, not conjured at print time.
   assert.equal(receipt.order.total, base.order.total);
-  assert.equal(receipt.order.vat, Math.round((Number(base.order.total) * 16) / 116 * 100) / 100);
-  assert.equal(receipt.vatLabel, "VAT (16% incl.)");
+  assert.equal(receipt.order.vat, null);
 });
 
 test("switching VAT off hides the line even while a rate is stored", () => {
@@ -66,6 +65,8 @@ test("switching VAT off hides the line even while a rate is stored", () => {
   assert.equal(prepareThermalReceipt({ ...base, receipt: { settings, servedBy: null } }).order.vat, null);
 });
 
-test("a VAT figure supplied with the order is never recalculated", () => {
-  assert.equal(prepareThermalReceipt({ ...base, order: { ...base.order, vat: "104.50" } }).order.vat, "104.50");
+test("the VAT charged with the sale is what prints, at the rate it was charged", () => {
+  const receipt = prepareThermalReceipt({ ...base, order: { ...base.order, vat: "104.50", vatRate: "16.00" } });
+  assert.equal(receipt.order.vat, 104.5);
+  assert.equal(receipt.vatLabel, "VAT (16%)");
 });

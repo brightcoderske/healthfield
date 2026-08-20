@@ -27,6 +27,7 @@ type Data = {
     tillNumber: string | null;
     accountName: string | null;
   };
+  vat?: { enabled: boolean; rate: number };
   delivery: {
     mapsApiKey?: string;
     distancePricing: boolean;
@@ -55,6 +56,7 @@ export default async function CheckoutPage() {
       initialOffers={offers}
       customer={data.customer}
       payment={data.payment}
+      vat={data.vat}
       delivery={data.delivery}
     />
   );

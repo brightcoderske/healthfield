@@ -59,6 +59,59 @@ export const branches = mysqlTable("branches", {
   ...timestamps,
 }, (table) => [uniqueIndex("branches_code_unique").on(table.code)]);
 
+/** Physical or logical checkout points inside a branch. */
+export const posTills = mysqlTable("pos_tills", {
+  id: int("id").autoincrement().primaryKey(),
+  branchId: int("branch_id").notNull().references(() => branches.id),
+  code: varchar("code", { length: 50 }).notNull(),
+  name: varchar("name", { length: 120 }).notNull(),
+  mpesaTillNumber: varchar("mpesa_till_number", { length: 30 }),
+  isActive: boolean("is_active").default(true).notNull(),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("pos_tills_code_unique").on(table.code),
+  index("pos_tills_branch_idx").on(table.branchId, table.isActive),
+]);
+
+/** A cashier's auditable opening-to-closing working period. */
+export const posSessions = mysqlTable("pos_sessions", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionNumber: varchar("session_number", { length: 50 }).notNull(),
+  userId: int("user_id").notNull().references(() => users.id),
+  branchId: int("branch_id").notNull().references(() => branches.id),
+  tillId: int("till_id").notNull().references(() => posTills.id),
+  status: mysqlEnum("status", ["OPEN", "CLOSED"]).default("OPEN").notNull(),
+  openingFloat: decimal("opening_float", { precision: 12, scale: 2 }).default("0").notNull(),
+  openingCash: decimal("opening_cash", { precision: 12, scale: 2 }).default("0").notNull(),
+  actualCash: decimal("actual_cash", { precision: 12, scale: 2 }),
+  expectedCash: decimal("expected_cash", { precision: 12, scale: 2 }),
+  cashDifference: decimal("cash_difference", { precision: 12, scale: 2 }),
+  closingNotes: text("closing_notes"),
+  openedAt: timestamp("opened_at").defaultNow().notNull(),
+  closedAt: timestamp("closed_at"),
+  reportSentAt: timestamp("report_sent_at"),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("pos_sessions_number_unique").on(table.sessionNumber),
+  index("pos_sessions_user_status_idx").on(table.userId, table.status, table.openedAt),
+  index("pos_sessions_till_status_idx").on(table.tillId, table.status, table.openedAt),
+  index("pos_sessions_branch_date_idx").on(table.branchId, table.openedAt),
+]);
+
+export const posExpenses = mysqlTable("pos_expenses", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionId: int("session_id").notNull().references(() => posSessions.id),
+  branchId: int("branch_id").notNull().references(() => branches.id),
+  recordedBy: int("recorded_by").notNull().references(() => users.id),
+  category: varchar("category", { length: 100 }).notNull(),
+  description: varchar("description", { length: 500 }).notNull(),
+  amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+  paymentMethod: mysqlEnum("payment_method", ["CASH", "MPESA", "OTHER"]).default("CASH").notNull(),
+  reference: varchar("reference", { length: 120 }),
+  incurredAt: timestamp("incurred_at").defaultNow().notNull(),
+  ...timestamps,
+}, (table) => [index("pos_expenses_session_idx").on(table.sessionId, table.incurredAt)]);
+
 export const categories = mysqlTable("categories", {
   id: int("id").autoincrement().primaryKey(),
   parentId: int("parent_id"),
@@ -85,6 +138,12 @@ export const products = mysqlTable("products", {
   description: text("description"),
   price: decimal("price", { precision: 12, scale: 2 }).notNull(),
   discountPrice: decimal("discount_price", { precision: 12, scale: 2 }),
+  // What the shop paid for a unit. Profit is the only thing that reads it; nothing a
+  // customer sees is derived from it. Rows carried over from before this existed were
+  // seeded by working backwards from the shelf price, so costPriceEstimated marks the
+  // ones nobody has confirmed yet and a profit figure can say how much of it is guessed.
+  costPrice: decimal("cost_price", { precision: 12, scale: 2 }),
+  costPriceEstimated: boolean("cost_price_estimated").default(true).notNull(),
   packSize: varchar("pack_size", { length: 100 }),
   productForm: varchar("product_form", { length: 80 }),
   strength: varchar("strength", { length: 80 }),
@@ -120,6 +179,71 @@ export const branchInventory = mysqlTable("branch_inventory", {
   index("inventory_availability_idx").on(table.productId, table.quantityAvailable),
 ]);
 
+/** Reusable supplier directory populated as stock is received. */
+export const posSuppliers = mysqlTable("pos_suppliers", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  nameKey: varchar("name_key", { length: 200 }).notNull(),
+  phone: varchar("phone", { length: 30 }),
+  createdBy: int("created_by").references(() => users.id),
+  lastReceivedAt: timestamp("last_received_at"),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("pos_suppliers_name_key_unique").on(table.nameKey),
+  index("pos_suppliers_name_idx").on(table.name),
+]);
+
+/** Supplier document header for stock delivered during a POS session. */
+export const posStockReceipts = mysqlTable("pos_stock_receipts", {
+  id: int("id").autoincrement().primaryKey(),
+  receiptNumber: varchar("receipt_number", { length: 50 }).notNull(),
+  sessionId: int("session_id").notNull().references(() => posSessions.id),
+  branchId: int("branch_id").notNull().references(() => branches.id),
+  receivedBy: int("received_by").notNull().references(() => users.id),
+  supplierId: int("supplier_id").references(() => posSuppliers.id),
+  supplierName: varchar("supplier_name", { length: 200 }).notNull(),
+  supplierPhone: varchar("supplier_phone", { length: 30 }),
+  supplierInvoice: varchar("supplier_invoice", { length: 120 }),
+  receiptImagePath: varchar("receipt_image_path", { length: 500 }),
+  totalCost: decimal("total_cost", { precision: 12, scale: 2 }).default("0").notNull(),
+  receivedAt: timestamp("received_at").defaultNow().notNull(),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("pos_stock_receipts_number_unique").on(table.receiptNumber),
+  index("pos_stock_receipts_session_idx").on(table.sessionId, table.receivedAt),
+  index("pos_stock_receipts_branch_idx").on(table.branchId, table.receivedAt),
+  index("pos_stock_receipts_supplier_idx").on(table.supplierId, table.receivedAt),
+]);
+
+export const posStockReceiptItems = mysqlTable("pos_stock_receipt_items", {
+  id: int("id").autoincrement().primaryKey(),
+  receiptId: int("receipt_id").notNull().references(() => posStockReceipts.id, { onDelete: "cascade" }),
+  productId: int("product_id").notNull().references(() => products.id),
+  quantity: int("quantity").notNull(),
+  buyingPrice: decimal("buying_price", { precision: 12, scale: 2 }).notNull(),
+  lineTotal: decimal("line_total", { precision: 12, scale: 2 }).notNull(),
+  batchNumber: varchar("batch_number", { length: 120 }),
+  expiryDate: varchar("expiry_date", { length: 10 }),
+  ...timestamps,
+}, (table) => [index("pos_stock_receipt_items_receipt_idx").on(table.receiptId, table.productId)]);
+
+/** Remaining stock by supplier batch, used for expiry reporting. */
+export const productBatches = mysqlTable("product_batches", {
+  id: int("id").autoincrement().primaryKey(),
+  branchId: int("branch_id").notNull().references(() => branches.id),
+  productId: int("product_id").notNull().references(() => products.id),
+  stockReceiptItemId: int("stock_receipt_item_id").notNull().references(() => posStockReceiptItems.id),
+  batchNumber: varchar("batch_number", { length: 120 }),
+  expiryDate: varchar("expiry_date", { length: 10 }),
+  quantityReceived: int("quantity_received").notNull(),
+  quantityRemaining: int("quantity_remaining").notNull(),
+  unitCost: decimal("unit_cost", { precision: 12, scale: 2 }).notNull(),
+  ...timestamps,
+}, (table) => [
+  index("product_batches_expiry_idx").on(table.branchId, table.expiryDate, table.quantityRemaining),
+  index("product_batches_product_idx").on(table.productId, table.branchId),
+]);
+
 export const orders = mysqlTable("orders", {
   id: int("id").autoincrement().primaryKey(),
   orderNumber: varchar("order_number", { length: 40 }).notNull(),
@@ -142,8 +266,17 @@ export const orders = mysqlTable("orders", {
   subtotal: decimal("subtotal", { precision: 12, scale: 2 }).notNull(),
   deliveryFee: decimal("delivery_fee", { precision: 12, scale: 2 }).default("0").notNull(),
   discount: decimal("discount", { precision: 12, scale: 2 }).default("0").notNull(),
+  // Shelf prices are net of VAT, so tax is added to the total rather than extracted
+  // from it. The rate is stored with the order so an old receipt stays reproducible
+  // after the settings rate changes.
+  vat: decimal("vat", { precision: 12, scale: 2 }).default("0.00").notNull(),
+  vatRate: decimal("vat_rate", { precision: 5, scale: 2 }).default("0.00").notNull(),
   total: decimal("total", { precision: 12, scale: 2 }).notNull(),
   suggestedBranchId: int("suggested_branch_id").references(() => branches.id),
+  posSessionId: int("pos_session_id").references(() => posSessions.id),
+  cashierId: int("cashier_id").references(() => users.id),
+  tillId: int("till_id").references(() => posTills.id),
+  transactedAt: timestamp("transacted_at"),
   // What the delivery fee was actually derived from, kept so a dispute can be settled
   // and so re-pricing after a branch reassignment has something to compare against.
   deliveryDistanceKm: decimal("delivery_distance_km", { precision: 6, scale: 2 }),
@@ -155,7 +288,27 @@ export const orders = mysqlTable("orders", {
   uniqueIndex("orders_number_unique").on(table.orderNumber),
   uniqueIndex("orders_checkout_token_unique").on(table.checkoutToken),
   index("orders_work_queue_idx").on(table.status, table.createdAt),
+  index("orders_pos_session_idx").on(table.posSessionId, table.transactedAt),
 ]);
+
+export type PosHeldCartItem = { productId: number; quantity: number };
+export const posHeldSales = mysqlTable("pos_held_sales", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionId: int("session_id").notNull().references(() => posSessions.id),
+  branchId: int("branch_id").notNull().references(() => branches.id),
+  heldBy: int("held_by").notNull().references(() => users.id),
+  label: varchar("label", { length: 160 }).notNull(),
+  customerName: varchar("customer_name", { length: 200 }),
+  phone: varchar("phone", { length: 30 }),
+  email: varchar("email", { length: 190 }),
+  cart: json("cart").$type<PosHeldCartItem[]>().notNull(),
+  discountAmount: decimal("discount_amount", { precision: 12, scale: 2 }).default("0").notNull(),
+  status: mysqlEnum("status", ["HELD", "RESUMED", "COMPLETED", "CANCELLED"]).default("HELD").notNull(),
+  completedOrderId: int("completed_order_id").references(() => orders.id),
+  heldAt: timestamp("held_at").defaultNow().notNull(),
+  resumedAt: timestamp("resumed_at"),
+  ...timestamps,
+}, (table) => [index("pos_held_sales_session_idx").on(table.sessionId, table.status, table.heldAt)]);
 
 export const paymentTransactions = mysqlTable("payment_transactions", {
   id: int("id").autoincrement().primaryKey(),
@@ -164,6 +317,8 @@ export const paymentTransactions = mysqlTable("payment_transactions", {
   channel: mysqlEnum("channel", ["ONLINE", "POS"]).notNull(),
   status: mysqlEnum("status", ["INITIATED", "PENDING", "CANCEL_REQUESTED", "REQUIRES_REVIEW", "PAID", "FAILED", "CANCELLED", "REFUNDED"]).default("INITIATED").notNull(),
   amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+  tenderedAmount: decimal("tendered_amount", { precision: 12, scale: 2 }),
+  changeGiven: decimal("change_given", { precision: 12, scale: 2 }),
   phone: varchar("phone", { length: 30 }),
   merchantRequestId: varchar("merchant_request_id", { length: 120 }),
   checkoutRequestId: varchar("checkout_request_id", { length: 120 }),
@@ -220,6 +375,11 @@ export const orderItems = mysqlTable("order_items", {
   quantity: int("quantity").notNull(),
   unitPrice: decimal("unit_price", { precision: 12, scale: 2 }).notNull(),
   lineTotal: decimal("line_total", { precision: 12, scale: 2 }).notNull(),
+  // The buying price in force when this line sold. Snapshotting it is what stops a
+  // supplier price rise from rewriting last month's profit; null on lines that predate
+  // the column, which fall back to the product's current cost and are reported as
+  // estimated rather than silently counted as exact.
+  unitCost: decimal("unit_cost", { precision: 12, scale: 2 }),
   // Bundle members keep one row each so stock still moves per product, but share an
   // offer id and title so the customer sees a single priced line.
   offerId: int("offer_id"),
@@ -629,3 +789,19 @@ export const consultationMessages = mysqlTable("consultation_messages", {
   readByProfessional: boolean("read_by_professional").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [index("consultation_messages_thread_idx").on(table.consultationId, table.createdAt)]);
+
+/**
+ * VAT handed over to KRA. The dashboard shows VAT collected since the last remittance,
+ * so recording one here is what resets the running figure to zero without deleting or
+ * rewriting the orders the tax came from.
+ */
+export const vatRemittances = mysqlTable("vat_remittances", {
+  id: int("id").autoincrement().primaryKey(),
+  amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+  orderCount: int("order_count").default(0).notNull(),
+  periodFrom: timestamp("period_from").defaultNow().notNull(),
+  periodTo: timestamp("period_to").defaultNow().notNull(),
+  note: varchar("note", { length: 300 }),
+  remittedBy: int("remitted_by").notNull().references(() => users.id),
+  ...timestamps,
+});

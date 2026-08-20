@@ -49,7 +49,9 @@ import { handleConsultationThread } from "./consultations";
 import { googleMapsBrowserKey, googleMapsConfigured, loadDeliveryConfiguration } from "./delivery";
 import { smsBalance, smsConfigurationSummary, smsDashboardSummary, smsReport, smsTopUpUrl } from "./sms";
 import { getDb } from "./db";
+import { vatBalance } from "./vat";
 import { json, publicImageUrl } from "./http";
+import { posWorkspaceState } from "./pos";
 import {
   isBundle,
   loadLiveOffers,
@@ -776,6 +778,7 @@ async function contentBlogView() {
 
 export async function handleView(request: Request, path: string) {
   const url = new URL(request.url);
+  if (path === "walk-in-sale") return posWorkspaceState(request);
   if (path === "home")
     return json(await home(), {
       headers: { "Cache-Control": "public, max-age=30" },
@@ -1112,6 +1115,8 @@ export async function handleView(request: Request, path: string) {
           onlineCodEnabled: siteSettings.onlineCodEnabled,
           mpesaTillNumber: siteSettings.mpesaTillNumber,
           mpesaAccountName: siteSettings.mpesaAccountName,
+          vatEnabled: siteSettings.vatEnabled,
+          vatRate: siteSettings.vatRate,
         })
         .from(siteSettings)
         .limit(1),
@@ -1122,6 +1127,9 @@ export async function handleView(request: Request, path: string) {
       items,
       order: orderRows[0] || null,
       customer: customerRows[0],
+      // Shelf prices are net of VAT, so the form has to add the tax to the amount it
+      // asks for rather than describing it as already inside the total.
+      vat: { enabled: Boolean(settings?.vatEnabled), rate: Number(settings?.vatRate ?? 0) },
       payment: {
         onlineMpesaEnabled: Boolean(
           settings?.onlineMpesaEnabled &&
@@ -1221,6 +1229,8 @@ export async function handleView(request: Request, path: string) {
         onlineCodEnabled: siteSettings.onlineCodEnabled,
         mpesaTillNumber: siteSettings.mpesaTillNumber,
         mpesaAccountName: siteSettings.mpesaAccountName,
+        vatEnabled: siteSettings.vatEnabled,
+        vatRate: siteSettings.vatRate,
       })
       .from(siteSettings)
       .limit(1);
@@ -1244,6 +1254,9 @@ export async function handleView(request: Request, path: string) {
         flatFee: deliveryConfiguration.settings.fallbackFee,
         freeDeliveryThreshold: deliveryConfiguration.settings.freeDeliveryThreshold,
       },
+      // Shelf prices are net of VAT, so the form has to add the tax to the amount it
+      // asks for rather than describing it as already inside the total.
+      vat: { enabled: Boolean(settings?.vatEnabled), rate: Number(settings?.vatRate ?? 0) },
       payment: {
         onlineMpesaEnabled: Boolean(
           settings?.onlineMpesaEnabled &&
@@ -1379,6 +1392,8 @@ export async function handleView(request: Request, path: string) {
         analytics,
         deliveries,
         bandRows,
+        vatRows,
+        vatOwed,
       ] = await Promise.all([
         db
           .select({ newOrders: count() })
@@ -1426,6 +1441,10 @@ export async function handleView(request: Request, path: string) {
             productName: orderItems.productName,
             quantity: orderItems.quantity,
             lineTotal: orderItems.lineTotal,
+            // The cost the line sold at, falling back to what the product costs now for
+            // lines that predate cost tracking. The dashboard reports the difference.
+            unitCost: orderItems.unitCost,
+            productCost: products.costPrice,
             category: categories.name,
           })
           .from(orders)
@@ -1458,6 +1477,11 @@ export async function handleView(request: Request, path: string) {
           .from(deliveryBands)
           .where(eq(deliveryBands.isActive, true))
           .orderBy(asc(deliveryBands.displayOrder), asc(deliveryBands.minKm)),
+        db
+          .select({ vatEnabled: siteSettings.vatEnabled, vatRate: siteSettings.vatRate })
+          .from(siteSettings)
+          .limit(1),
+        vatBalance(),
       ]);
       return json({
         newOrders,
@@ -1473,6 +1497,9 @@ export async function handleView(request: Request, path: string) {
         // Every active band, so the card can show a band that earned nothing rather
         // than hiding it — a zero is a finding, not an absence.
         deliveryBands: bandRows,
+        // Shelf prices already include VAT, so the dashboard discloses the tax sitting
+        // inside sales rather than adding anything to them.
+        vat: { enabled: Boolean(vatRows[0]?.vatEnabled), rate: Number(vatRows[0]?.vatRate ?? 0), ...vatOwed },
       });
     }
     if (view === "orders") return json({ orders: await orderListRows() });
@@ -2004,11 +2031,17 @@ export async function handleView(request: Request, path: string) {
         db.select({ id: branches.id, name: branches.name }).from(branches).where(eq(branches.isActive, true)).orderBy(asc(branches.name)),
         db.select({ id: branchInventory.id, branchId: branchInventory.branchId, productId: branchInventory.productId, quantityAvailable: branchInventory.quantityAvailable, quantityReserved: branchInventory.quantityReserved, reorderLevel: branchInventory.reorderLevel }).from(branchInventory),
       ]);
+      // Buying prices leave the server only for the owner. Hiding the field in the
+      // browser would still have shipped the figure to it.
+      const showsCost = auth.session.role === "SUPER_ADMIN";
       return json({
         branches: branchRows,
         stock: stockRows,
+        canEditCost: showsCost,
         products: catalog.map((product) => ({
           ...product,
+          costPrice: showsCost ? product.costPrice : null,
+          costPriceEstimated: showsCost ? product.costPriceEstimated : false,
           imageUrl: publicImageUrl(product.imageUrl),
           price: Number(product.price),
           discountPrice: product.discountPrice

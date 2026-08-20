@@ -125,20 +125,20 @@
 .cod-invoice > small{color:#7a7380;font-size:8.5px;line-height:1.5;}
 
 /* Bulk SMS reports. Credentials are never rendered here — only what was sent. */
-.sms-cards{width:min(1180px, 100%);margin:0 auto 14px;display:grid;grid-template-columns:repeat(4, minmax(0, 1fr));gap:10px;}
-.sms-card{padding:13px 15px;border:1px solid #e5dfe7;border-radius:11px;background:#fff;display:flex;flex-direction:column;gap:4px;}
-.sms-card-label{display:flex;align-items:center;gap:6px;color:#7a7380;font-size:9px;font-weight:750;text-transform:uppercase;letter-spacing:0.06em;}
-.sms-card-label svg{width:14px;}
-.sms-card > strong{font-size:19px;letter-spacing:-0.02em;}
-.sms-card small{color:#7a7380;font-size:8.5px;display:flex;justify-content:space-between;gap:8px;}
-.sms-card small b{color:#2f2b38;font-size:9px;}
+.sms-cards{width:min(1180px, 100%);margin:0 auto 14px;display:grid;grid-template-columns:repeat(5, minmax(0, 1fr));gap:8px;}
+.sms-card{padding:9px 11px;border:1px solid #e5dfe7;border-radius:9px;background:#fff;display:flex;flex-direction:column;gap:3px;}
+.sms-card-label{display:flex;align-items:center;gap:5px;color:#7a7380;font-size:8px;font-weight:750;text-transform:uppercase;letter-spacing:0.05em;}
+.sms-card-label svg{width:12px;flex:0 0 auto;}
+.sms-card > strong{font-size:15px;letter-spacing:-0.02em;}
+.sms-card small{color:#7a7380;font-size:8px;line-height:1.45;display:flex;justify-content:space-between;gap:6px;}
+.sms-card small b{color:#2f2b38;font-size:8.5px;text-align:right;}
 .sms-card code{padding:5px 7px;border-radius:6px;background:#f6f3f7;font-size:8px;word-break:break-all;}
 .sms-card-balance strong{color:#762584;}
-.sms-topup{margin-top:6px;min-height:32px;padding:0 11px;border-radius:8px;color:#fff;background:#762584;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:9.5px;font-weight:800;}
-.sms-topup svg{width:14px;}
-.sms-status-grid{display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:4px 10px;}
-.sms-status-grid span{display:flex;align-items:baseline;gap:5px;color:#7a7380;font-size:8.5px;}
-.sms-status-grid b{color:#2f2b38;font-size:12px;}
+.sms-topup{margin-top:5px;min-height:28px;padding:0 8px;border-radius:7px;color:#fff;background:#762584;display:inline-flex;align-items:center;justify-content:center;gap:5px;font-size:8.5px;font-weight:800;}
+.sms-topup svg{width:12px;}
+.sms-status-grid{display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:2px 7px;}
+.sms-status-grid span{display:flex;align-items:baseline;gap:4px;color:#7a7380;font-size:7.5px;}
+.sms-status-grid b{color:#2f2b38;font-size:10px;}
 .sms-filter{display:flex;gap:5px;}
 .sms-filter button{min-height:30px;padding:0 11px;border:1px solid #ddd5e0;border-radius:7px;background:#fff;color:#5f5866;font-size:9px;font-weight:750;}
 .sms-filter button.active{color:#fff;background:#762584;border-color:#762584;}
@@ -157,7 +157,7 @@
 .sms-admin > header button:disabled{opacity:0.5;}
 .sms-admin > header button svg{width:15px;}
 @media (max-width: 1000px){
-.sms-cards{grid-template-columns:repeat(2, minmax(0, 1fr));}
+.sms-cards{grid-template-columns:repeat(2, minmax(0, 1fr));gap:7px;}
 .sms-row{grid-template-columns:1fr;gap:5px;}
 }
 
@@ -285,6 +285,51 @@
 .product-stock-row select,.product-stock-row input{min-height:36px;padding:0 9px;border:1px solid #ddd5e0;border-radius:7px;font-size:11px;}
 .product-stock-row input:disabled{background:#f4f1f5;color:#9a939f;}
 @media (max-width: 620px){.product-stock-row{grid-template-columns:1fr;}}
+/* Every shop on screen at once. The dropdown made a three-shop count into three saves,
+   with the other two hidden while you typed the first. */
+.product-stock-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;padding:0 12px 12px;}
+.product-stock-grid label{display:flex;flex-direction:column;gap:4px;font-size:9px;font-weight:750;}
+.product-stock-grid input{min-height:36px;padding:0 9px;border:1px solid #ddd5e0;border-radius:7px;font-size:11px;}
+.product-stock-grid small{color:#7a7380;font-size:8px;font-weight:500;}
+
+/* Bulk edit: the whole catalogue as a grid of cells. Cells are dense on purpose — the
+   point of the screen is seeing many rows at once — but every input stays a real
+   touch target, and an edited row is tinted so unsaved work is visible at a glance. */
+.product-header-actions{display:flex;align-items:center;gap:8px;}
+.bulk-open{min-height:40px;padding:0 13px;border:1px solid #ddd2e0!important;border-radius:8px;color:#69216f!important;background:#fff!important;display:inline-flex;align-items:center;gap:6px;font-weight:800;}
+.bulk-open svg{width:15px;height:15px;}
+.bulk-editor{width:min(1400px,100%);margin:0 auto 18px;padding:16px;border:1px solid #e5dfe7;border-radius:12px;background:#fff;}
+.bulk-editor > header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;}
+.bulk-editor h2{margin:0;font-size:15px;}
+.bulk-editor > header p{margin:3px 0 0;color:#7a7380;font-size:9px;line-height:1.5;max-width:60ch;}
+.bulk-actions{display:flex;align-items:center;gap:8px;}
+.bulk-save{min-height:36px;padding:0 13px;border:0;border-radius:8px;color:#fff;background:#74247f;display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:800;cursor:pointer;}
+.bulk-save:disabled{opacity:.5;cursor:default;}
+.bulk-save svg{width:14px;height:14px;}
+.bulk-close{width:34px;height:34px;border:1px solid #e3dee5;border-radius:8px;background:#fff;display:grid;place-items:center;cursor:pointer;}
+.bulk-close svg{width:15px;height:15px;}
+.bulk-message{margin:10px 0 0;padding:8px 11px;border-radius:8px;color:#8a2036;background:#fdeef1;font-size:9.5px;}
+.bulk-message.ok{color:#215c39;background:#eef8f1;}
+.bulk-table-scroller{margin-top:12px;overflow-x:auto;border:1px solid #ece5ee;border-radius:10px;}
+.bulk-table{width:100%;border-collapse:collapse;font-size:10px;}
+.bulk-table th{position:sticky;top:0;z-index:2;padding:8px 9px;border-bottom:1px solid #e7e0e9;color:#5c5361;background:#faf7fb;text-align:left;font-size:9px;font-weight:800;white-space:nowrap;}
+.bulk-table td{padding:5px 6px;border-bottom:1px solid #f2edf3;vertical-align:middle;}
+.bulk-table tr.is-edited td{background:#fdf7ff;}
+.bulk-table input{width:100%;min-width:74px;min-height:32px;padding:0 7px;border:1px solid #e4dfe6;border-radius:6px;background:#fff;font-size:10px;}
+.bulk-table input:focus{border-color:#8d3a95;outline:0;box-shadow:0 0 0 2px #8d3a9514;}
+.bulk-table .bulk-name{min-width:230px;}
+.bulk-table .bulk-name input{font-weight:700;}
+.bulk-table .bulk-name small{display:block;margin-top:2px;color:#8a828f;font-size:8px;}
+.bulk-editor .compact-pagination{margin-top:12px;}
+/* Asked, not assumed: closing with typed-but-unsaved figures stops here first. */
+.bulk-confirm{margin-top:11px;padding:11px 13px;border:1px solid #f0dcc0;border-radius:9px;background:#fff8ec;display:flex;align-items:center;flex-wrap:wrap;gap:9px;}
+.bulk-confirm strong{margin-right:auto;color:#89521d;font-size:10px;}
+.bulk-confirm button{min-height:32px;padding:0 12px;border:1px solid #e3cba0;border-radius:7px;color:#89521d;background:#fff;font-size:9px;font-weight:800;cursor:pointer;}
+.bulk-confirm .bulk-save{border:0;color:#fff;background:#74247f;}
+@media (max-width: 700px){
+  .bulk-editor{padding:12px 10px;}
+  .bulk-table .bulk-name{min-width:170px;}
+}
 
 /* Editing modals on a phone with the keyboard open.
    `100vh` is the height of the viewport as if no keyboard existed, so the form ran on
@@ -309,4 +354,37 @@
 .product-modal > form{max-height:100dvh;width:100%;border-radius:0;}
 .product-modal footer{flex-wrap:wrap;}
 .product-modal footer button{flex:1 1 auto;}
+}
+
+/* VAT by order — the working behind the dashboard's VAT tile. */
+.metric-button{width:100%;border:0;background:transparent;font:inherit;text-align:left;cursor:pointer;}
+.vat-overlay{position:fixed;z-index:1000;inset:0;padding:20px;display:grid;place-items:safe center;overflow-y:auto;background:rgba(32,23,37,.6);backdrop-filter:blur(3px);}
+.vat-sheet{width:min(720px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden;border-radius:14px;background:#fff;}
+.vat-sheet > header{flex:0 0 auto;padding:13px 15px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;border-bottom:1px solid #eee8ef;}
+.vat-sheet h2{margin:0;font-size:14px;}
+.vat-sheet header p{margin:3px 0 0;color:#7a7380;font-size:9px;}
+.vat-sheet header button{width:32px;height:32px;flex:0 0 auto;border:1px solid #e2dbe4;border-radius:8px;background:#fff;}
+.vat-sheet header button svg{width:15px;}
+.vat-scroll{flex:1;min-height:0;overflow:auto;}
+.vat-table{width:100%;border-collapse:collapse;font-size:9.5px;}
+.vat-table th{position:sticky;top:0;padding:8px 12px;border-bottom:1px solid #eee8ef;background:#faf9fb;color:#7a7380;font-size:8px;font-weight:750;text-transform:uppercase;letter-spacing:.05em;text-align:left;}
+.vat-table td{padding:8px 12px;border-bottom:1px solid #f3eff4;}
+.vat-table th:nth-child(n+4),.vat-table td:nth-child(n+4){text-align:right;white-space:nowrap;}
+.vat-table a{color:#762584;font-weight:800;text-decoration:none;}
+.vat-table tfoot td{position:sticky;bottom:0;border-top:1px solid #e5dfe7;background:#faf9fb;font-weight:800;}
+@media (max-width: 640px){
+.vat-overlay{padding:0;align-items:end;}
+.vat-sheet{width:100%;max-height:92vh;border-radius:14px 14px 0 0;}
+.vat-table th:nth-child(3),.vat-table td:nth-child(3){display:none;}
+}
+.vat-table td small{display:block;margin-top:2px;color:#8a8290;font-size:8px;}
+.vat-table td:nth-child(5) small{color:#8a8290;}
+.vat-foot{flex:0 0 auto;padding:11px 15px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #eee8ef;background:#fff;}
+.vat-foot > span{color:#7a7380;font-size:8.5px;line-height:1.45;}
+.vat-foot button{flex:0 0 auto;min-height:38px;padding:0 14px;border:0;border-radius:8px;background:#762584;color:#fff;font-size:10px;font-weight:800;}
+.vat-foot button:disabled{opacity:.45;}
+.vat-notice{margin:0;flex:1 1 100%;order:-1;padding:7px 9px;border-radius:6px;background:#fff0f1;color:#a12635;font-size:9px;}
+@media (max-width: 640px){
+.vat-foot{flex-wrap:wrap;}
+.vat-foot button{width:100%;}
 }

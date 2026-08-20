@@ -4,21 +4,13 @@ import mysql, { type RowDataPacket } from "mysql2/promise";
 let pool: mysql.Pool | undefined;
 
 /**
- * Healthfield trades in one timezone, so both ends of the connection are pinned to it.
- *
- * Two separate clocks decide what a stored timestamp means, and left to their defaults
- * they disagree: MySQL answers `now()` in whatever the server's `time_zone` is, while
- * mysql2 parses the returned DATETIME string using the Node process's local timezone.
- * With a UTC host and a +03:00 database, every timestamp is read three hours ahead of
- * the event it records. Setting both to the same offset makes the round trip exact.
- *
- * TIMESTAMP columns hold UTC internally and are converted on the way in and out, so
- * pinning the session timezone corrects rows that were already written, not just new
- * ones. Verify after deploying with /health, which reports both clocks.
+ * Drizzle's MySQL TIMESTAMP mapper treats every returned wall-clock string as UTC.
+ * Therefore the SQL session must also return UTC. A +03:00 SQL session makes Drizzle
+ * append a false UTC suffix and every order, payment and receipt appears three hours
+ * ahead on Nova. Keep the storage/driver boundary canonical, then format timestamps as
+ * Africa/Nairobi at the API/UI edge.
  */
-export const DATABASE_TIMEZONE = /^[+-]\d{2}:\d{2}$/.test(process.env.DB_TIMEZONE || "")
-  ? (process.env.DB_TIMEZONE as string)
-  : "+03:00";
+export const DATABASE_TIMEZONE = "+00:00";
 
 export function getPool() {
   if (pool) return pool;
@@ -29,10 +21,8 @@ export function getPool() {
     enableKeepAlive: true,
     timezone: DATABASE_TIMEZONE,
   });
-  // Every pooled connection is stamped as it is opened. The pool option above only
-  // tells mysql2 how to read what it is given; this tells MySQL what to give. The
-  // offset is validated above, so interpolating it here cannot inject anything —
-  // MySQL does not accept a placeholder in a SET for a system variable.
+  // Every pooled connection is stamped as it is opened. The pool option above tells
+  // mysql2 how to read values; this tells MySQL and Drizzle what wall clock to return.
   //
   // Issued synchronously from the event handler, so it is first in that connection's
   // command queue and MySQL executes it before whatever the caller runs next.

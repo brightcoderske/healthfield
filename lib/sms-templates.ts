@@ -13,6 +13,7 @@
 export const smsPurposes = [
   "ORDER_RECEIVED",
   "POS_SALE_COMPLETE",
+  "POS_SESSION_CLOSED",
   "ORDER_READY_FOR_PICKUP",
   "ORDER_OUT_FOR_DELIVERY",
   "PAYMENT_CONFIRMED",
@@ -180,6 +181,11 @@ export function orderSms(purpose: SmsPurpose, context: OrderSmsContext): string 
       return toGsm7(
         `${hello}we have received your payment and your order has been processed. Thanks for shopping with ${brand}.${help}`,
       );
+    case "POS_SESSION_CLOSED":
+      // Session-close wording is composed by the POS report service because it targets
+      // owners rather than a customer order. This fallback keeps the purpose safe if a
+      // future caller supplies only an order context.
+      return toGsm7(`${brand}: a POS session has closed. Check your email for the full report.`);
     case "ORDER_READY_FOR_PICKUP":
       return toGsm7(
         `${hello}order ${context.orderNumber} is ready for pickup${branch ? ` at ${brand} ${branch}` : ` at ${brand}`}. Please carry your order number.${help}`,

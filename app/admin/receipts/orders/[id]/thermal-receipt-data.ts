@@ -1,6 +1,6 @@
 // Relative, not aliased: lib/thermal-receipt.test.ts runs this file under `node
 // --test`, which has no tsconfig path mapping to resolve "@/lib" with.
-import { vatIncludedIn, vatLabel } from "../../../../../lib/vat.ts";
+import { vatRateLabel } from "../../../../../lib/vat.ts";
 
 export type ReceiptMoney = string | number;
 
@@ -22,6 +22,8 @@ export type ReceiptOrder = {
   suggestedBranchId: number | null;
   createdAt: string;
   vat?: ReceiptMoney | null;
+  /** The rate charged at the time of sale, so an old receipt reprints unchanged. */
+  vatRate?: ReceiptMoney | null;
   amountTendered?: ReceiptMoney | null;
   change?: ReceiptMoney | null;
 };
@@ -119,11 +121,10 @@ export function prepareThermalReceipt(data: ReceiptApiData): Omit<ThermalReceipt
     address: null,
     licenceNumber: null,
   };
-  // Shelf prices include VAT, so the receipt discloses the tax inside the total rather
-  // than adding to it — the printed total still matches the M-Pesa receipt to the
-  // shilling. A figure already supplied with the order wins, so a POS sale that
-  // recorded its own VAT is never overwritten by today's rate.
-  const vat = business.vatEnabled === false ? null : data.order.vat ?? vatIncludedIn(data.order.total, business.vatRate);
+  // Shelf prices are net of VAT, so the tax was added to the total when the sale was
+  // made. The receipt prints what was charged, never a rate reapplied later, so an old
+  // receipt still reconciles against its M-Pesa payment to the shilling.
+  const vat = Number(data.order.vat) > 0 ? Number(data.order.vat) : null;
   const servedBy = data.receipt?.servedBy ?? (payment?.channel === "ONLINE" ? "Online order" : payment?.channel === "POS" ? "POS terminal" : null);
   return {
     order: { ...data.order, vat },
@@ -133,6 +134,6 @@ export function prepareThermalReceipt(data: ReceiptApiData): Omit<ThermalReceipt
     business,
     servedBy,
     receiptNumber: healthfieldReceiptNumber(data.order.id, branch?.code),
-    vatLabel: vatLabel(business.vatEnabled === false ? 0 : business.vatRate),
+    vatLabel: vatRateLabel(data.order.vatRate ?? business.vatRate),
   };
 }

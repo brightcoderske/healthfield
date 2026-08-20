@@ -8,12 +8,18 @@ import {
   ShieldCheck,
   ShoppingBag,
   TrendingUp,
+  Coins,
   TriangleAlert,
   Users,
   Send,
   Truck,
+  Receipt,
+  X,
 } from "lucide-react";
 import Link from "next/link";
+import { summariseProfit } from "@/lib/profit";
+import { parseVatRate, vatRateLabel } from "@/lib/vat";
+import { useRouter } from "next/navigation";
 type Row = {
   orderId: number;
   createdAt: string;
@@ -23,6 +29,9 @@ type Row = {
   quantity: number;
   lineTotal: string;
   category: string | null;
+  /** Buying price captured when the line sold, and the product's cost today. */
+  unitCost?: string | null;
+  productCost?: string | null;
 };
 type Order = {
   id: number;
@@ -54,8 +63,10 @@ export function Dashboard({
   deliveries = [],
   deliveryBands = [],
   recentOrders = [],
+  vat,
   variant = "admin",
   branchName,
+  role,
 }: {
   name: string;
   stats: {
@@ -70,12 +81,29 @@ export function Dashboard({
   deliveries?: DeliveryRow[];
   deliveryBands?: Array<{ id: number; label: string; minKm: string }>;
   recentOrders?: Order[];
+  /** Optional: the API service deploys separately, so an older build omits it. */
+  vat?: {
+    enabled: boolean;
+    rate: number;
+    since?: string;
+    collected?: number;
+    orderCount?: number;
+    orders?: Array<{ id: number; orderNumber: string; customerName: string; source: string; subtotal: number; vat: number; vatRate: number; total: number; branch: string | null; createdAt: string }>;
+  };
   variant?: "admin" | "staff";
   branchName?: string;
+  /** Profit is the owner's figure; only SUPER_ADMIN sees it. */
+  role?: string;
 }) {
   const staff = variant === "staff";
   const base = staff ? "/staff" : "/admin";
   const [range, setRange] = useState<7 | 30 | 90>(7);
+  const [sendingReport, setSendingReport] = useState(false);
+  const [vatOpen, setVatOpen] = useState(false);
+  const [remitting, setRemitting] = useState(false);
+  const [remitNotice, setRemitNotice] = useState("");
+  const router = useRouter();
+  const [reportNotice, setReportNotice] = useState("");
   const data = useMemo(() => {
     const now = new Date(),
       keys =
@@ -101,8 +129,11 @@ export function Dashboard({
                 }),
               };
             }),
-      bins = keys.map((x) => ({ ...x, sales: 0, orders: new Set<number>() })),
-      cats = new Map<string, number>(),
+      bins = keys.map((x) => ({ ...x, sales: 0, profit: 0, orders: new Set<number>() })),
+      cats = new Map<string, number>();
+    let estimatedSales = 0,
+      unpricedSales = 0;
+    const
       products = new Map<string, { sales: number; units: number }>(),
       attention = new Set<number>();
     for (const r of analytics) {
@@ -112,6 +143,12 @@ export function Dashboard({
       if (!bin) continue;
       const v = Number(r.lineTotal);
       bin.sales += v;
+      // One line at a time, by the same rules the reports use: a line with no cost
+      // anywhere is left out of profit rather than counted as all margin.
+      const line = summariseProfit([r]);
+      bin.profit += line.profit;
+      estimatedSales += line.estimatedSales;
+      unpricedSales += line.unpricedSales;
       bin.orders.add(r.orderId);
       if (r.status === "NEW") attention.add(r.orderId);
       cats.set(
@@ -124,10 +161,14 @@ export function Dashboard({
       products.set(r.productName, p);
     }
     const sales = bins.reduce((n, x) => n + x.sales, 0),
+      profit = bins.reduce((n, x) => n + x.profit, 0),
       orders = new Set(bins.flatMap((x) => [...x.orders]));
     return {
       bins,
       sales,
+      profit,
+      estimatedSales,
+      unpricedSales,
       orderCount: orders.size,
       attentionCount: attention.size,
       cats: [...cats].sort((a, b) => b[1] - a[1]),
@@ -141,6 +182,23 @@ export function Dashboard({
   // charge into product revenue would inflate it and distort average order value and
   // best sellers. It is counted per order, never per item, because one order carries
   // one delivery fee however many things are in the basket.
+  const vatRate = parseVatRate(vat?.rate);
+  const vatOrders = vat?.orders ?? [];
+  const vatCollected = vat?.collected ?? 0;
+
+  // Recording a remittance is what returns the running figure to zero; the orders the
+  // tax came from are never touched.
+  async function recordRemittance() {
+    if (remitting) return;
+    setRemitting(true);
+    setRemitNotice("");
+    const response = await fetch("/api/vat/remittances", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => null);
+    const body = await response?.json().catch(() => ({}));
+    if (!response?.ok) setRemitNotice(body?.error || "The remittance could not be recorded.");
+    else { setVatOpen(false); router.refresh(); }
+    setRemitting(false);
+  }
+
   const delivery = useMemo(() => {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - (range - 1));
@@ -206,6 +264,18 @@ export function Dashboard({
           value={money(data.sales)}
           note={`${data.orderCount} orders in range`}
         />
+        {role === "SUPER_ADMIN" ? (
+          <Metric
+            icon={<Coins />}
+            label="Profit"
+            value={money(data.profit)}
+            note={data.unpricedSales > 0
+              ? `${money(data.unpricedSales)} of sales has no buying price yet`
+              : data.estimatedSales > 0
+                ? `${money(data.estimatedSales)} used an estimated buying price`
+                : `${data.sales > 0 ? Math.round((data.profit / data.sales) * 100) : 0}% margin in range`}
+          />
+        ) : null}
         <Metric
           icon={<ShoppingBag />}
           label="Orders"
@@ -242,6 +312,21 @@ export function Dashboard({
             }
           />
         ) : null}
+        {!staff ? (
+          <Metric
+            icon={<Receipt />}
+            label="VAT to remit"
+            value={money(vatCollected)}
+            note={
+              !vatRate
+                ? "Set a VAT rate in settings to charge it"
+                : vatOrders.length
+                  ? `${vatOrders.length} sales since the last remittance · tap for the list`
+                  : "No VAT charged since the last remittance"
+            }
+            onClick={vatOrders.length ? () => setVatOpen(true) : undefined}
+          />
+        ) : null}
         {!staff && stats.sms ? (
           <Metric
             icon={<Send />}
@@ -274,7 +359,20 @@ export function Dashboard({
                   : "Last 90 days"
             }
           />
-          <Chart bins={data.bins} />
+          <Chart bins={data.bins} showProfit={role === "SUPER_ADMIN" && data.profit > 0} />
+          {role === "SUPER_ADMIN" ? <div className="report-send">
+            <button type="button" disabled={sendingReport} onClick={async () => {
+              // The nightly email is unattended; this is how you see the real thing
+              // before eleven, built from today's real figures.
+              setSendingReport(true);
+              setReportNotice("");
+              const response = await fetch("/api/reports/daily", { method: "POST" }).catch(() => null);
+              const body = await response?.json().catch(() => ({}));
+              setReportNotice(body?.message || body?.error || "The report could not be sent.");
+              setSendingReport(false);
+            }}>{sendingReport ? "Sending…" : "Email today's report"}</button>
+            {reportNotice ? <small role="status">{reportNotice}</small> : null}
+          </div> : null}
         </article>
         <article className="dashboard-card">
           <Card title="Sales by category" text="Hover a segment for revenue" />
@@ -365,6 +463,50 @@ export function Dashboard({
         </article>
         ) : null}
       </section>
+      {vatOpen ? (
+        <div className="vat-overlay" role="dialog" aria-modal="true" aria-label="VAT to remit" onClick={() => setVatOpen(false)}>
+          <section className="vat-sheet" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <h2>VAT to remit</h2>
+                <p>
+                  {money(vatCollected)} on {vatOrders.length} {vatOrders.length === 1 ? "sale" : "sales"}
+                  {vat?.since && !vat.since.startsWith("1970") ? ` since ${new Date(vat.since).toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi", day: "numeric", month: "short", year: "numeric" })}` : " since the shop opened"}
+                </p>
+              </div>
+              <button type="button" aria-label="Close" onClick={() => setVatOpen(false)}><X /></button>
+            </header>
+            <div className="vat-scroll">
+              <table className="vat-table">
+                <thead>
+                  <tr><th>Order</th><th>Date</th><th>Source</th><th>Net</th><th>VAT</th></tr>
+                </thead>
+                <tbody>
+                  {vatOrders.map((row) => (
+                    <tr key={row.id}>
+                      <td><Link href={`${base}/orders/${row.id}`}>{row.orderNumber}</Link><small>{row.customerName}</small></td>
+                      <td>{new Date(row.createdAt).toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi", month: "short", day: "numeric" })}</td>
+                      <td>{row.source}{row.branch ? ` · ${row.branch}` : ""}</td>
+                      <td>{money(row.subtotal)}</td>
+                      <td><b>{money(row.vat)}</b><small>{vatRateLabel(row.vatRate)}</small></td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr><td colSpan={4}>Total to remit</td><td><b>{money(vatCollected)}</b></td></tr>
+                </tfoot>
+              </table>
+            </div>
+            <footer className="vat-foot">
+              {remitNotice ? <p className="vat-notice">{remitNotice}</p> : null}
+              <span>Recording a remittance starts the next period from zero. The orders above are never changed.</span>
+              <button type="button" disabled={remitting || vatCollected <= 0} onClick={recordRemittance}>
+                {remitting ? "Recording…" : `Mark ${money(vatCollected)} paid to KRA`}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -374,6 +516,7 @@ function Metric(p: {
   value: string;
   note: string;
   href?: string;
+  onClick?: () => void;
 }) {
   const body = (
     <>
@@ -394,6 +537,13 @@ function Metric(p: {
       </Link>
     );
   }
+  if (p.onClick) {
+    return (
+      <button type="button" className="metric-link metric-button" onClick={p.onClick}>
+        {body}
+      </button>
+    );
+  }
   return (
     <article>
       {body}
@@ -412,8 +562,10 @@ function Card(p: { title: string; text: string }) {
 }
 function Chart({
   bins,
+  showProfit = false,
 }: {
-  bins: { label: string; sales: number; orders: Set<number> }[];
+  bins: { label: string; sales: number; profit: number; orders: Set<number> }[];
+  showProfit?: boolean;
 }) {
   const [hover, setHover] = useState(0),
     [pointer, setPointer] = useState<{ x: number; y: number } | null>(null),
@@ -422,6 +574,9 @@ function Chart({
     xy = (n: number, max: number, i: number) =>
       `${(i / Math.max(1, bins.length - 1)) * 100},${92 - (n / max) * 80}`,
     sales = bins.map((b, i) => xy(b.sales, max, i)).join(" "),
+    // Profit shares the sales axis deliberately: the distance between the two lines is
+    // the cost of goods, which is the thing worth seeing.
+    profit = bins.map((b, i) => xy(b.profit, max, i)).join(" "),
     orders = bins.map((b, i) => xy(b.orders.size, omax, i)).join(" ");
   return (
     <div className="line-chart">
@@ -434,7 +589,7 @@ function Chart({
           <i />
           Orders
         </span>
-        <span>Profit needs product costs</span>
+        {showProfit ? <span className="profit-key"><i />Profit</span> : <span>Profit needs product costs</span>}
       </div>
       <svg
         viewBox="0 0 100 100"
@@ -460,10 +615,11 @@ function Chart({
           <line key={y} x1="0" y1={y} x2="100" y2={y} />
         ))}
         <polyline points={sales} />
+        {showProfit ? <polyline className="profit" points={profit} /> : null}
         <polyline className="orders" points={orders} />
       </svg>
       {pointer && <b className="chart-tip" style={{ left: pointer.x, top: pointer.y }}>
-        {bins[hover].label}: {money(bins[hover].sales)} · {bins[hover].orders.size} orders
+        {bins[hover].label}: {money(bins[hover].sales)} · {bins[hover].orders.size} orders{showProfit ? ` · profit ${money(bins[hover].profit)}` : ""}
       </b>}
       <div className="chart-labels">
         {bins.map((b) => (

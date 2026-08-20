@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleAlert, CreditCard, Lock, Megaphone, MessageSquareText, RefreshCw, Wallet } from "lucide-react";
+import { CircleAlert, CreditCard, Lock, Megaphone, MessageSquareText, RefreshCw, Smartphone, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
@@ -158,6 +158,12 @@ export function SmsReports({ data }: { data: SmsReportData }) {
           <a href={data.topUpUrl} target="_blank" rel="noreferrer" className="sms-topup">
             <CreditCard /> Recharge credits
           </a>
+        </article>
+        <article className="sms-card">
+          <span className="sms-card-label"><Smartphone /> How to recharge</span>
+          <small>Paybill<b>2007272</b></small>
+          <small>Account<b>Healthfield</b></small>
+          <small>Credit appears here once Celcom confirms the payment.</small>
         </article>
         <article className="sms-card">
           <span className="sms-card-label"><MessageSquareText /> Last 30 days</span>

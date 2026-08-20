@@ -12,10 +12,14 @@ import { handleSmsReportRefresh } from "./sms-routes";
 import { handleDeliveryBands, handleDeliveryPreview, handleDeliveryQuote, handleDeliverySettings } from "./delivery";
 import { handleView } from "./views";
 import { mpesaConfiguration } from "./mpesa";
+import { handleDailyReportSend, runDailyReportIfDue } from "./daily-report";
+import { handlePosExpenses, handlePosHeldSales, handlePosReports, handlePosSessions, handlePosStockReceipts, posWorkspaceState } from "./pos";
+import { handleVatRemittances } from "./vat";
+import { handlePosSale } from "./pos-sale";
 import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bRegistration, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, reconcilePendingStkPayments, recoverMissedMpesaPayments } from "./payment-handlers";
 import {
   handleAuth, handleBlogs, handleCampaigns, handleChats, handleCustomerOrderReceived, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptionSelection, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
-  handleProductImage, handleProducts, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
+  handleProductImage, handleProducts, handleProductsBulk, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
 } from "./mutations";
 
 const envPath = resolve(process.cwd(), ".env");
@@ -124,13 +128,30 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/payments/cancel") return responseOf(handlePaymentCancel(request));
   if (url.pathname === "/v1/payments/mobile-money/recover") return responseOf(handlePullTransactionsRecovery(request));
   if (url.pathname === "/v1/payments/mobile-money/c2b/register") return responseOf(handleC2bRegistration(request));
+  if (url.pathname === "/v1/reports/daily") return responseOf(handleDailyReportSend(request));
+  if (url.pathname === "/v1/products/bulk") return responseOf(handleProductsBulk(request));
+  if (url.pathname === "/v1/pos/state") return responseOf(posWorkspaceState(request));
+  if (url.pathname === "/v1/pos/sessions") return responseOf(handlePosSessions(request));
+  const posSessionClose = url.pathname.match(/^\/v1\/pos\/sessions\/(\d+)\/close$/);
+  if (posSessionClose) return responseOf(handlePosSessions(request, Number(posSessionClose[1]), "close"));
+  if (url.pathname === "/v1/pos/held-sales") return responseOf(handlePosHeldSales(request));
+  const posHeldSale = url.pathname.match(/^\/v1\/pos\/held-sales\/(\d+)$/);
+  if (posHeldSale) return responseOf(handlePosHeldSales(request, Number(posHeldSale[1])));
+  if (url.pathname === "/v1/pos/expenses") return responseOf(handlePosExpenses(request));
+  const posExpense = url.pathname.match(/^\/v1\/pos\/expenses\/(\d+)$/);
+  if (posExpense) return responseOf(handlePosExpenses(request, Number(posExpense[1])));
+  if (url.pathname === "/v1/pos/stock-receipts") return responseOf(handlePosStockReceipts(request));
+  const posStockReceiptImage = url.pathname.match(/^\/v1\/pos\/stock-receipts\/(\d+)\/image$/);
+  if (posStockReceiptImage) return responseOf(handlePosStockReceipts(request, Number(posStockReceiptImage[1]), true));
+  if (url.pathname === "/v1/pos/reports") return responseOf(handlePosReports(request));
+  if (url.pathname === "/v1/vat/remittances") return responseOf(handleVatRemittances(request));
   const incomingPaymentMatch = url.pathname.match(/^\/v1\/payments\/incoming\/(\d+)\/match$/);
   if (incomingPaymentMatch) return responseOf(handleIncomingPaymentMatch(request, Number(incomingPaymentMatch[1])));
   const posIncomingPaymentConfirmation = url.pathname.match(/^\/v1\/payments\/incoming\/(\d+)\/confirm-pos$/);
   if (posIncomingPaymentConfirmation) return responseOf(handlePosIncomingPaymentConfirm(request, Number(posIncomingPaymentConfirmation[1])));
   const paymentReviewMatch = url.pathname.match(/^\/v1\/payments\/(\d+)\/review$/);
   if (paymentReviewMatch) return responseOf(handlePaymentReview(request, Number(paymentReviewMatch[1])));
-  if (url.pathname === "/v1/walk-in-sales") return responseOf(handleWalkInSales(request));
+  if (url.pathname === "/v1/walk-in-sales") return responseOf(handlePosSale(request));
   if (url.pathname === "/v1/offers") return responseOf(handleOffers(request));
   const offerMatch=url.pathname.match(/^\/v1\/offers\/(\d+)$/);if(offerMatch)return responseOf(handleOffers(request,Number(offerMatch[1])));
   if (url.pathname === "/v1/campaigns") return responseOf(handleCampaigns(request));
@@ -243,6 +264,11 @@ const initialPaymentRecovery = setTimeout(() => void recoverMissedMpesaPayments(
 initialPaymentRecovery.unref();
 const paymentRecovery = setInterval(() => void recoverMissedMpesaPayments(null, 2).catch((error) => console.error("Scheduled M-Pesa Pull recovery failed", error)), 15 * 60_000);
 paymentRecovery.unref();
+// The end-of-day note. Checked every twenty minutes rather than scheduled for eleven:
+// Passenger idles this process out, so the report is sent by whichever tick first finds
+// the trading day past 23:00, and the activity-log guard keeps it to one a day.
+const dailyReport = setInterval(() => void runDailyReportIfDue().catch((error) => console.error("Daily sales report failed", error)), 20 * 60_000);
+dailyReport.unref();
 
 let shuttingDown = false;
 async function shutdown(signal: string) {
@@ -253,6 +279,7 @@ async function shutdown(signal: string) {
   clearInterval(stkReconciliation);
   clearTimeout(initialPaymentRecovery);
   clearInterval(paymentRecovery);
+  clearInterval(dailyReport);
   console.log(`Healthfield API received ${signal}; closing server and database pool.`);
   const forceExit = setTimeout(() => process.exit(0), 5_000);
   forceExit.unref();
