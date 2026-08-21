@@ -816,13 +816,26 @@ async function productCosts(ids: Array<number | null | undefined>) {
 const stockEntrySchema = z.object({ branchId: z.coerce.number().int().positive(), quantityAvailable: z.coerce.number().int().nonnegative().max(1_000_000), reorderLevel: z.coerce.number().int().nonnegative().optional() });
 const productStockSchema = z.union([stockEntrySchema, z.array(stockEntrySchema).max(50)]).nullable().optional();
 
+/**
+ * A text field that is allowed to be empty.
+ *
+ * An empty box on the product form arrives as null just as readily as it arrives as ""
+ * or not at all — a blank barcode, a product saved before any image is chosen. All three
+ * mean the same thing here, so all three become "": rejecting null only produced
+ * "expected string, received null" against a form the person had filled in correctly.
+ */
+const optionalText = (max: number) => z.string().trim().max(max).nullish().transform((value) => value ?? "");
+
 const productSchema = z.object({
-  categoryId: z.coerce.number().int().positive(), name: z.string().trim().min(2).max(220), brand: z.string().trim().max(150).optional().default(""),
-  barcode: z.string().trim().max(100).optional().default(""),
-  shortDescription: z.string().trim().max(500).optional().default(""), imageUrl: z.string().trim().max(500).optional().default(""),
-  description: z.string().trim().max(10000).optional().default(""),
-  price: z.coerce.number().nonnegative(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), packSize: z.string().trim().max(100).optional().default(""),
+  categoryId: z.coerce.number().int().positive(), name: z.string().trim().min(2).max(220), brand: optionalText(150),
+  barcode: optionalText(100),
+  shortDescription: optionalText(500), imageUrl: optionalText(500),
+  description: optionalText(10000),
+  price: z.coerce.number().nonnegative(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), packSize: optionalText(100),
   prescriptionRequired: z.coerce.boolean().default(false), isFeatured: z.coerce.boolean().default(false), conditionIds: z.array(z.coerce.number().int().positive()).optional().default([]),
+  // A new product saved from the draft button must land switched off, exactly as the
+  // same button does when the product already exists.
+  isActive: z.boolean().optional().default(true),
   stock: productStockSchema,
 });
 
@@ -835,7 +848,13 @@ export async function handleProducts(request: Request, id?: number) {
   if ("response" in auth) return auth.response;
   if (request.method === "POST" && !id) {
     const parsed = productSchema.safeParse(await body(request));
-    if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "Invalid product." }, { status: 400 });
+    if (!parsed.success) {
+      // Naming the field turns "expected string, received null" into something the
+      // person at the counter can act on without reading the server log.
+      const issue = parsed.error.issues[0];
+      const field = issue?.path.join(" ");
+      return json({ error: issue ? `${field ? `${field}: ` : ""}${issue.message}` : "Invalid product." }, { status: 400 });
+    }
     const values = parsed.data;
     // A manager can price a product; only the owner decides what it cost.
     if (auth.session.role !== "SUPER_ADMIN") values.costPrice = undefined;
@@ -851,7 +870,7 @@ export async function handleProducts(request: Request, id?: number) {
     const generatedSku = `HF-${suffix.toUpperCase()}`;
     const baseSlug = values.name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const created = await db.transaction(async (tx) => {
-      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: generatedSku, barcode: values.barcode || null, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), costPrice: values.costPrice == null ? null : values.costPrice.toFixed(2), costPriceEstimated: values.costPrice == null, packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: values.isFeatured, isActive: true });
+      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: generatedSku, barcode: values.barcode || null, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), costPrice: values.costPrice == null ? null : values.costPrice.toFixed(2), costPriceEstimated: values.costPrice == null, packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: values.isFeatured, isActive: values.isActive });
       if (values.conditionIds.length) await tx.insert(productHealthConditions).values(values.conditionIds.map((conditionId) => ({ productId: record.insertId, conditionId })));
       const stores = await tx.select({ id: branches.id }).from(branches).where(eq(branches.isActive, true));
       if (stores.length) await tx.insert(branchInventory).values(stores.map((store) => ({ branchId: store.id, productId: record.insertId, quantityAvailable: 0, quantityReserved: 0, reorderLevel: 5, updatedBy: auth.session.userId })));

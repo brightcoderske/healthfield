@@ -61,6 +61,9 @@ export function ProductManager({ initialProducts, categories, conditions, branch
   // The editor owns the unsaved-work question; the header button just asks it to close.
   const closeBulk = useRef<(() => void) | null>(null);
   const [stockRows, setStockRows] = useState(stock);
+  // The formatted description lives inside the editor, not in a plain field, so a
+  // recovered draft has to be handed back to it rather than written to the form.
+  const restoreDescription = useRef<((html: string) => void) | null>(null);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -167,7 +170,7 @@ export function ProductManager({ initialProducts, categories, conditions, branch
     const form = formRef.current;
     if (!form) return;
     const data = new FormData(form);
-    setSnapshot({
+    const next: Record<string, string> = {
       name: String(data.get("name") || ""),
       brand: String(data.get("brand") || ""),
       packSize: String(data.get("packSize") || ""),
@@ -175,7 +178,13 @@ export function ProductManager({ initialProducts, categories, conditions, branch
       price: String(data.get("price") || ""),
       discountPrice: String(data.get("discountPrice") || ""),
       categoryId: String(data.get("categoryId") || ""),
-    });
+    };
+    // Every input event in the form reaches here, the formatting ribbon's dropdowns
+    // included. Handing back a fresh object each time re-rendered the whole form in the
+    // middle of choosing a size — between the dropdown's input and change events — and
+    // React put the dropdown back to its label before the choice could be read. Only a
+    // real difference is worth a render.
+    setSnapshot((current) => (current && Object.keys(next).every((key) => current[key] === next[key]) ? current : next));
   }
   function chooseImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] || null;
@@ -259,9 +268,11 @@ export function ProductManager({ initialProducts, categories, conditions, branch
             const form = formRef.current;
             if (form) {
               for (const [field, value] of Object.entries(values)) {
+                if (field === "description") continue;
                 const input = form.elements.namedItem(field) as HTMLInputElement | null;
                 if (input && "value" in input) input.value = value;
               }
+              restoreDescription.current?.(values.description ?? "");
               captureForm();
             }
             draft.dismiss();
@@ -288,7 +299,7 @@ export function ProductManager({ initialProducts, categories, conditions, branch
         <label>Regular price (before discount)<input name="price" type="number" min="0" step=".01" value={regularPrice} onChange={event=>setRegularPrice(event.target.value)} required/><small>The normal or previous customer price.</small></label><label>Selling price (customer pays)<input name="discountPrice" type="number" min="0" max={regularPrice||undefined} step=".01" value={sellingPrice} onChange={event=>setSellingPrice(event.target.value)}/><small>{sellingPrice&&regularPrice&&Number(sellingPrice)<Number(regularPrice)?`Discount calculated automatically: Save ${Math.round((1-Number(sellingPrice)/Number(regularPrice))*100)}%`:`Leave blank when the product is not discounted.`}</small></label>
         <label className="full">Product image<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/bmp,image/tiff,.jpg,.jpeg,.png,.webp,.gif,.avif,.bmp,.tif,.tiff" onChange={chooseImage}/><small>JPEG, PNG, WebP, GIF, AVIF, BMP or TIFF. Maximum 2 MB.</small></label>
         {(imagePreview||activeEdit?.imageUrl)&&<div className="edit-image-preview full"><img src={imagePreview||activeEdit?.imageUrl||""} alt={activeEdit?.name||"New product preview"}/>{activeEdit?.imageUrl&&!imagePreview&&<button type="button" onClick={()=>removeImage(activeEdit)}><ImageOff/> Remove image now</button>}</div>}
-        <div className="full rich-text-field"><span>Detailed description</span><RichTextEditor defaultValue={activeEdit?.description||""} rows={10} maxLength={10000} helper="Formatting counts toward the limit, so a richly styled description uses more than its visible text"/></div>
+        <div className="full rich-text-field"><span>Detailed description</span><RichTextEditor restoreRef={restoreDescription} defaultValue={activeEdit?.description||""} rows={10} maxLength={10000} helper="Formatting counts toward the limit, so a richly styled description uses more than its visible text"/></div>
         <fieldset className="full condition-picker"><legend>Health conditions supported by this product</legend>{conditions.map((item)=><label key={item.id}><input type="checkbox" name="conditionIds" value={item.id} defaultChecked={activeEdit?.conditionIds.includes(item.id)}/><span>{item.name}</span></label>)}</fieldset>
         {branches.length ? (
           // Collapsed by default: stock is the exception when editing a product, so it

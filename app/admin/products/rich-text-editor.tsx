@@ -27,7 +27,7 @@ import {
   Undo2,
   Unlink,
 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { richTextToPlainText, richTextToSafeHtml } from "@/lib/rich-text-content";
 
 const TEXT_COLOURS = ["#2a1730", "#7c2382", "#c2185b", "#15803d", "#1d4ed8", "#b45309"];
@@ -41,6 +41,7 @@ const FONT_SIZES = [
 const FONT_FAMILIES = ["Arial", "Georgia", "Times New Roman", "Verdana", "Trebuchet MS", "Courier New"] as const;
 
 type TiptapEditor = NonNullable<ReturnType<typeof useEditor>>;
+type ChainedCommands = ReturnType<TiptapEditor["chain"]>;
 
 function validLink(value: string) {
   const href = value.trim();
@@ -156,6 +157,29 @@ function RichTextToolbar({ editor }: { editor: TiptapEditor | null }) {
     },
   });
 
+  /**
+   * Applies a size or font from the ribbon.
+   *
+   * Picking one of these moves the focus into the dropdown, so people choose the style
+   * first and then click back into the words to type. With nothing selected the style
+   * would only be a pending mark, and that click — any click — throws a pending mark
+   * away: the text came out at the old size and the dropdown snapped back to its label.
+   * With no selection the paragraph the caret sits in is styled instead, which is what
+   * "make this bigger" means when nothing is highlighted. The caret is put back where it
+   * was, so typing carries on in place and inherits the style.
+   */
+  const applyTextStyle = (apply: (chain: ChainedCommands) => ChainedCommands) => {
+    if (!editor) return;
+    const { empty, $from, from } = editor.state.selection;
+    const blockStart = $from.start();
+    const blockEnd = $from.end();
+    if (empty && blockEnd > blockStart) {
+      apply(editor.chain().focus().setTextSelection({ from: blockStart, to: blockEnd })).setTextSelection(from).run();
+      return;
+    }
+    apply(editor.chain().focus()).run();
+  };
+
   const editLink = () => {
     if (!editor) return;
     const previous = String(editor.getAttributes("link").href || "");
@@ -176,9 +200,15 @@ function RichTextToolbar({ editor }: { editor: TiptapEditor | null }) {
       aria-label="Text style"
       value={state?.block || "p"}
       disabled={!editor}
-      onChange={(event) => {
-        if (event.target.value === "h2") editor?.chain().focus().setHeading({ level: 2 }).run();
-        else if (event.target.value === "h3") editor?.chain().focus().setHeading({ level: 3 }).run();
+      // Acted on as the value changes rather than when the browser settles it. These
+      // dropdowns show what the text already is, so a re-render between the two events —
+      // and the form re-renders on every input — puts the old value back before `change`
+      // arrives, and the pick is read as "no change". `input` runs first, on the value
+      // the person actually chose.
+      onInput={(event) => {
+        const block = event.currentTarget.value;
+        if (block === "h2") editor?.chain().focus().setHeading({ level: 2 }).run();
+        else if (block === "h3") editor?.chain().focus().setHeading({ level: 3 }).run();
         else editor?.chain().focus().setParagraph().run();
       }}
     >
@@ -217,9 +247,9 @@ function RichTextToolbar({ editor }: { editor: TiptapEditor | null }) {
       title="Font size"
       value={state?.fontSize || ""}
       disabled={!editor}
-      onChange={(event) => {
-        if (event.target.value) editor?.chain().focus().setFontSize(event.target.value).run();
-        else editor?.chain().focus().unsetFontSize().run();
+      onInput={(event) => {
+        const size = event.currentTarget.value;
+        applyTextStyle((chain) => (size ? chain.setFontSize(size) : chain.unsetFontSize()));
       }}
     >
       <option value="">Size</option>
@@ -232,9 +262,9 @@ function RichTextToolbar({ editor }: { editor: TiptapEditor | null }) {
       title="Font style"
       value={state?.fontFamily || ""}
       disabled={!editor}
-      onChange={(event) => {
-        if (event.target.value) editor?.chain().focus().setFontFamily(event.target.value).run();
-        else editor?.chain().focus().unsetFontFamily().run();
+      onInput={(event) => {
+        const family = event.currentTarget.value;
+        applyTextStyle((chain) => (family ? chain.setFontFamily(family) : chain.unsetFontFamily()));
       }}
     >
       <option value="">Site font</option>
@@ -324,6 +354,7 @@ export function RichTextEditor({
   maxLength = 1000,
   placeholder = "Write a detailed description…",
   helper = "Maximum 1,000 characters",
+  restoreRef,
 }: {
   defaultValue?: string;
   name?: string;
@@ -331,9 +362,17 @@ export function RichTextEditor({
   maxLength?: number;
   placeholder?: string;
   helper?: string;
+  /** Filled with a function that puts saved HTML back into the editor, for draft recovery. */
+  restoreRef?: { current: ((html: string) => void) | null };
 }) {
   const initialHtml = useMemo(() => richTextToSafeHtml(defaultValue), [defaultValue]);
   const hiddenInputRef = useRef<HTMLInputElement>(null);
+  // The field carries its value in state, not only in the DOM. A hidden input has no
+  // dirty-value flag — `value` and `defaultValue` are one and the same attribute — so
+  // every re-render of the surrounding form re-applied the original HTML and discarded
+  // the formatting that had just been chosen. Typing in any other field of the product
+  // form was enough to do it.
+  const [html, setHtml] = useState(initialHtml);
   const editor = useEditor({
     immediatelyRender: false,
     shouldRerenderOnTransaction: false,
@@ -369,7 +408,12 @@ export function RichTextEditor({
           }
           const point = view.posAtCoords({ left: event.clientX, top: event.clientY });
           if (!point) return false;
-          view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(point.pos))));
+          const transaction = view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(point.pos)));
+          // Moving the caret must not discard a colour or size chosen a moment ago and
+          // not yet typed into: clicking where the words should go is part of applying
+          // it, not a reason to forget it.
+          if (view.state.storedMarks) transaction.setStoredMarks(view.state.storedMarks);
+          view.dispatch(transaction);
           view.focus();
           return false;
         },
@@ -384,17 +428,32 @@ export function RichTextEditor({
       },
     },
     onUpdate: ({ editor: current }) => {
-      if (!hiddenInputRef.current) return;
-      const html = current.getHTML();
-      hiddenInputRef.current.value = html === "<p></p>" ? "" : html;
+      const next = current.getHTML();
+      const value = next === "<p></p>" ? "" : next;
+      // Written straight to the node as well, so anything reading the form during this
+      // same keystroke — the on-device draft, for one — sees the current text.
+      if (hiddenInputRef.current) hiddenInputRef.current.value = value;
+      setHtml(value);
     },
   });
+
+  useEffect(() => {
+    if (!restoreRef) return;
+    restoreRef.current = editor
+      ? (value: string) => {
+          const safe = richTextToSafeHtml(value);
+          editor.commands.setContent(safe);
+          setHtml(safe === "<p></p>" ? "" : safe);
+        }
+      : null;
+    return () => { restoreRef.current = null; };
+  }, [editor, restoreRef]);
 
   return <div className="rich-editor tiptap-rich-editor">
     <RichTextToolbar editor={editor}/>
     <RichTextBubble editor={editor}/>
     <EditorContent editor={editor} style={{ minHeight: `${Math.max(5, rows) * 22}px` }}/>
-    <input ref={hiddenInputRef} type="hidden" name={name} defaultValue={initialHtml}/>
+    <input ref={hiddenInputRef} type="hidden" name={name} value={html} readOnly/>
     <RichTextStatus editor={editor} helper={helper} maxLength={maxLength} initialCharacters={richTextToPlainText(initialHtml).length}/>
   </div>;
 }
