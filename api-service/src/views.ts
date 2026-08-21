@@ -282,6 +282,9 @@ async function home() {
         id: categories.id,
         name: categories.name,
         slug: categories.slug,
+        // Which main category this one sits under, so the storefront can group the
+        // menus and roll a parent's subcategories into its product list.
+        parentId: categories.parentId,
         featuredOnStorefront: categories.featuredOnStorefront,
       })
       .from(categories)

@@ -1,0 +1,174 @@
+/* Two-level categories on the storefront: main categories with the subcategories
+   filed under them, in the header menu, the homepage panel, the search sidebar and
+   the mobile sheet. */
+
+/* Mobile sheet ---------------------------------------------------------- */
+/* Always available, and the only one of these surfaces a touch screen gets, since a
+   flyout that needs hover is no use on a phone. */
+.mobile-shop-menu .mobile-category-group{display:contents;}
+.mobile-shop-menu details > div a.is-subcategory{
+  padding-left:18px;
+  color:#6f6674;
+  font-size:9.5px;
+  font-weight:600;
+  position:relative;
+}
+.mobile-shop-menu details > div a.is-subcategory::before{
+  content:"";
+  position:absolute;
+  left:7px;
+  top:50%;
+  width:5px;
+  height:5px;
+  margin-top:-2.5px;
+  border-radius:50%;
+  background:#d3bcd8;
+}
+
+@media(min-width:821px){
+  /* Header hover menu -------------------------------------------------- */
+  .category-nav-grid{
+    display:block;
+    column-count:3;
+    column-gap:10px;
+    align-items:start;
+  }
+  .category-nav-column{
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    gap:2px;
+    /* A heading must never be split from the subcategories under it. */
+    break-inside:avoid;
+    page-break-inside:avoid;
+    margin-bottom:6px;
+  }
+  .category-nav-column > a{font-weight:750!important;}
+  .category-nav-children{display:flex;flex-direction:column;gap:1px;padding:2px 0 6px;}
+  .desktop-nav-grid .category-nav-children a{
+    min-height:26px!important;
+    padding:4px 9px 4px 17px;
+    background:transparent!important;
+    color:#6f6674;
+    font-size:8.5px;
+    font-weight:600;
+    position:relative;
+  }
+  .desktop-nav-grid .category-nav-children a::before{
+    content:"";
+    position:absolute;
+    left:7px;
+    top:50%;
+    width:4px;
+    height:4px;
+    margin-top:-2px;
+    border-radius:50%;
+    background:#d3bcd8;
+  }
+  .desktop-nav-grid .category-nav-children a:hover,
+  .desktop-nav-grid .category-nav-children a.active{color:#792587;background:#f6edf8!important;}
+
+  /* Homepage category rail --------------------------------------------- */
+  /* No pop-out: the rail scrolls its own contents, and a scroll container clips
+     anything positioned outside it, which is what slid the old panel under the hero.
+     The rail only says how many subcategories a shelf holds; the list itself opens in
+     the filter panel once a category is chosen. */
+  .desktop-hero-row > aside > a.active{color:#792587;background:#f4e9f6;}
+  .desktop-hero-row > aside .rail-count{
+    justify-self:end;
+    min-width:16px;
+    height:16px;
+    padding:0 4px;
+    border-radius:999px;
+    color:#7c2382;
+    background:#f1e2f4;
+    display:grid;
+    place-items:center;
+    font-size:8px;
+    font-weight:850;
+    line-height:1;
+  }
+
+  /* Search-results sidebar --------------------------------------------- */
+  /* The pill treatment belongs to the "View All Categories" button alone; a category
+     row that happens to be the last child of its own wrapper must keep the row look. */
+  .desktop-search-categories .search-category > button{
+    min-height:34px;
+    margin-top:0;
+    border:0;
+    border-bottom:1px solid #eee9f0;
+    border-radius:0;
+    color:inherit;
+    background:transparent;
+    display:grid;
+    grid-template-columns:23px 1fr 10px;
+    text-align:left;
+    font-weight:650;
+  }
+  .desktop-search-categories .search-category > button.active{color:#792587;background:#f2e8f5;}
+  .search-subcategories{display:flex;flex-direction:column;padding:3px 0 5px;background:#fdfbfd;}
+  .desktop-search-categories .search-subcategories button{
+    min-height:28px;
+    margin-top:0;
+    padding:0 8px 0 25px;
+    border:0;
+    border-radius:0;
+    color:#6f6674;
+    background:transparent;
+    display:block;
+    text-align:left;
+    font-size:9px;
+    font-weight:600;
+    position:relative;
+  }
+  .desktop-search-categories .search-subcategories button::before{
+    content:"";
+    position:absolute;
+    left:14px;
+    top:50%;
+    width:4px;
+    height:4px;
+    margin-top:-2px;
+    border-radius:50%;
+    background:#d3bcd8;
+  }
+  .desktop-search-categories .search-subcategories button:hover,
+  .desktop-search-categories .search-subcategories button.active{color:#792587;background:#f6eef8;}
+}
+
+/* Between the phone sheet and the full desktop panel the header menu narrows rather
+   than losing a level. */
+@media(min-width:821px) and (max-width:1080px){
+  .category-nav-grid{column-count:2;}
+}
+
+/* Height discipline for the search-results rail ------------------------- */
+/* Its neighbour is a product grid, and a grid of three results is short. Left to grow,
+   a long category list set the height of the whole row: the page ran on past the last
+   product and the space beside them sat empty. Capped and sticky, the list scrolls
+   within itself and follows the results down instead of stretching the page. */
+@media(min-width:821px){
+  .search-results-active .desktop-search-categories{
+    position:sticky;
+    top:12px;
+    max-height:min(64vh,440px);
+    overflow-y:auto;
+        scrollbar-width:thin;
+  }
+  /* The heading stays put while the list moves under it. */
+  .search-results-active .desktop-search-categories h2{
+    position:sticky;
+    top:0;
+    z-index:1;
+  }
+}
+
+/* Filter panel accordion ------------------------------------------------ */
+@media(min-width:821px){
+  .desktop-search-categories .rail-caret{
+    display:inline-block;
+    transition:transform .15s ease;
+  }
+  .search-category.is-open .rail-caret{transform:rotate(90deg);}
+  .search-category.is-open > button{color:#792587;background:#f6eef8;}
+}

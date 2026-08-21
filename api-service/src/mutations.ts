@@ -1134,28 +1134,91 @@ async function featuredCategoryCount(excludeId?: number) {
   return rows.filter((row) => row.id !== excludeId).length;
 }
 
+/**
+ * Checks where a category may sit in the tree.
+ *
+ * The tree is deliberately two deep: main categories hold subcategories and nothing
+ * below that. Two levels is how a pharmacy shelf is actually arranged, and it keeps
+ * every storefront lookup to "this category and its children" rather than a walk of
+ * unknown depth. Products are never touched by a move - they point at the category
+ * they were filed under, so a category that becomes a subcategory takes its products
+ * with it, and bringing it back to the top brings them back up.
+ *
+ * Returns a message explaining why the move is refused, or null when it is allowed.
+ */
+async function categoryParentProblem(id: number | undefined, parentId: number | null) {
+  if (parentId === null) return null;
+  if (id !== undefined && parentId === id) return "A category cannot sit inside itself.";
+  const db = getDb();
+  const [parent] = await db.select({ id: categories.id, parentId: categories.parentId, name: categories.name })
+    .from(categories).where(and(eq(categories.id, parentId), eq(categories.isActive, true))).limit(1);
+  if (!parent) return "That main category no longer exists. Refresh the page and choose again.";
+  if (parent.parentId !== null) return `${parent.name} is itself a subcategory. Choose a main category instead.`;
+  if (id === undefined) return null;
+  const children = await db.select({ id: categories.id })
+    .from(categories).where(and(eq(categories.parentId, id), eq(categories.isActive, true))).limit(1);
+  return children.length ? "This category holds subcategories of its own. Move those out before filing it under another category." : null;
+}
+
+const categoryTreeInput = z.object({
+  name: z.string().trim().min(2).max(150),
+  description: z.string().trim().max(500).optional().default(""),
+  featured: z.boolean().optional(),
+  // Absent means "leave it where it is"; null means "make this a main category".
+  parentId: z.coerce.number().int().positive().nullable().optional(),
+});
+
 export async function handleTaxonomy(request: Request, kind: "categories" | "conditions", id?: number) {
   const auth = await requireSession(request, [...admins]);
   if ("response" in auth) return auth.response;
-  if (request.method === "DELETE" && id) { if(kind==="categories")await getDb().update(categories).set({isActive:false}).where(eq(categories.id,id));else await getDb().update(healthConditions).set({isActive:false}).where(eq(healthConditions.id,id)); return json({ok:true}); }
+  if (request.method === "DELETE" && id) {
+    if (kind === "categories") {
+      // Removing a main category out from under its subcategories would strand them
+      // where nothing lists them, so it is refused while any are still filed there.
+      const children = await getDb().select({ id: categories.id, name: categories.name })
+        .from(categories).where(and(eq(categories.parentId, id), eq(categories.isActive, true)));
+      if (children.length) return json({ error: `This category still holds ${children.length} ${children.length === 1 ? "subcategory" : "subcategories"} (${children.map((row) => row.name).join(", ")}). Move them somewhere else first.` }, { status: 409 });
+      await getDb().update(categories).set({ isActive: false }).where(eq(categories.id, id));
+    } else await getDb().update(healthConditions).set({ isActive: false }).where(eq(healthConditions.id, id));
+    return json({ ok: true });
+  }
   if (request.method === "PATCH" && id) {
-    const parsed=z.object({name:z.string().trim().min(2).max(150),description:z.string().trim().max(500).optional().default(""),featured:z.boolean().optional()}).safeParse(await body(request));
-    if(!parsed.success)return json({error:"Enter a valid name."},{status:400});
-    if(kind==="categories"){
-      if(parsed.data.featured===true&&await featuredCategoryCount(id)>=featuredCategoryLimit)return json({error:`You can only feature ${featuredCategoryLimit} categories on the storefront. Unfeature another category first.`,code:"FEATURED_LIMIT"},{status:409});
-      await getDb().update(categories).set({name:parsed.data.name,...(parsed.data.featured===undefined?{}:{featuredOnStorefront:parsed.data.featured})}).where(eq(categories.id,id));
-    } else await getDb().update(healthConditions).set({name:parsed.data.name,description:parsed.data.description||null}).where(eq(healthConditions.id,id));
-    return json({ok:true});
+    const parsed = categoryTreeInput.safeParse(await body(request));
+    if (!parsed.success) return json({ error: "Enter a valid name." }, { status: 400 });
+    if (kind === "categories") {
+      const { parentId } = parsed.data;
+      if (parentId !== undefined) {
+        const problem = await categoryParentProblem(id, parentId);
+        if (problem) return json({ error: problem }, { status: 409 });
+      }
+      // A subcategory is reached through its parent, so it never occupies one of the six
+      // storefront tiles. Filing one under a parent hands that tile back.
+      const becomesChild = parentId !== undefined && parentId !== null;
+      const featured = becomesChild ? false : parsed.data.featured;
+      if (featured === true && await featuredCategoryCount(id) >= featuredCategoryLimit) return json({ error: `You can only feature ${featuredCategoryLimit} categories on the storefront. Unfeature another category first.`, code: "FEATURED_LIMIT" }, { status: 409 });
+      await getDb().update(categories).set({
+        name: parsed.data.name,
+        ...(parentId === undefined ? {} : { parentId }),
+        ...(featured === undefined ? {} : { featuredOnStorefront: featured }),
+      }).where(eq(categories.id, id));
+    } else await getDb().update(healthConditions).set({ name: parsed.data.name, description: parsed.data.description || null }).where(eq(healthConditions.id, id));
+    return json({ ok: true });
   }
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
-  const parsed = z.object({ name: z.string().trim().min(2).max(150), description: z.string().trim().max(500).optional().default(""), featured: z.boolean().optional().default(false) }).safeParse(await body(request));
+  const parsed = categoryTreeInput.safeParse(await body(request));
   if (!parsed.success) return json({ error: "Enter a valid name." }, { status: 400 });
-  if (kind === "categories" && parsed.data.featured && await featuredCategoryCount() >= featuredCategoryLimit) return json({ error: `You can only feature ${featuredCategoryLimit} categories on the storefront. Unfeature another category first.`, code: "FEATURED_LIMIT" }, { status: 409 });
+  const parentId = parsed.data.parentId ?? null;
+  if (kind === "categories") {
+    const problem = await categoryParentProblem(undefined, parentId);
+    if (problem) return json({ error: problem }, { status: 409 });
+  }
+  const featured = kind === "categories" && parentId === null && parsed.data.featured === true;
+  if (featured && await featuredCategoryCount() >= featuredCategoryLimit) return json({ error: `You can only feature ${featuredCategoryLimit} categories on the storefront. Unfeature another category first.`, code: "FEATURED_LIMIT" }, { status: 409 });
   const slug = `${parsed.data.name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`;
   const [created] = kind === "categories"
-    ? await getDb().insert(categories).values({ name: parsed.data.name, slug, isActive: true, featuredOnStorefront: parsed.data.featured })
+    ? await getDb().insert(categories).values({ name: parsed.data.name, slug, parentId, isActive: true, featuredOnStorefront: featured })
     : await getDb().insert(healthConditions).values({ name: parsed.data.name, slug, description: parsed.data.description || null, isActive: true });
-  return json({ ok: true, id: created.insertId, name: parsed.data.name, featured: kind === "categories" ? parsed.data.featured : undefined }, { status: 201 });
+  return json({ ok: true, id: created.insertId, name: parsed.data.name, parentId: kind === "categories" ? parentId : undefined, featured: kind === "categories" ? featured : undefined }, { status: 201 });
 }
 
 function normalizeStoredImageUrl(value: string | null | undefined) {

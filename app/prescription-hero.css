@@ -154,8 +154,20 @@
    so repeating five of them on the page only pushed the catalogue down. The phone keeps
    the row: it has no such dropdown. */
 #conditions{display:none;}
+}
+
+/* Applies wherever the two-column hero exists, not only on large laptops: the rail can
+   outgrow the hero at any of those widths, and it did so most easily at the narrow end. */
+@media (min-width: 821px){
 .desktop-hero-row{align-items:stretch;}
-.desktop-hero-row > aside{height:272px;min-height:0;display:flex;flex-direction:column;overflow-y:auto;scrollbar-width:thin;}
+/* The rail takes its height from the hero beside it rather than from a number copied
+   out of the hero's own rule: `height:0` keeps it out of the row's sizing, and
+   `min-height:100%` then fills whatever height the hero settled on. However long the
+   category list grows, it scrolls inside the rail instead of stretching the row, so the
+   catalogue never gets pushed down the page and no empty band opens beside the hero. */
+.desktop-hero-row > aside{height:0;min-height:100%;display:flex;flex-direction:column;overflow-y:auto;scrollbar-width:thin;}
+/* Rows keep their own height instead of being squeezed to fit — a scroll is honest
+   about there being more, a squashed row is not. */
 .desktop-hero-row > aside > a{flex:0 0 auto;}
 .desktop-hero-row > aside > button{position:sticky;bottom:0;flex:0 0 auto;margin-top:auto;background:#faf7fb;}
 }

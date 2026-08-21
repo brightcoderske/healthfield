@@ -58,6 +58,9 @@ type CatalogCategory = {
   id: number;
   name: string;
   slug: string;
+  // Null for a main category; the main category's id for a subcategory. The tree is
+  // two deep, so a category is either a heading or one of the things under it.
+  parentId?: number | null;
   featuredOnStorefront?: boolean;
 };
 type HealthCondition = { id: number; name: string; slug: string };
@@ -89,10 +92,9 @@ function mergeProducts(primary: CatalogProduct[], secondary: CatalogProduct[]) {
   );
 }
 
-// The storefront shows a fixed six-category shortlist chosen by an administrator
-// (topped up with the remaining categories so the list is never short). Everything
-// else lives behind the header "Shop by category" menu.
-const CATEGORY_PREVIEW = 6;
+// The category rail is capped to the height of the hero beside it and scrolls inside
+// that, so the list no longer has to be cut to six to stop it stretching the page.
+// Administrator picks still lead it; the rest follow rather than being dropped.
 const CONDITION_PREVIEW = 5;
 // How many products the landing grid renders at a time. The full catalogue stays
 // reachable through search, category pages and the sitemap; this only keeps the
@@ -253,38 +255,6 @@ export function Storefront({
     ],
   );
 
-  // Prescription medicines are kept out of the browsing catalogue but stay findable:
-  // someone who knows what they were prescribed can search for it by name, while a
-  // casual scroll of the homepage never puts prescription-only medicine in front of
-  // someone who has not been prescribed it. Any active filter counts as intent too.
-  const browsingOnly = !normalizedQuery && !selectedCategory && !selectedCondition && !offersOnly;
-  const filtered = useMemo(
-    () =>
-      searchedProducts.filter(
-        (product) =>
-          productMatches(product, queryWords, initialCategories) &&
-          (!browsingOnly || !product.prescriptionRequired) &&
-          (!selectedCategory || product.categoryId === selectedCategory) &&
-          (!selectedCondition ||
-            product.conditionIds.includes(selectedCondition)) &&
-          (!offersOnly || product.discountPrice !== null),
-      ),
-    [
-      searchedProducts,
-      initialCategories,
-      queryWords,
-      browsingOnly,
-      selectedCategory,
-      selectedCondition,
-      offersOnly,
-    ],
-  );
-  const similarProducts = useMemo(() => {
-    const exactIds = new Set(searchedProducts.map((product) => product.id));
-    return (activeSearchResults?.similar || []).filter(
-      (product) => !exactIds.has(product.id),
-    );
-  }, [activeSearchResults, searchedProducts]);
   const orderedCategories = [...initialCategories].sort((left, right) => {
     const isPrescription = (category: CatalogCategory) =>
       `${category.name} ${category.slug}`
@@ -303,16 +273,83 @@ export function Storefront({
   const prescriptionCategory = displayedCategories.find((category) =>
     `${category.name} ${category.slug}`.toLowerCase().includes("prescription"),
   );
-  // Administrator picks come first; the rest top the list up so the storefront never
-  // renders a short row while nobody has chosen any.
-  const visibleCategories = [
-    ...displayedCategories.filter((category) => category.featuredOnStorefront),
-    ...displayedCategories.filter((category) => !category.featuredOnStorefront),
-  ].slice(0, CATEGORY_PREVIEW);
-  const hiddenCategoryCount = Math.max(
-    0,
-    displayedCategories.length - visibleCategories.length,
+  // The subcategories filed under each main category. Everything the storefront shows
+  // is derived from this rather than stored twice, so a category the shop moves in the
+  // admin appears in its new place — with its products — on the next load.
+  const subCategories = useMemo(() => {
+    const listed = new Set(displayedCategories.map((category) => category.id));
+    const map = new Map<number, typeof displayedCategories>();
+    for (const category of displayedCategories) {
+      // A subcategory whose parent is no longer on the shelf stands on its own rather
+      // than disappearing: losing a heading must not take its products with it.
+      if (!category.parentId || !listed.has(category.parentId)) continue;
+      map.set(category.parentId, [
+        ...(map.get(category.parentId) || []),
+        category,
+      ]);
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCategories]);
+  const orphaned = useMemo(() => {
+    const listed = new Set(initialCategories.map((category) => category.id));
+    return (category: CatalogCategory) =>
+      Boolean(category.parentId) && !listed.has(category.parentId as number);
+  }, [initialCategories]);
+  const mainCategories = displayedCategories.filter(
+    (category) => !category.parentId || orphaned(category),
   );
+  // Administrator picks lead, everything else follows. Subcategories are reached
+  // through their parent, so the rail lists main categories only.
+  const visibleCategories = [
+    ...mainCategories.filter((category) => category.featuredOnStorefront),
+    ...mainCategories.filter((category) => !category.featuredOnStorefront),
+  ];
+  // Choosing a main category means "everything on this shelf", which includes whatever
+  // sits in the subcategories under it. Choosing a subcategory stays exact.
+  const selectedCategoryIds = useMemo(() => {
+    if (!selectedCategory) return null;
+    return new Set([
+      selectedCategory,
+      ...(subCategories.get(selectedCategory) || []).map(
+        (category) => category.id,
+      ),
+    ]);
+  }, [selectedCategory, subCategories]);
+
+  // Prescription medicines are kept out of the browsing catalogue but stay findable:
+  // someone who knows what they were prescribed can search for it by name, while a
+  // casual scroll of the homepage never puts prescription-only medicine in front of
+  // someone who has not been prescribed it. Any active filter counts as intent too.
+  const browsingOnly = !normalizedQuery && !selectedCategory && !selectedCondition && !offersOnly;
+  const filtered = useMemo(
+    () =>
+      searchedProducts.filter(
+        (product) =>
+          productMatches(product, queryWords, initialCategories) &&
+          (!browsingOnly || !product.prescriptionRequired) &&
+          (!selectedCategoryIds ||
+            selectedCategoryIds.has(product.categoryId)) &&
+          (!selectedCondition ||
+            product.conditionIds.includes(selectedCondition)) &&
+          (!offersOnly || product.discountPrice !== null),
+      ),
+    [
+      searchedProducts,
+      initialCategories,
+      queryWords,
+      browsingOnly,
+      selectedCategoryIds,
+      selectedCondition,
+      offersOnly,
+    ],
+  );
+  const similarProducts = useMemo(() => {
+    const exactIds = new Set(searchedProducts.map((product) => product.id));
+    return (activeSearchResults?.similar || []).filter(
+      (product) => !exactIds.has(product.id),
+    );
+  }, [activeSearchResults, searchedProducts]);
   // Which offer and blog cards break up the catalogue scroll, and where. The rules
   // (spacing, relevance, urgency, seeded variation) live in lib/catalogue-breaks.
   const breakPlan = useMemo(
@@ -358,13 +395,34 @@ export function Storefront({
     window.scrollTo({ top: 0, behavior: "smooth" });
     setOpenMenu(label);
   }
+  // Whether the shopper is working towards something rather than browsing. The landing
+  // hero steps aside for it and the category list becomes a filter panel beside the
+  // products, which is where someone narrowing down expects to find it.
+  const filtering = Boolean(
+    query.trim() || selectedCategory || selectedCondition,
+  );
+
+  /**
+   * Closes the phone menu.
+   *
+   * Choosing something in the sheet is choosing what to look at, and the sheet covers
+   * exactly that. Hiding a popover that is not open throws, hence the check — the same
+   * handlers run behind the desktop menus, where this sheet is never showing.
+   */
+  function closeMobileMenu() {
+    const sheet = document.getElementById("mobile-shop-menu") as
+      | (HTMLElement & { hidePopover?: () => void })
+      | null;
+    if (sheet?.matches(":popover-open")) sheet.hidePopover?.();
+  }
   function showCategory(categoryId: number) {
     setSelectedCategory(categoryId);
     setSelectedCondition(null);
     setQuery("");
     setVisibleCount(PRODUCT_PAGE_SIZE);
     setOpenMenu(null);
-    document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
+    closeMobileMenu();
+    revealFilteredProducts();
   }
   function showCondition(conditionId: number) {
     setSelectedCondition(conditionId);
@@ -372,37 +430,97 @@ export function Storefront({
     setQuery("");
     setVisibleCount(PRODUCT_PAGE_SIZE);
     setOpenMenu(null);
-    document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
+    closeMobileMenu();
+    revealFilteredProducts();
   }
+  /**
+   * Where the catalogue wants to sit: clear of whatever headers are stuck to the top.
+   * Returns null before it exists, and the current position of its heading so callers
+   * can decide whether moving the page is worth it at all.
+   */
+  function cataloguePosition() {
+    const section = document.getElementById("products");
+    const target = section?.querySelector<HTMLElement>(".approved-title") || section;
+    if (!target) return null;
+    const stickyBottom = Array.from(
+      document.querySelectorAll<HTMLElement>(".desktop-store, .approved-topbar, .rx-search-row"),
+    ).reduce((bottom, header) => {
+      const bounds = header.getBoundingClientRect();
+      return bounds.height > 0 ? Math.max(bottom, bounds.bottom) : bottom;
+    }, 0);
+    const top = target.getBoundingClientRect().top;
+    return { headingTop: top, scrollTo: window.scrollY + top - stickyBottom - 16 };
+  }
+
+/**
+   * Runs something once the browser has laid the page out again.
+   *
+   * Two frames, because the hero and the filter panel swap places first and the
+   * catalogue has to be measured after that. A frame is not guaranteed to arrive
+   * though — a throttled or unpainted tab may never run one — so a short timer backs
+   * it up and whichever arrives first wins.
+   */
+  function afterLayout(run: () => void) {
+    let done = false;
+    const once = () => {
+      if (done) return;
+      done = true;
+      run();
+    };
+    window.requestAnimationFrame(() => window.requestAnimationFrame(once));
+    window.setTimeout(once, 120);
+  }
+
+  /** Moves the page so the catalogue sits below the headers, if it is not there already. */
+  function placeCatalogue(behavior: ScrollBehavior) {
+    const position = cataloguePosition();
+    if (!position) return;
+    if (Math.abs(window.scrollY - position.scrollTo) > 1) {
+      window.scrollTo({ top: Math.max(0, position.scrollTo), behavior });
+    }
+  }
+
+  /**
+   * Brings the catalogue into view after a filter is chosen — but only when it is not
+   * already in view.
+   *
+   * On a wide screen the products land beside the filter panel, on screen already, and
+   * scrolling then would carry them away from where the eye is rather than towards it.
+   * On a phone the menu closes onto a page that could be anywhere, so the scroll still
+   * has work to do. Deliberately not routed through the search scroll below: that one
+   * carries a cancellation token which clearing a search bumps, and a filter reveal
+   * must not be cancelled by it.
+   */
+  function revealFilteredProducts() {
+    const settle = () => {
+      const position = cataloguePosition();
+      if (!position) return;
+      const alreadyShowing =
+        position.headingTop >= 0 &&
+        position.headingTop < window.innerHeight * 0.6;
+      if (alreadyShowing) return;
+      placeCatalogue("smooth");
+      // `scroll-behavior: smooth` on the root means a smooth request can be interrupted
+      // by the layout still settling; this lands it exactly, without animating twice.
+      window.setTimeout(() => placeCatalogue("instant"), 420);
+    };
+    afterLayout(settle);
+  }
+
   function scheduleSearchResultsScroll(behavior: ScrollBehavior = "smooth") {
     const request = ++searchScrollRequest.current;
     const placeResultsBelowHeader = (nextBehavior: ScrollBehavior) => {
       if (request !== searchScrollRequest.current) return;
-      const section = document.getElementById("products");
-      const target = section?.querySelector<HTMLElement>(".approved-title") || section;
-      if (!target) return;
-      const stickyBottom = Array.from(
-        document.querySelectorAll<HTMLElement>(".desktop-store, .approved-topbar, .rx-search-row"),
-      ).reduce((bottom, header) => {
-        const bounds = header.getBoundingClientRect();
-        return bounds.height > 0 ? Math.max(bottom, bounds.bottom) : bottom;
-      }, 0);
-      const nextTop =
-        window.scrollY + target.getBoundingClientRect().top - stickyBottom - 16;
-      if (Math.abs(window.scrollY - nextTop) > 1) {
-        window.scrollTo({ top: Math.max(0, nextTop), behavior: nextBehavior });
-      }
+      placeCatalogue(nextBehavior);
     };
 
-    // The hero and filter panels disappear as soon as a search starts. Waiting
-    // for two frames measures the catalogue after that layout change, not before it.
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        placeResultsBelowHeader(behavior);
-        if (behavior === "smooth") {
-          window.setTimeout(() => placeResultsBelowHeader("auto"), 420);
-        }
-      });
+    // The hero and filter panels disappear as soon as a search starts, so this measures
+    // the catalogue after that layout change rather than before it.
+    afterLayout(() => {
+      placeResultsBelowHeader(behavior);
+      if (behavior === "smooth") {
+        window.setTimeout(() => placeResultsBelowHeader("instant"), 420);
+      }
     });
   }
   function updateSearchQuery(nextQuery: string) {
@@ -417,10 +535,7 @@ export function Storefront({
   function viewSearchResults() {
     if (!query.trim()) return;
     setOpenMenu(null);
-    (
-      document.getElementById("mobile-shop-menu") as
-        (HTMLElement & { hidePopover?: () => void }) | null
-    )?.hidePopover?.();
+    closeMobileMenu();
     scheduleSearchResultsScroll();
   }
   useEffect(() => {
@@ -649,18 +764,38 @@ export function Storefront({
               Shop by category <ChevronDown />
             </button>
             <div className="desktop-nav-grid category-nav-grid">
-              {displayedCategories.map((category) => (
-                <a
-                  key={category.id}
-                  className={selectedCategory === category.id ? "active" : ""}
-                  href="#products"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    showCategory(category.id);
-                  }}
-                >
-                  {category.name}
-                </a>
+              {mainCategories.map((category) => (
+                <div className="category-nav-column" key={category.id}>
+                  <a
+                    className={selectedCategory === category.id ? "active" : ""}
+                    href="#products"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      showCategory(category.id);
+                    }}
+                  >
+                    {category.name}
+                  </a>
+                  {(subCategories.get(category.id) || []).length > 0 && (
+                    <div className="category-nav-children">
+                      {(subCategories.get(category.id) || []).map((child) => (
+                        <a
+                          key={child.id}
+                          className={
+                            selectedCategory === child.id ? "active" : ""
+                          }
+                          href="#products"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            showCategory(child.id);
+                          }}
+                        >
+                          {child.name}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           </div>
@@ -794,25 +929,56 @@ export function Storefront({
                   placeholder="Search categories"
                 />
               </label>
-              {displayedCategories
-                .filter((category) =>
-                  category.name
-                    .toLowerCase()
-                    .includes(categoryQuery.toLowerCase()),
-                )
-                .slice(0, 10)
-                .map((category) => (
-                  <a
-                    key={category.id}
-                    href="#products"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      showCategory(category.id);
-                    }}
-                  >
-                    {category.name}
-                  </a>
-                ))}
+              {/* Searching flattens the tree — when someone types a name they want the
+                  category, not a lesson in where it is filed. Browsing keeps the
+                  headings so the shelf still reads as a shelf. */}
+              {categoryQuery.trim()
+                ? displayedCategories
+                    .filter((category) =>
+                      category.name
+                        .toLowerCase()
+                        .includes(categoryQuery.toLowerCase()),
+                    )
+                    .slice(0, 12)
+                    .map((category) => (
+                      <a
+                        key={category.id}
+                        className={category.parentId ? "is-subcategory" : ""}
+                        href="#products"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          showCategory(category.id);
+                        }}
+                      >
+                        {category.name}
+                      </a>
+                    ))
+                : mainCategories.map((category) => (
+                    <div className="mobile-category-group" key={category.id}>
+                      <a
+                        href="#products"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          showCategory(category.id);
+                        }}
+                      >
+                        {category.name}
+                      </a>
+                      {(subCategories.get(category.id) || []).map((child) => (
+                        <a
+                          key={child.id}
+                          className="is-subcategory"
+                          href="#products"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            showCategory(child.id);
+                          }}
+                        >
+                          {child.name}
+                        </a>
+                      ))}
+                    </div>
+                  ))}
             </div>
           </details>
           <Link href="/offers">Offers</Link>
@@ -894,40 +1060,45 @@ export function Storefront({
       </header>
 
       <main
-        className={`approved-content ${query.trim() ? "search-results-active" : ""}`}
+        // Named for the case it was written for; it now covers any active filter.
+        className={`approved-content ${filtering ? "search-results-active" : ""}`}
       >
-        {!query.trim() && (
+        {!filtering && (
           <div className="desktop-hero-row">
             <aside>
               <h2>
                 <Menu /> Shop by Category
               </h2>
-              {visibleCategories.map(({ name, icon: Icon, id }) => (
-                <a
-                  href={`#category-${id}`}
-                  key={id}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    setSelectedCategory(id);
-                    setVisibleCount(PRODUCT_PAGE_SIZE);
-                    document
-                      .getElementById("products")
-                      ?.scrollIntoView({ behavior: "smooth" });
-                  }}
-                >
-                  <Icon />
-                  {name}
-                  <span>›</span>
-                </a>
-              ))}
-              {hiddenCategoryCount > 0 && (
-                <button
-                  type="button"
-                  onClick={() => revealHeaderMenu("category", "/#products")}
-                >
-                  View All Categories →
-                </button>
-              )}
+              {visibleCategories.map(({ name, icon: Icon, id }) => {
+                const children = subCategories.get(id) || [];
+                return (
+                  <a
+                    href={`#category-${id}`}
+                    key={id}
+                    className={selectedCategory === id ? "active" : ""}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      showCategory(id);
+                    }}
+                  >
+                    <Icon />
+                    {name}
+                    {/* Says there is more inside without opening anything: the list of
+                        subcategories belongs in the filter panel, one click away. */}
+                    {children.length > 0 ? (
+                      <span className="rail-count">{children.length}</span>
+                    ) : (
+                      <span>›</span>
+                    )}
+                  </a>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => revealHeaderMenu("category", "/#products")}
+              >
+                Browse every category →
+              </button>
             </aside>
             <HeroRotator>
             <section className="hero-slide">
@@ -966,28 +1137,66 @@ export function Storefront({
             </HeroRotator>
           </div>
         )}
-        {query.trim() && (
+        {filtering && (
           <aside className="desktop-search-categories">
             <h2>
               <Menu /> Shop by Category
             </h2>
-            {/* Capped to the same shortlist as the hero list so the panel keeps a fixed
-              height instead of growing with every new category. */}
-            {visibleCategories.map(({ name, icon: Icon, id }) => (
-              <button
-                type="button"
-                className={selectedCategory === id ? "active" : ""}
-                onClick={() => {
-                  setSelectedCategory(selectedCategory === id ? null : id);
-                  setVisibleCount(PRODUCT_PAGE_SIZE);
-                }}
-                key={id}
-              >
-                <Icon />
-                {name}
-                <span>›</span>
-              </button>
-            ))}
+            {/* An accordion, not a set of pop-outs: choosing a category shows everything
+              in it and drops its subcategories open underneath, and whatever was open
+              before closes. Only one branch is ever open, so the panel cannot grow
+              without bound however many categories the shop keeps. */}
+            {visibleCategories.map(({ name, icon: Icon, id }) => {
+              const children = subCategories.get(id) || [];
+              const open =
+                selectedCategory === id ||
+                children.some((child) => child.id === selectedCategory);
+              return (
+                <div
+                  className={open ? "search-category is-open" : "search-category"}
+                  key={id}
+                >
+                  <button
+                    type="button"
+                    className={selectedCategory === id ? "active" : ""}
+                    aria-expanded={children.length ? open : undefined}
+                    onClick={() => {
+                      setSelectedCategory(selectedCategory === id ? null : id);
+                      setVisibleCount(PRODUCT_PAGE_SIZE);
+                    }}
+                  >
+                    <Icon />
+                    {name}
+                    <span className={children.length ? "rail-caret" : undefined}>
+                      ›
+                    </span>
+                  </button>
+                  {open && children.length > 0 && (
+                    <div className="search-subcategories">
+                      {children.map((child) => (
+                        <button
+                          type="button"
+                          key={child.id}
+                          className={
+                            selectedCategory === child.id ? "active" : ""
+                          }
+                          onClick={() => {
+                            // Choosing the open subcategory again widens back out to the
+                            // whole shelf rather than dropping the filter altogether.
+                            setSelectedCategory(
+                              selectedCategory === child.id ? id : child.id,
+                            );
+                            setVisibleCount(PRODUCT_PAGE_SIZE);
+                          }}
+                        >
+                          {child.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
             <button
               type="button"
               onClick={() => {
@@ -997,7 +1206,7 @@ export function Storefront({
                 setVisibleCount(PRODUCT_PAGE_SIZE);
               }}
             >
-              View All Categories →
+              Clear filters →
             </button>
           </aside>
         )}
@@ -1019,12 +1228,15 @@ export function Storefront({
           </label>
         </div>
 
-        {!query.trim() && (
+        {/* The blocks between the panel and the catalogue are for someone who arrived
+            with nothing in mind. Once a filter is on they only separate the filter from
+            its results — and, in the two-column layout, they land under both. */}
+        {!filtering && (
           <PrescriptionHero className="prescription-hero-mobile" priority />
         )}
-        {!query.trim() && <PrescriptionQuickActions />}
+        {!filtering && <PrescriptionQuickActions />}
 
-        {!query.trim() && (
+        {!filtering && (
           <section className="approved-section" id="conditions">
             <div className="approved-title">
               <h2>Shop by Condition</h2>

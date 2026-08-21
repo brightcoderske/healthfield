@@ -1,0 +1,129 @@
+/* The Categories tab: a two-level category tree and the flat condition list beside it. */
+
+.taxonomy-page{padding:22px;max-width:1500px;margin:0 auto;}
+.taxonomy-header{margin-bottom:18px;}
+.taxonomy-header a{display:inline-flex;align-items:center;gap:5px;color:#792587;text-decoration:none;font-size:9px;font-weight:800;}
+.taxonomy-header a svg{width:13px;height:13px;}
+.taxonomy-header h1{margin:8px 0 4px;font-size:25px;letter-spacing:-.01em;}
+.taxonomy-header p{margin:0;color:#6f6674;font-size:11px;line-height:1.6;max-width:70ch;}
+
+.taxonomy-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:16px;align-items:start;}
+
+.taxonomy-panel{min-width:0;padding:16px;border:1px solid #e7e0e9;border-radius:14px;background:#fff;box-shadow:0 2px 10px rgba(48,22,54,.04);}
+.taxonomy-panel > header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:10px;border-bottom:1px solid #f0ebf1;}
+.taxonomy-panel-title{display:flex;align-items:center;gap:8px;min-width:0;}
+.taxonomy-panel-title svg{width:18px;height:18px;color:#792587;flex:none;}
+.taxonomy-panel h2{margin:0;font-size:15px;}
+.taxonomy-panel > header small{flex:none;color:#77717c;font-size:9px;font-weight:700;}
+.taxonomy-lead{margin:10px 0 12px;color:#6f6674;font-size:10px;line-height:1.6;}
+.taxonomy-lead em{color:#5d2168;font-style:italic;}
+
+/* Add form -------------------------------------------------------------- */
+.taxonomy-add{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto auto;gap:9px;align-items:end;}
+.taxonomy-add.is-condition{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;}
+.taxonomy-add label{min-width:0;display:flex;flex-direction:column;gap:4px;color:#4b444e;font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;}
+.taxonomy-add input,
+.taxonomy-add select{min-width:0;min-height:38px;padding:0 10px;border:1px solid #ddd5e0;border-radius:8px;background:#fff;color:#2f2833;font-size:11px;font-weight:500;text-transform:none;letter-spacing:0;}
+.taxonomy-add input:focus-visible,
+.taxonomy-add select:focus-visible{outline:2px solid #a555ad;outline-offset:1px;}
+.taxonomy-add-featured{flex-direction:row!important;align-items:center;gap:6px;min-height:38px;padding:0 10px;border:1px solid #e6dfe8;border-radius:8px;background:#faf7fb;text-transform:none;letter-spacing:0;font-size:9.5px;font-weight:700;white-space:nowrap;cursor:pointer;}
+.taxonomy-add-featured input{width:15px;height:15px;min-height:0;padding:0;accent-color:#792587;}
+.taxonomy-add-featured input:disabled{cursor:not-allowed;}
+.taxonomy-add-featured input:disabled + span{color:#a29ba5;}
+.taxonomy-add button[type=submit]{min-height:38px;padding:0 14px;border:0;border-radius:8px;color:#fff;background:#792587;display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:800;white-space:nowrap;cursor:pointer;}
+.taxonomy-add button[type=submit]:hover{background:#8d2c9c;}
+.taxonomy-add button[type=submit]:disabled{opacity:.55;cursor:progress;}
+.taxonomy-add button svg{width:14px;height:14px;}
+
+.taxonomy-slots{margin:11px 0 0;display:flex;align-items:center;gap:6px;color:#77717c;font-size:9px;}
+.taxonomy-slots svg{width:12px;height:12px;color:#c9a227;}
+.taxonomy-message{margin:9px 0 0;padding:8px 10px;border-radius:8px;color:#1c6b45;background:#eaf7f0;font-size:9.5px;font-weight:650;}
+.taxonomy-message.is-error{color:#8d2340;background:#fdeef2;}
+
+/* Tree ------------------------------------------------------------------ */
+.taxonomy-tree{margin-top:12px;border:1px solid #e9e3ea;border-radius:11px;overflow:hidden;background:#fff;}
+.taxonomy-tree-head,
+.tree-row{display:grid;grid-template-columns:minmax(0,1fr) 168px 150px 74px;gap:10px;align-items:center;}
+.taxonomy-tree-head.is-condition,
+.tree-row.is-condition{grid-template-columns:minmax(0,1fr) 74px 74px;}
+.taxonomy-tree-head{min-height:32px;padding:0 12px;color:#716a75;background:#f5f1f6;font-size:7.5px;font-weight:850;letter-spacing:.06em;text-transform:uppercase;}
+.taxonomy-tree-head span:last-child{text-align:right;}
+.tree-group + .tree-group{border-top:1px solid #ece6ed;}
+.tree-row{min-height:54px;padding:9px 12px;background:#fff;}
+.tree-row[aria-busy=true]{opacity:.55;}
+.tree-row.is-child{padding-left:30px;background:#fcfafd;border-top:1px solid #f3eff4;}
+.tree-row.is-condition{min-height:46px;}
+
+.tree-name{min-width:0;display:flex;align-items:center;gap:8px;}
+.tree-branch{width:15px;height:15px;flex:none;color:#a071a8;}
+.tree-row.is-child .tree-branch{width:13px;height:13px;color:#bda3c2;}
+.tree-label{min-width:0;display:flex;flex-direction:column;gap:2px;}
+.tree-label b{font-size:11.5px;color:#2c2431;overflow-wrap:anywhere;}
+.tree-row.is-child .tree-label b{font-size:10.5px;font-weight:700;}
+.tree-label small{display:flex;align-items:center;gap:4px;color:#7a727e;font-size:8.5px;}
+.tree-label small svg{width:11px;height:11px;color:#a99bad;}
+
+.tree-rename{display:flex;align-items:center;gap:5px;min-width:0;flex:1;}
+.tree-rename input{min-width:0;flex:1;min-height:32px;padding:0 9px;border:1px solid #c79ccd;border-radius:7px;font-size:11px;}
+.tree-rename button{width:30px;height:30px;flex:none;padding:0;border:1px solid #e2dbe5;border-radius:7px;color:#5b4f60;background:#fff;display:grid;place-items:center;cursor:pointer;}
+.tree-rename button svg{width:14px;height:14px;}
+.tree-rename .tree-confirm{border-color:#8d2c9c;color:#fff;background:#792587;}
+
+.tree-place select{width:100%;min-height:32px;padding:0 8px;border:1px solid #ddd5e0;border-radius:7px;background:#fff;color:#4b444e;font-size:9.5px;font-weight:650;cursor:pointer;}
+.tree-place select:disabled{color:#a29ba5;background:#f6f3f7;cursor:not-allowed;}
+.tree-row.is-child .tree-place select{border-style:dashed;}
+
+.tree-star{width:100%;min-height:30px;padding:0 8px;border:1px solid #e6dfe8;border-radius:7px;color:#77717c;background:#fff;display:inline-flex;align-items:center;justify-content:center;gap:5px;font-size:9px;font-weight:750;cursor:pointer;}
+.tree-star svg{width:12px;height:12px;}
+.tree-star.is-on{border-color:#e6c66a;color:#8a6b06;background:#fdf6e3;}
+.tree-star.is-on svg{fill:#e8b81f;color:#c9a227;}
+.tree-star:disabled{opacity:.5;cursor:not-allowed;}
+.tree-featured-na{color:#a29ba5;font-size:8.5px;font-style:italic;}
+
+.tree-count{display:flex;align-items:center;gap:5px;color:#5b5360;font-size:10px;font-weight:750;}
+.tree-count svg{width:12px;height:12px;color:#a99bad;}
+
+.tree-actions{display:flex;justify-content:flex-end;gap:5px;}
+.tree-actions button{width:30px;height:30px;padding:0;border:1px solid #e2dbe5;border-radius:7px;color:#5b4f60;background:#fff;display:grid;place-items:center;cursor:pointer;}
+.tree-actions button:hover{border-color:#8d2c9c;color:#792587;background:#f9f0fa;}
+.tree-actions button svg{width:14px;height:14px;}
+.tree-actions .tree-delete:hover{border-color:#c0405f;color:#b82f58;background:#fdf0f3;}
+
+.taxonomy-empty{padding:28px 16px;display:flex;flex-direction:column;align-items:center;gap:5px;text-align:center;color:#8a8290;}
+.taxonomy-empty svg{width:26px;height:26px;color:#c9b6cd;}
+.taxonomy-empty strong{font-size:12px;color:#4b444e;}
+.taxonomy-empty span{font-size:9.5px;}
+
+/* Narrow screens --------------------------------------------------------- */
+@media (max-width:1080px){
+  .taxonomy-grid{grid-template-columns:1fr;}
+}
+@media (max-width:820px){
+  .taxonomy-page{padding:14px;}
+  .taxonomy-header h1{font-size:21px;}
+  .taxonomy-add{grid-template-columns:1fr 1fr;}
+  .taxonomy-add.is-condition{grid-template-columns:1fr 1fr;}
+  .taxonomy-add-featured,
+  .taxonomy-add button[type=submit]{grid-column:span 2;}
+  /* Stacked rather than scrolled sideways: an admin on a phone should be able to move a
+     category without hunting for a horizontal scrollbar. */
+  .taxonomy-tree-head{display:none;}
+  .taxonomy-tree-head,
+  .tree-row,
+  .taxonomy-tree-head.is-condition,
+  .tree-row.is-condition{grid-template-columns:1fr;gap:8px;}
+  .tree-row{padding:12px;border-top:1px solid #f0ebf1;}
+  .tree-row.is-child{padding-left:22px;}
+  .tree-place select,
+  .tree-star{width:100%;}
+  .tree-actions{justify-content:flex-start;}
+  .tree-count{color:#7a727e;font-size:9px;}
+}
+@media (max-width:520px){
+  .taxonomy-add,
+  .taxonomy-add.is-condition{grid-template-columns:1fr;}
+  .taxonomy-add-featured,
+  .taxonomy-add button[type=submit]{grid-column:auto;}
+}
+
+.tree-place-note{display:block;margin-top:3px;color:#a29ba5;font-size:8px;font-style:italic;}

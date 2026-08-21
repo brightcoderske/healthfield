@@ -26,6 +26,8 @@ import "./consultations-ui.css";
 import "./delivery-ui.css";
 import "./prescription-hero.css";
 import "./editor-modal-mobile.css";
+import "./taxonomy-admin.css";
+import "./category-tree.css";
 
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 
