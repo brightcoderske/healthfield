@@ -1,14 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { breakPositions, planBreaks, seededRandom, MIN_PRODUCTS_BEFORE_BREAK, type BreakGuide, type BreakOffer, type BreakProduct, type BreakPromotion } from "./catalogue-breaks.ts";
+import { offerTilePresentation, type OfferTeaserProduct } from "./offer-teaser.ts";
 
 const product = (id: number, name = `Product ${id}`): BreakProduct => ({ id, name });
 const products = (count: number) => Array.from({ length: count }, (_, index) => product(index + 1));
 const offer = (id: number, endsAt: string | null = null): BreakOffer => ({
-  id, title: `Offer ${id}`, description: null, total: 100, normalTotal: 200, isBundle: false, itemCount: 1, imageUrl: null, endsAt,
+  id, title: `Offer ${id}`, slug: `offer-${id}`, description: null, total: 100, normalTotal: 200, isBundle: false, itemCount: 1, imageUrl: null, endsAt,
+  items: [{ productId: id, imageUrl: null, quantity: 1 }],
 });
 const guide = (id: number, title = `Guide ${id}`, excerpt = ""): BreakGuide => ({ id, slug: `g${id}`, title, excerpt, imageUrl: null });
 const promotion = (id: number): BreakPromotion => ({ id, title: `Promotion ${id}`, imageUrl: `/promotion-${id}.jpg`, productId: id, productName: `Product ${id}` });
+
+test("offer image tiles adapt from one product through the compact overflow layout", () => {
+  const items = (count: number): OfferTeaserProduct[] => Array.from({ length: count }, (_, index) => ({
+    productId: index + 1,
+    imageUrl: index === 1 ? null : `/product-${index + 1}.jpg`,
+    quantity: index === 0 ? 2 : 1,
+  }));
+
+  assert.deepEqual(offerTilePresentation(items(1)), { tiles: items(1), layout: "one", remaining: 0 });
+  assert.equal(offerTilePresentation(items(2)).layout, "two");
+  assert.equal(offerTilePresentation(items(3)).layout, "three");
+  assert.equal(offerTilePresentation(items(4)).layout, "four");
+
+  const seven = offerTilePresentation(items(7));
+  assert.equal(seven.layout, "four");
+  assert.equal(seven.tiles.length, 4);
+  assert.equal(seven.remaining, 3);
+  assert.equal(seven.tiles[1]?.imageUrl, null, "products without artwork remain represented by a placeholder tile");
+});
 
 test("a catalogue too short to interrupt is left alone", () => {
   for (const count of [0, 1, 3, MIN_PRODUCTS_BEFORE_BREAK * 2 - 1]) {

@@ -1,12 +1,14 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { BookOpen, ChevronLeft, ChevronRight, Flame, Percent, Sparkles, Tag } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, Flame, Package, Sparkles, Tag } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { offerTilePresentation, type OfferTeaserProduct } from "@/lib/offer-teaser";
 import { OfferCountdown } from "./offer-countdown";
 
 export type Guide = { id:number; slug:string; title:string; excerpt:string; imageUrl:string|null };
-export type OfferTeaser = { id:number; title:string; description:string|null; total:number; normalTotal:number; isBundle:boolean; itemCount:number; imageUrl:string|null; endsAt:string|null };
+export type OfferTeaser = { id:number; title:string; slug:string; description:string|null; total:number; normalTotal:number; isBundle:boolean; itemCount:number; imageUrl:string|null; endsAt:string|null; items:OfferTeaserProduct[] };
 export type Promotion = { id:number; title:string; imageUrl:string; productId:number; productName:string };
 
 export type Interruption =
@@ -19,8 +21,11 @@ const money = (value: number) => `KES ${Math.round(value).toLocaleString("en-KE"
 function OfferSlide({ offer, index }: { offer: OfferTeaser; index: number }) {
   const saving = offer.normalTotal > offer.total ? offer.normalTotal - offer.total : 0;
   const blue = index % 2 === 1;
+  const products = offer.items.length ? offer.items : [{ productId: 0, imageUrl: offer.imageUrl, quantity: 1 }];
+  const imageLayout = offerTilePresentation(products);
+  const productLabel = offer.itemCount === 1 ? "1 product" : `${offer.itemCount} products`;
   return <article className={`offer-slide ${blue ? "is-blue" : "is-pink"}`}>
-    <Link prefetch={false} className="offer-slide-card" href={`/offers#offer-${offer.id}`} aria-label={`See ${offer.title}`}>
+    <Link prefetch={false} className="offer-slide-card" href={`/offers/${encodeURIComponent(offer.slug)}`} aria-label={`See ${offer.title}: ${productLabel} in this offer`}>
       <span className="offer-slide-ribbon">
         {blue ? <Sparkles aria-hidden="true"/> : <Flame aria-hidden="true"/>}
         {blue ? "Special offer" : "Hot deal"}
@@ -34,8 +39,12 @@ function OfferSlide({ offer, index }: { offer: OfferTeaser; index: number }) {
         </p>
         {saving > 0 && <span className="offer-slide-badge"><small>You save</small>{money(saving)}</span>}
       </div>
-      <span className="offer-slide-image" aria-hidden="true">
-        {offer.imageUrl ? <img src={offer.imageUrl} alt={`${offer.title} offer`} loading="lazy" decoding="async"/> : <Percent/>}
+      <span className={`offer-slide-images is-${imageLayout.layout}`} aria-hidden="true">
+        {imageLayout.tiles.map((product, productIndex) => <span className="offer-slide-image-tile" key={`${product.productId}-${productIndex}`}>
+          {product.imageUrl ? <img src={product.imageUrl} alt="" loading="lazy" decoding="async"/> : (products.length === 1 && offer.imageUrl ? <img src={offer.imageUrl} alt="" loading="lazy" decoding="async"/> : <Package/>)}
+          {product.quantity > 1 && <span className="offer-slide-quantity">×{product.quantity}</span>}
+          {productIndex === 3 && imageLayout.remaining > 0 && <span className="offer-slide-more">+{imageLayout.remaining} more</span>}
+        </span>)}
       </span>
       <span className="offer-slide-footer">
         <OfferCountdown endsAt={offer.endsAt}/>

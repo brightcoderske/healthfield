@@ -1,3 +1,5 @@
+import type { OfferTeaserProduct } from "./offer-teaser";
+
 /**
  * Decides what interrupts the catalogue scroll, and where.
  *
@@ -14,8 +16,8 @@ export type BreakProduct = {
   id: number; name: string;
 };
 export type BreakOffer = {
-  id: number; title: string; description: string | null; total: number; normalTotal: number;
-  isBundle: boolean; itemCount: number; imageUrl: string | null; endsAt: string | null;
+  id: number; title: string; slug: string; description: string | null; total: number; normalTotal: number;
+  isBundle: boolean; itemCount: number; imageUrl: string | null; endsAt: string | null; items: OfferTeaserProduct[];
 };
 export type BreakGuide = { id: number; slug: string; title: string; excerpt: string; imageUrl: string | null };
 export type BreakPromotion = { id: number; title: string; imageUrl: string; productId: number; productName: string };

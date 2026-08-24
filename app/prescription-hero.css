@@ -26,8 +26,8 @@
 .rx-quick-icon{width:27px;height:27px;flex:0 0 27px;border-radius:9px;background:#fdeaf3;display:grid;place-items:center;}
 .rx-quick-icon svg{width:16px;color:#d92f91;}
 .rx-quick-copy{min-width:0;display:flex;flex-direction:column;gap:1px;}
-.rx-quick-copy strong{color:#181529;font-size:9.5px;font-weight:800;line-height:1.15;}
-.rx-quick-copy small{color:#7a7380;font-size:8px;}
+.rx-quick-copy strong{color:#181529;font-size:11.5px;font-weight:800;line-height:1.2;}
+.rx-quick-copy small{color:#7a7380;font-size:10px;}
 .rx-quick-actions > a > svg{width:14px;flex:0 0 14px;margin-left:auto;color:#d92f91;}
 @media (min-width: 981px){.rx-quick-actions{display:none;}}
 @media (max-width: 340px){
@@ -40,12 +40,12 @@
 @media (max-width: 420px){
 .prescription-hero{grid-template-columns:1fr minmax(0, 44%);}
 .prescription-hero-copy{padding:12px 2px 12px 14px;}
-.prescription-hero p{margin-top:5px;max-width:15em;font-size:9.5px;line-height:1.3;}
-.prescription-hero-cta{min-height:34px;margin-top:10px;padding:0 15px;font-size:10px;gap:6px;}
+.prescription-hero p{margin-top:5px;max-width:15em;font-size:11px;line-height:1.35;}
+.prescription-hero-cta{min-height:34px;margin-top:10px;padding:0 15px;font-size:11px;gap:6px;}
 .prescription-hero-cta svg{width:14px;}
 .prescription-hero-availability{right:3px;bottom:9px;padding:5px 8px;}
-.prescription-hero-availability span{font-size:8px;}
-.prescription-hero-availability b{font-size:9px;}
+.prescription-hero-availability span{font-size:9px;}
+.prescription-hero-availability b{font-size:10px;}
 }
 
 /* Desktop: the banner becomes a slide in the rotating hero. */
@@ -76,7 +76,7 @@
 .approved-categories button{gap:4px;}
 .approved-categories button > span{width:40px;height:40px;}
 .approved-categories svg{width:18px;}
-.approved-categories small{font-size:8.5px;}
+.approved-categories small{font-size:10.5px;}
 .approved-title + .approved-categories,.approved-section .approved-categories{margin-top:7px;}
 @media (min-width: 981px){
 .approved-categories{margin-top:8px;gap:9px;}
@@ -97,7 +97,7 @@
 /* The chips were a full row of their own; smaller and tighter, they sit in the space
    the artwork already leaves rather than adding height under it. */
 .desktop-hero-trust{left:40px;bottom:14px;gap:9px;}
-.desktop-hero-trust span{min-height:32px;padding:0 9px;gap:6px;font-size:8.5px;}
+.desktop-hero-trust span{min-height:32px;padding:0 9px;gap:6px;font-size:10px;}
 .desktop-hero-trust svg{width:15px;}
 .prescription-hero{min-height:296px;}
 .approved-section{margin-top:11px;}
@@ -116,7 +116,7 @@
 .approved-categories{margin-top:5px;gap:6px;}
 .approved-categories button > span{width:34px;height:34px;}
 .approved-categories svg{width:16px;}
-.approved-categories small{font-size:8px;}
+.approved-categories small{font-size:10.5px;}
 .approved-products{margin-top:5px;padding-top:0;}
 }
 
@@ -139,7 +139,7 @@
 @media (max-width: 980px){
 .approved-nav{height:56px;}
 .approved-nav svg{width:18px;height:18px;}
-.approved-nav a,.approved-nav button{gap:2px;font-size:8.5px;}
+.approved-nav a,.approved-nav button{gap:2px;font-size:10px;}
 /* The floating button and its panel ride down with the shortened bar. */
 .approved-services{bottom:64px;}
 .approved-services-overlay{inset:auto 12px 123px auto;}

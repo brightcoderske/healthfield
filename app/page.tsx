@@ -56,12 +56,18 @@ type HomeData = {
   offers?: Array<{
     id: number;
     title: string;
+    slug: string;
     description: string | null;
     total: number;
     isBundle: boolean;
     imageUrl: string | null;
     endsAt: string | null;
-    items: Array<{ quantity: number; normalPrice: number }>;
+    items: Array<{
+      productId: number;
+      imageUrl: string | null;
+      quantity: number;
+      normalPrice: number;
+    }>;
   }>;
   promotions?: Array<{
     id: number;
@@ -133,6 +139,7 @@ export default async function Home({
   let offerTeasers: Array<{
     id: number;
     title: string;
+    slug: string;
     description: string | null;
     total: number;
     normalTotal: number;
@@ -140,6 +147,11 @@ export default async function Home({
     itemCount: number;
     imageUrl: string | null;
     endsAt: string | null;
+    items: Array<{
+      productId: number;
+      imageUrl: string | null;
+      quantity: number;
+    }>;
   }> = [];
   let promotions: Array<{
     id: number;
@@ -157,6 +169,7 @@ export default async function Home({
     offerTeasers = (data.offers || []).map((offer) => ({
       id: offer.id,
       title: offer.title,
+      slug: offer.slug,
       description: offer.description,
       total: offer.total,
       normalTotal: offer.items.reduce(
@@ -167,6 +180,11 @@ export default async function Home({
       itemCount: offer.items.length,
       imageUrl: offer.imageUrl,
       endsAt: offer.endsAt,
+      items: offer.items.map((item) => ({
+        productId: item.productId,
+        imageUrl: item.imageUrl,
+        quantity: item.quantity,
+      })),
     }));
     promotions = data.promotions || [];
   }
