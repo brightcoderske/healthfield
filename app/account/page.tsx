@@ -1,5 +1,5 @@
 /* eslint-disable @next/next/no-img-element */
-import { FileText, Package, ShoppingCart } from "lucide-react";
+import { FileText, Package, ShoppingCart, Stethoscope } from "lucide-react";
 import Link from "next/link";
 import { backendJson } from "@/lib/backend-api";
 import { requireRole } from "@/lib/auth";
@@ -113,13 +113,24 @@ export default async function AccountPage() {
           </div>
         )}
       </section>
+      <section className="account-consultation-card" aria-labelledby="account-consultations-title">
+        <div className="account-consultation-icon"><Stethoscope /></div>
+        <div>
+          <span>Professional support</span>
+          <h2 id="account-consultations-title">My consultations</h2>
+          <p>Follow your conversations, replies and prescription decisions in one place.</p>
+        </div>
+        <nav aria-label="Consultation actions">
+          <Link href="/account/consultations">View my consultations</Link>
+          <Link href="/prescriptions/consult">Start a consultation</Link>
+        </nav>
+      </section>
       <section
         className="account-orders account-table account-prescriptions"
         id="prescriptions"
       >
         <div>
           <h2>My prescriptions</h2>
-          <Link href="/account/consultations">My consultations</Link>
           <Link href="/prescriptions/upload">Upload another</Link>
         </div>
         <header>

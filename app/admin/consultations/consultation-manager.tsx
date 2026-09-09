@@ -1,6 +1,6 @@
 "use client";
 
-import { PhoneCall, Plus, Stethoscope, X } from "lucide-react";
+import { Check, PhoneCall, Plus, Search, Stethoscope, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   canApplyConsultationAction,
@@ -42,6 +42,68 @@ export type ConsultationProduct = {
 };
 
 type IssueLine = { productId: number; quantity: number; directions: string };
+
+function MedicinePicker({
+  products,
+  value,
+  onChange,
+}: {
+  products: ConsultationProduct[];
+  value: number;
+  onChange: (productId: number) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const selected = products.find((product) => product.id === value) || null;
+  const term = search.trim().toLowerCase();
+  const matches = term
+    ? products
+        .filter((product) => `${product.name} ${product.packSize || ""}`.toLowerCase().includes(term))
+        .slice(0, 12)
+    : [];
+
+  return (
+    <div className="rx-medicine-picker">
+      <label className="rx-medicine-search">
+        <span>Product</span>
+        <span className="rx-medicine-search-box">
+          <Search aria-hidden="true" />
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={selected ? "Search to change medicine" : "Search medicine by name or pack size"}
+            aria-label="Search medicine by name or pack size"
+          />
+        </span>
+      </label>
+      {term ? (
+        <div className="rx-medicine-results" aria-label="Matching medicines">
+          {matches.length ? matches.map((product) => (
+            <button
+              key={product.id}
+              type="button"
+              aria-pressed={product.id === value}
+              onClick={() => { onChange(product.id); setSearch(""); }}
+            >
+              <span>
+                <strong>{product.name}</strong>
+                <small>{product.packSize || "Pack size not listed"}{product.prescriptionRequired ? " · Prescription" : " · OTC"}</small>
+              </span>
+              {product.id === value ? <Check aria-hidden="true" /> : null}
+            </button>
+          )) : <p>No medicines match “{search.trim()}”.</p>}
+        </div>
+      ) : null}
+      {selected ? (
+        <div className="rx-medicine-selected">
+          <Check aria-hidden="true" />
+          <span><small>Selected medicine</small><strong>{selected.name}{selected.packSize ? ` · ${selected.packSize}` : ""}</strong></span>
+          <button type="button" onClick={() => onChange(0)}>Clear</button>
+        </div>
+      ) : <small className="rx-medicine-hint">Type at least part of the medicine name to see matching products.</small>}
+    </div>
+  );
+}
 
 const actionLabels: Record<ConsultationAction, string> = {
   START_REVIEW: "Start review",
@@ -359,26 +421,15 @@ export function ConsultationManager({
                             Remove
                           </button>
                         </div>
-                        <label>
-                          <span>Product</span>
-                          <select
-                            value={line.productId || ""}
-                            onChange={(event) =>
-                              setLines((current) =>
-                                current.map((item, i) => (i === index ? { ...item, productId: Number(event.target.value) } : item)),
-                              )
-                            }
-                          >
-                            <option value="">Select a medicine</option>
-                            {products.map((product) => (
-                              <option key={product.id} value={product.id}>
-                                {product.name}
-                                {product.packSize ? ` · ${product.packSize}` : ""}
-                                {product.prescriptionRequired ? " · Rx" : ""}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                        <MedicinePicker
+                          products={products}
+                          value={line.productId}
+                          onChange={(productId) =>
+                            setLines((current) =>
+                              current.map((item, i) => (i === index ? { ...item, productId } : item)),
+                            )
+                          }
+                        />
                         <div className="rx-panel-grid">
                           <label>
                             <span>Quantity</span>

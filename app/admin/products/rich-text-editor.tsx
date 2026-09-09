@@ -438,6 +438,20 @@ export function RichTextEditor({
   });
 
   useEffect(() => {
+    if (!editor) return;
+    const value = initialHtml === "<p></p>" ? "" : initialHtml;
+    const editorValue = editor.getHTML() === "<p></p>" ? "" : editor.getHTML();
+
+    // Tiptap creates its client editor after the surrounding modal has rendered.
+    // `content` is an initial option rather than a reactive prop, so records opened
+    // while that instance is settling can otherwise keep the previous/blank document
+    // even though the public product page has a stored description. Explicitly load
+    // the selected record and keep the form carrier in step with it.
+    if (editorValue !== value) editor.commands.setContent(initialHtml);
+    if (hiddenInputRef.current) hiddenInputRef.current.value = value;
+  }, [editor, initialHtml]);
+
+  useEffect(() => {
     if (!restoreRef) return;
     restoreRef.current = editor
       ? (value: string) => {

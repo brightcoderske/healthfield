@@ -10,7 +10,8 @@ import { RichTextEditor } from "./rich-text-editor";
 
 type Product = {
   id: number; categoryId: number; name: string; sku: string; barcode: string | null; brand: string | null; packSize: string | null;
-  shortDescription: string | null; description: string | null; price: number; discountPrice: number | null; costPrice: string | number | null; costPriceEstimated?: boolean; imageUrl: string | null;
+  shortDescription: string | null; description: string | null; usageInformation: string | null; warnings: string | null; storageInformation: string | null;
+  price: number; discountPrice: number | null; costPrice: string | number | null; costPriceEstimated?: boolean; imageUrl: string | null;
   isFeatured: boolean; isActive: boolean; conditionIds: number[];
   prescriptionRequired: boolean;
 };
@@ -72,8 +73,11 @@ export function ProductManager({ initialProducts, categories, conditions, branch
     const payload = {
       categoryId: Number(form.get("categoryId")), name: String(form.get("name")), brand: String(form.get("brand") || ""),
       barcode: String(form.get("barcode") || "").trim() || null,
-      packSize: String(form.get("packSize") || ""), shortDescription: "",
+      packSize: String(form.get("packSize") || ""), shortDescription: String(form.get("shortDescription") || ""),
       description: String(form.get("description") || ""),
+      usageInformation: String(form.get("usageInformation") || ""),
+      warnings: String(form.get("warnings") || ""),
+      storageInformation: String(form.get("storageInformation") || ""),
       price: Number(form.get("price")), discountPrice: form.get("discountPrice") ? Number(form.get("discountPrice")) : null,
       costPrice: form.get("costPrice") ? Number(form.get("costPrice")) : null,
       imageUrl: editing === "new" ? null : editing.imageUrl, isFeatured: form.get("isFeatured") === "on",
@@ -151,7 +155,11 @@ export function ProductManager({ initialProducts, categories, conditions, branch
     name: activeEdit?.name ?? "",
     brand: activeEdit?.brand ?? "",
     packSize: activeEdit?.packSize ?? "",
+    shortDescription: activeEdit?.shortDescription ?? "",
     description: activeEdit?.description ?? "",
+    usageInformation: activeEdit?.usageInformation ?? "",
+    warnings: activeEdit?.warnings ?? "",
+    storageInformation: activeEdit?.storageInformation ?? "",
     price: activeEdit ? String(activeEdit.price) : "",
     discountPrice: activeEdit?.discountPrice != null ? String(activeEdit.discountPrice) : "",
     categoryId: activeEdit ? String(activeEdit.categoryId) : "",
@@ -174,7 +182,11 @@ export function ProductManager({ initialProducts, categories, conditions, branch
       name: String(data.get("name") || ""),
       brand: String(data.get("brand") || ""),
       packSize: String(data.get("packSize") || ""),
+      shortDescription: String(data.get("shortDescription") || ""),
       description: String(data.get("description") || ""),
+      usageInformation: String(data.get("usageInformation") || ""),
+      warnings: String(data.get("warnings") || ""),
+      storageInformation: String(data.get("storageInformation") || ""),
       price: String(data.get("price") || ""),
       discountPrice: String(data.get("discountPrice") || ""),
       categoryId: String(data.get("categoryId") || ""),
@@ -283,6 +295,7 @@ export function ProductManager({ initialProducts, categories, conditions, branch
       <div className="product-form-grid">
         <label>Product name<input name="name" defaultValue={activeEdit?.name||""} required/></label><label>Brand<input name="brand" defaultValue={activeEdit?.brand||""}/></label>
         <label>Category<select name="categoryId" defaultValue={activeEdit?.categoryId||""} required><option value="">Select category</option>{categories.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Pack size<input name="packSize" defaultValue={activeEdit?.packSize||""}/></label>
+        <label className="full">Short description<textarea name="shortDescription" defaultValue={activeEdit?.shortDescription||""} rows={3} maxLength={500} placeholder="A concise customer-facing product summary"/><small>Used in catalogue summaries and search. Maximum 500 characters.</small></label>
         <label className="full product-code-field">Barcode or QR code<span><input name="barcode" value={barcode} onChange={(event)=>setBarcode(event.target.value)} inputMode="numeric" placeholder="Scan with USB scanner or type the code"/><button type="button" onClick={()=>setScannerOpen(true)}><Camera/> Scan with camera</button></span><small>The POS recognises this code immediately. A connected USB scanner can type directly into this field.</small></label>
         {canEditCost ? <label>Buying price (what you paid)<input name="costPrice" type="number" min="0" step=".01" value={costPrice} onChange={event=>{
           const value = event.target.value;
@@ -299,7 +312,10 @@ export function ProductManager({ initialProducts, categories, conditions, branch
         <label>Regular price (before discount)<input name="price" type="number" min="0" step=".01" value={regularPrice} onChange={event=>setRegularPrice(event.target.value)} required/><small>The normal or previous customer price.</small></label><label>Selling price (customer pays)<input name="discountPrice" type="number" min="0" max={regularPrice||undefined} step=".01" value={sellingPrice} onChange={event=>setSellingPrice(event.target.value)}/><small>{sellingPrice&&regularPrice&&Number(sellingPrice)<Number(regularPrice)?`Discount calculated automatically: Save ${Math.round((1-Number(sellingPrice)/Number(regularPrice))*100)}%`:`Leave blank when the product is not discounted.`}</small></label>
         <label className="full">Product image<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/bmp,image/tiff,.jpg,.jpeg,.png,.webp,.gif,.avif,.bmp,.tif,.tiff" onChange={chooseImage}/><small>JPEG, PNG, WebP, GIF, AVIF, BMP or TIFF. Maximum 2 MB.</small></label>
         {(imagePreview||activeEdit?.imageUrl)&&<div className="edit-image-preview full"><img src={imagePreview||activeEdit?.imageUrl||""} alt={activeEdit?.name||"New product preview"}/>{activeEdit?.imageUrl&&!imagePreview&&<button type="button" onClick={()=>removeImage(activeEdit)}><ImageOff/> Remove image now</button>}</div>}
-        <div className="full rich-text-field"><span>Detailed description</span><RichTextEditor restoreRef={restoreDescription} defaultValue={activeEdit?.description||""} rows={10} maxLength={10000} helper="Formatting counts toward the limit, so a richly styled description uses more than its visible text"/></div>
+        <div className="full rich-text-field"><span>Detailed description</span><RichTextEditor key={editing === "new" ? "new-product-description" : `product-description-${activeEdit?.id}`} restoreRef={restoreDescription} defaultValue={activeEdit?.description||""} rows={10} maxLength={10000} helper="Formatting counts toward the limit, so a richly styled description uses more than its visible text"/></div>
+        <label className="full">How to use<textarea name="usageInformation" defaultValue={activeEdit?.usageInformation||""} rows={6} maxLength={10000} placeholder="Dosage and directions shown on the customer product page"/></label>
+        <label className="full">Important warnings<textarea name="warnings" defaultValue={activeEdit?.warnings||""} rows={6} maxLength={10000} placeholder="Contraindications, interactions and when to seek help"/></label>
+        <label className="full">Storage information<textarea name="storageInformation" defaultValue={activeEdit?.storageInformation||""} rows={4} maxLength={10000} placeholder="Temperature, light, moisture and child-safety guidance"/></label>
         <fieldset className="full condition-picker"><legend>Health conditions supported by this product</legend>{conditions.map((item)=><label key={item.id}><input type="checkbox" name="conditionIds" value={item.id} defaultChecked={activeEdit?.conditionIds.includes(item.id)}/><span>{item.name}</span></label>)}</fieldset>
         {branches.length ? (
           // Collapsed by default: stock is the exception when editing a product, so it

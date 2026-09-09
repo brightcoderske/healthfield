@@ -1669,6 +1669,16 @@ body{background:white;padding-bottom:78px;}
 .compact-account .account-empty > span{display:flex;flex-direction:column;text-align:left;}
 .compact-account .account-empty small{margin-top:2px;}
 .compact-account .account-empty > a{margin:0;}
+.account-consultation-card{margin:0 0 14px;padding:16px;border:1px solid #e5dfe7;border-radius:14px;background:linear-gradient(135deg,#fff 0%,#fbf4fc 100%);display:grid!important;grid-template-columns:42px minmax(0,1fr);align-items:center;gap:10px 12px;}
+.account-consultation-icon{width:42px;height:42px;border-radius:12px;color:white;background:linear-gradient(135deg,#792487,#d62e83);display:grid;place-items:center;box-shadow:0 6px 16px rgba(121,36,135,.18);}
+.account-consultation-icon svg{width:21px!important;color:white!important;}
+.account-consultation-card > div:nth-child(2){min-width:0;}
+.account-consultation-card > div:nth-child(2) > span{color:#a3268c;font-size:8px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;}
+.account-consultation-card h2{margin:2px 0 3px;font-size:16px;}
+.account-consultation-card p{margin:0;color:#6f6874;font-size:9.5px;line-height:1.45;}
+.account-consultation-card nav{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+.compact-account .account-consultation-card nav a{min-height:38px;padding:0 10px;border:1px solid #dfd1e3;border-radius:9px;color:#792587;background:white;display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:800;text-align:center;}
+.compact-account .account-consultation-card nav a:first-child{border-color:transparent;color:white;background:#792587;}
 /*Deliberate pharmacy footer: light information surface with a single strong brand accent.*/
 .store-footer{border-top:4px solid #792587;color:#302a33;background:linear-gradient(180deg, #fff 0%, #f7f1f8 100%);box-shadow:inset 0 1px #eadfeb;}
 .footer-about img{filter:none;}

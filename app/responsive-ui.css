@@ -1,7 +1,7 @@
 /* Final responsive scale and compact administration pass. */
 button,[role="button"],a[href],label:has(input[type="radio"]),summary{cursor:pointer}
 button:disabled{cursor:not-allowed}
-.admin-back-to-top{position:fixed;z-index:35;right:16px;bottom:16px;min-width:42px;height:38px;padding:0 11px;border:1px solid rgba(255,255,255,.35);border-radius:20px;color:#fff;background:#682274;box-shadow:0 8px 24px rgba(48,17,57,.25);display:flex;align-items:center;justify-content:center;gap:4px;font-size:8px;font-weight:850;opacity:0;visibility:hidden;transform:translateY(10px);pointer-events:none;transition:opacity .18s,transform .18s,visibility .18s}.admin-back-to-top.visible{opacity:1;visibility:visible;transform:none;pointer-events:auto}.admin-back-to-top svg{width:14px;height:14px}
+.admin-back-to-top{position:fixed;z-index:35;top:50%;right:16px;bottom:auto;min-width:42px;height:38px;padding:0 11px;border:1px solid rgba(255,255,255,.35);border-radius:20px;color:#fff;background:#682274;box-shadow:0 8px 24px rgba(48,17,57,.25);display:flex;align-items:center;justify-content:center;gap:4px;font-size:8px;font-weight:850;opacity:0;visibility:hidden;transform:translateY(calc(-50% + 10px));pointer-events:none;transition:opacity .18s,transform .18s,visibility .18s}.admin-back-to-top.visible{opacity:1;visibility:visible;transform:translateY(-50%);pointer-events:auto}.admin-back-to-top svg{width:14px;height:14px}
 
 @media (min-width:1181px){
   .admin-shell{grid-template-columns:215px minmax(0,1fr)}
@@ -89,7 +89,7 @@ button:disabled{cursor:not-allowed}
   .data-page>header h1,.admin-header h1{font-size:21px}
   .data-page>header p,.admin-header p{font-size:9px;line-height:1.45}
   .admin-mobile-nav{height:62px}.admin-mobile-nav a,.admin-more-trigger{font-size:8px!important}.admin-mobile-nav svg,.admin-more-trigger svg{width:17px!important;height:17px!important}
-  .admin-back-to-top{right:9px;bottom:70px;min-width:34px;width:34px;height:34px;padding:0}.admin-back-to-top span{display:none}
+  .admin-back-to-top{top:50%;right:9px;bottom:auto;min-width:34px;width:34px;height:34px;padding:0}.admin-back-to-top span{display:none}
   .admin-mobile-drawer{position:fixed!important;inset:6px 6px 66px auto!important;width:min(196px,62vw)!important;max-width:196px!important;height:auto!important;max-height:calc(100dvh - 72px)!important;margin:0!important;padding:0!important;border-radius:9px!important;overflow:hidden!important;display:none;grid-template-rows:32px minmax(0,1fr) 36px;background:#fff!important}
   .admin-mobile-drawer:popover-open{display:grid!important}
   .admin-mobile-drawer header{min-height:32px!important;padding:0 7px!important}.admin-mobile-drawer header strong{font-size:9px}.admin-mobile-drawer header button{font-size:7px}

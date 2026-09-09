@@ -680,9 +680,14 @@ export function Storefront({
             {viewer ? `Hi, ${viewer.firstName}` : "Login / Register"}
           </Link>
           {viewer?.role === "CUSTOMER" && (
-            <a href="/account#orders">
-              <Package /> My orders
-            </a>
+            <>
+              <a href="/account#orders">
+                <Package /> My orders
+              </a>
+              <Link prefetch={false} href="/account/consultations">
+                <Stethoscope /> My consultations
+              </Link>
+            </>
           )}
           {viewer && (
             <form
@@ -1006,6 +1011,8 @@ export function Storefront({
               {viewer.role === "CUSTOMER" && (
                 <>
                   <a href="/account#orders">My orders</a>
+                  <Link prefetch={false} href="/account/consultations">My consultations</Link>
+                  <Link prefetch={false} href="/prescriptions/consult">Start a consultation</Link>
                   <a href="/chat">Chat with us</a>
                   <a href="/prescriptions/upload">Upload prescription</a>
                   <a href="/wishlist">My favourites</a>
