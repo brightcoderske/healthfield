@@ -67,6 +67,7 @@ type HealthCondition = { id: number; name: string; slug: string };
 type SearchPayload = { products: CatalogProduct[]; similar: CatalogProduct[]; capped?: boolean };
 
 const searchCache = new Map<string, SearchPayload>();
+const browseCache = new Map<string, CatalogProduct[]>();
 
 function searchWords(value: string) {
   return value.toLowerCase().trim().split(/\s+/).filter(Boolean);
@@ -218,6 +219,14 @@ export function Storefront({
   const [conditionQuery, setConditionQuery] = useState("");
   const [categoryQuery, setCategoryQuery] = useState("");
   const [openMenu, setOpenMenu] = useState<HeaderMenu | null>(null);
+  const [dismissedMenu, setDismissedMenu] = useState<HeaderMenu | null>(null);
+  const [openCategoryBranch, setOpenCategoryBranch] = useState<number | null>(
+    null,
+  );
+  const [browseResults, setBrowseResults] = useState<{
+    key: string;
+    products: CatalogProduct[];
+  } | null>(null);
   const [visibleCount, setVisibleCount] = useState(PRODUCT_PAGE_SIZE);
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [searchResults, setSearchResults] = useState<
@@ -317,6 +326,27 @@ export function Storefront({
     ]);
   }, [selectedCategory, subCategories]);
 
+  // The page arrives with only the first page of the catalogue, so a chosen category or
+  // condition is answered from the whole catalogue too. Until that lands, the grid shows
+  // whatever of the first page already fits.
+  const browseKey = useMemo(() => {
+    if (!selectedCategoryIds && !selectedCondition) return null;
+    const params = new URLSearchParams();
+    if (selectedCategoryIds)
+      params.set(
+        "categories",
+        [...selectedCategoryIds].sort((left, right) => left - right).join(","),
+      );
+    if (selectedCondition) params.set("condition", String(selectedCondition));
+    return params.toString();
+  }, [selectedCategoryIds, selectedCondition]);
+  const browsedProducts = useMemo(() => {
+    if (!browseKey) return null;
+    if (browseResults?.key === browseKey) return browseResults.products;
+    return browseCache.get(browseKey) ?? null;
+  }, [browseKey, browseResults]);
+  const loadingBrowse = Boolean(browseKey) && !browsedProducts;
+
   // Prescription medicines are kept out of the browsing catalogue but stay findable:
   // someone who knows what they were prescribed can search for it by name, while a
   // casual scroll of the homepage never puts prescription-only medicine in front of
@@ -324,7 +354,10 @@ export function Storefront({
   const browsingOnly = !normalizedQuery && !selectedCategory && !selectedCondition && !offersOnly;
   const filtered = useMemo(
     () =>
-      searchedProducts.filter(
+      (queryWords.length
+        ? searchedProducts
+        : mergeProducts(browsedProducts || [], searchedProducts)
+      ).filter(
         (product) =>
           productMatches(product, queryWords, initialCategories) &&
           (!browsingOnly || !product.prescriptionRequired) &&
@@ -336,6 +369,7 @@ export function Storefront({
       ),
     [
       searchedProducts,
+      browsedProducts,
       initialCategories,
       queryWords,
       browsingOnly,
@@ -393,6 +427,7 @@ export function Storefront({
   function revealHeaderMenu(label: HeaderMenu, fallbackUrl: string) {
     if (!headerMenuReachable(label)) return window.location.assign(fallbackUrl);
     window.scrollTo({ top: 0, behavior: "smooth" });
+    setDismissedMenu(null);
     setOpenMenu(label);
   }
   // Whether the shopper is working towards something rather than browsing. The landing
@@ -413,7 +448,28 @@ export function Storefront({
     const sheet = document.getElementById("mobile-shop-menu") as
       | (HTMLElement & { hidePopover?: () => void })
       | null;
+    // The sections fold too, so the next visit opens on a short list, not the last one.
+    sheet
+      ?.querySelectorAll("details[open]")
+      .forEach((section) => section.removeAttribute("open"));
     if (sheet?.matches(":popover-open")) sheet.hidePopover?.();
+  }
+  /**
+   * Folds away the header menu that was just used. They open on hover and focus, both
+   * of which a click leaves in place, so without this the menu kept covering the
+   * products it had just filtered until the pointer happened to leave it.
+   */
+  function dismissHeaderMenu() {
+    const used = document.querySelector<HTMLElement>(
+      "[data-nav-menu]:hover, [data-nav-menu]:focus-within",
+    );
+    if (!used) return;
+    setDismissedMenu(used.dataset.navMenu as HeaderMenu);
+    if (
+      document.activeElement instanceof HTMLElement &&
+      used.contains(document.activeElement)
+    )
+      document.activeElement.blur();
   }
   function showCategory(categoryId: number) {
     setSelectedCategory(categoryId);
@@ -421,6 +477,11 @@ export function Storefront({
     setQuery("");
     setVisibleCount(PRODUCT_PAGE_SIZE);
     setOpenMenu(null);
+    setOpenCategoryBranch(
+      initialCategories.find((category) => category.id === categoryId)
+        ?.parentId ?? categoryId,
+    );
+    dismissHeaderMenu();
     closeMobileMenu();
     revealFilteredProducts();
   }
@@ -430,6 +491,7 @@ export function Storefront({
     setQuery("");
     setVisibleCount(PRODUCT_PAGE_SIZE);
     setOpenMenu(null);
+    dismissHeaderMenu();
     closeMobileMenu();
     revealFilteredProducts();
   }
@@ -591,6 +653,31 @@ export function Storefront({
       window.clearTimeout(timer);
     };
   }, [query]);
+  useEffect(() => {
+    if (!browseKey || browseCache.has(browseKey)) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const response = await fetch(`/api/catalogue/browse?${browseKey}`, {
+          signal: controller.signal,
+        });
+        const data = (await response.json().catch(() => null)) as {
+          products?: CatalogProduct[];
+        } | null;
+        if (!response.ok || !data) throw new Error("Browse failed");
+        const products = Array.isArray(data.products) ? data.products : [];
+        browseCache.set(browseKey, products);
+        if (browseCache.size > 30)
+          browseCache.delete(browseCache.keys().next().value!);
+        setBrowseResults({ key: browseKey, products });
+      } catch (error) {
+        // A failed lookup settles on the first page rather than loading forever.
+        if (!(error instanceof DOMException && error.name === "AbortError"))
+          setBrowseResults({ key: browseKey, products: [] });
+      }
+    })();
+    return () => controller.abort();
+  }, [browseKey]);
   useEffect(() => {
     const updateBackToTop = () =>
       setShowBackToTop(window.scrollY > window.innerHeight * 0.6);
@@ -762,53 +849,87 @@ export function Storefront({
           <a href="/prescriptions/upload">Upload prescription</a>
           <a href="/prescriptions/consult">Get a prescription</a>
           <div
-            className={`desktop-nav-dropdown${openMenu === "category" ? " is-open" : ""}`}
+            className={`desktop-nav-dropdown${openMenu === "category" ? " is-open" : ""}${dismissedMenu === "category" ? " is-dismissed" : ""}`}
             data-nav-menu="category"
           >
-            <button type="button">
+            <button
+              type="button"
+              onPointerEnter={() => setDismissedMenu(null)}
+              onFocus={() => setDismissedMenu(null)}
+            >
               Shop by category <ChevronDown />
             </button>
             <div className="desktop-nav-grid category-nav-grid">
-              {mainCategories.map((category) => (
-                <div className="category-nav-column" key={category.id}>
-                  <a
-                    className={selectedCategory === category.id ? "active" : ""}
-                    href="#products"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      showCategory(category.id);
-                    }}
+              {mainCategories.map((category) => {
+                // Headings only, with one branch unfolded at a time — the same shape as
+                // the mobile sheet, so a large shelf no longer makes a wall of links.
+                const children = subCategories.get(category.id) || [];
+                const expanded = openCategoryBranch === category.id;
+                return (
+                  <div
+                    className={`category-nav-column${expanded ? " is-open" : ""}`}
+                    key={category.id}
                   >
-                    {category.name}
-                  </a>
-                  {(subCategories.get(category.id) || []).length > 0 && (
-                    <div className="category-nav-children">
-                      {(subCategories.get(category.id) || []).map((child) => (
-                        <a
-                          key={child.id}
-                          className={
-                            selectedCategory === child.id ? "active" : ""
+                    <div className="category-nav-row">
+                      <a
+                        className={
+                          selectedCategory === category.id ? "active" : ""
+                        }
+                        href="#products"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          showCategory(category.id);
+                        }}
+                      >
+                        {category.name}
+                      </a>
+                      {children.length > 0 && (
+                        <button
+                          type="button"
+                          className="category-nav-toggle"
+                          aria-expanded={expanded}
+                          aria-label={`${expanded ? "Hide" : "Show"} ${category.name} subcategories`}
+                          onClick={() =>
+                            setOpenCategoryBranch(expanded ? null : category.id)
                           }
-                          href="#products"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            showCategory(child.id);
-                          }}
                         >
-                          {child.name}
-                        </a>
-                      ))}
+                          <ChevronDown />
+                        </button>
+                      )}
                     </div>
-                  )}
-                </div>
-              ))}
+                    {expanded && children.length > 0 && (
+                      <div className="category-nav-children">
+                        {children.map((child) => (
+                          <a
+                            key={child.id}
+                            className={
+                              selectedCategory === child.id ? "active" : ""
+                            }
+                            href="#products"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              showCategory(child.id);
+                            }}
+                          >
+                            {child.name}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
           <div
-            className={`desktop-nav-dropdown${openMenu === "condition" ? " is-open" : ""}`}
+            className={`desktop-nav-dropdown${openMenu === "condition" ? " is-open" : ""}${dismissedMenu === "condition" ? " is-dismissed" : ""}`}
             data-nav-menu="condition"
           >
-            <button type="button">
+            <button
+              type="button"
+              onPointerEnter={() => setDismissedMenu(null)}
+              onFocus={() => setDismissedMenu(null)}
+            >
               Shop by condition <ChevronDown />
             </button>
             <div className="desktop-nav-grid condition-nav-grid">
@@ -958,32 +1079,56 @@ export function Storefront({
                         {category.name}
                       </a>
                     ))
-                : mainCategories.map((category) => (
-                    <div className="mobile-category-group" key={category.id}>
-                      <a
-                        href="#products"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          showCategory(category.id);
-                        }}
-                      >
-                        {category.name}
-                      </a>
-                      {(subCategories.get(category.id) || []).map((child) => (
-                        <a
-                          key={child.id}
-                          className="is-subcategory"
-                          href="#products"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            showCategory(child.id);
-                          }}
-                        >
-                          {child.name}
-                        </a>
-                      ))}
-                    </div>
-                  ))}
+                : mainCategories.map((category) => {
+                    // Subcategories stay folded under their heading until asked for, so
+                    // the sheet lists headings rather than the whole shelf at once.
+                    const children = subCategories.get(category.id) || [];
+                    const expanded = openCategoryBranch === category.id;
+                    return (
+                      <div className="mobile-category-group" key={category.id}>
+                        <div className="mobile-category-row">
+                          <a
+                            href="#products"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              showCategory(category.id);
+                            }}
+                          >
+                            {category.name}
+                          </a>
+                          {children.length > 0 && (
+                            <button
+                              type="button"
+                              className={`mobile-category-toggle${expanded ? " is-open" : ""}`}
+                              aria-expanded={expanded}
+                              aria-label={`${expanded ? "Hide" : "Show"} ${category.name} subcategories`}
+                              onClick={() =>
+                                setOpenCategoryBranch(
+                                  expanded ? null : category.id,
+                                )
+                              }
+                            >
+                              <ChevronDown />
+                            </button>
+                          )}
+                        </div>
+                        {expanded &&
+                          children.map((child) => (
+                            <a
+                              key={child.id}
+                              className="is-subcategory"
+                              href="#products"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                showCategory(child.id);
+                              }}
+                            >
+                              {child.name}
+                            </a>
+                          ))}
+                      </div>
+                    );
+                  })}
             </div>
           </details>
           <Link href="/offers">Offers</Link>
@@ -1149,6 +1294,30 @@ export function Storefront({
             <h2>
               <Menu /> Shop by Category
             </h2>
+            {/* A condition chosen elsewhere is shown here, so it is never an invisible
+                filter narrowing the categories below down to nothing. */}
+            {selectedCondition && (
+              <div className="search-active-filter">
+                <span>
+                  Condition:{" "}
+                  <strong>
+                    {initialConditions.find(
+                      (condition) => condition.id === selectedCondition,
+                    )?.name || "Selected"}
+                  </strong>
+                </span>
+                <button
+                  type="button"
+                  aria-label="Remove condition filter"
+                  onClick={() => {
+                    setSelectedCondition(null);
+                    setVisibleCount(PRODUCT_PAGE_SIZE);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            )}
             {/* An accordion, not a set of pop-outs: choosing a category shows everything
               in it and drops its subcategories open underneath, and whatever was open
               before closes. Only one branch is ever open, so the panel cannot grow
@@ -1168,7 +1337,11 @@ export function Storefront({
                     className={selectedCategory === id ? "active" : ""}
                     aria-expanded={children.length ? open : undefined}
                     onClick={() => {
+                      // Picking a shelf here replaces a condition chosen earlier, the
+                      // same as the header menu does; stacking the two silently emptied
+                      // the grid.
                       setSelectedCategory(selectedCategory === id ? null : id);
+                      setSelectedCondition(null);
                       setVisibleCount(PRODUCT_PAGE_SIZE);
                     }}
                   >
@@ -1193,6 +1366,7 @@ export function Storefront({
                             setSelectedCategory(
                               selectedCategory === child.id ? id : child.id,
                             );
+                            setSelectedCondition(null);
                             setVisibleCount(PRODUCT_PAGE_SIZE);
                           }}
                         >
@@ -1265,14 +1439,7 @@ export function Storefront({
                   <button
                     key={condition.id}
                     id={`condition-${condition.id}`}
-                    onClick={() => {
-                      setSelectedCondition(condition.id);
-                      setSelectedCategory(null);
-                      setVisibleCount(PRODUCT_PAGE_SIZE);
-                      document
-                        .getElementById("products")
-                        ?.scrollIntoView({ behavior: "smooth" });
-                    }}
+                    onClick={() => showCondition(condition.id)}
                   >
                     <span className={color}>
                       <Icon />
@@ -1294,7 +1461,9 @@ export function Storefront({
                   ? "Searching the catalogue…"
                   : normalizedQuery
                     ? `${filtered.length} ${filtered.length === 1 ? "match" : "matches"} across the whole catalogue${activeSearchResults?.capped ? " — refine your words to narrow this down" : ""}`
-                    : null}
+                    : loadingBrowse
+                      ? "Loading products…"
+                      : null}
               </small>
             </div>
           </div>
@@ -1329,6 +1498,8 @@ export function Storefront({
             </button>
           )}
           {(selectedCategory || selectedCondition || query || offersOnly) &&
+            !searching &&
+            !loadingBrowse &&
             filtered.length === 0 && (
               <div className="catalogue-empty">
                 <Package />

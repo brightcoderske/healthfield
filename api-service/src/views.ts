@@ -779,6 +779,65 @@ async function contentBlogView() {
   };
 }
 
+/**
+ * The storefront card fields that live outside the product row: condition tags and
+ * approved-review ratings. Fetched once for all the rows given, then handed back as a
+ * shaper so a caller can split its rows (exact matches, alternatives) without querying
+ * twice.
+ */
+async function cardDetails<
+  T extends { id: number; imageUrl: string | null; price: unknown; discountPrice: unknown },
+>(rows: T[]) {
+  const db = getDb();
+  const productIds = [...new Set(rows.map((product) => product.id))];
+  const [mappings, ratings] = productIds.length
+    ? await Promise.all([
+        db
+          .select()
+          .from(productHealthConditions)
+          .where(inArray(productHealthConditions.productId, productIds)),
+        db
+          .select({
+            productId: productReviews.productId,
+            rating: sql<string | null>`avg(${productReviews.rating})`,
+            reviewCount: sql<number>`count(*)`,
+          })
+          .from(productReviews)
+          .where(
+            and(
+              eq(productReviews.isApproved, true),
+              inArray(productReviews.productId, productIds),
+            ),
+          )
+          .groupBy(productReviews.productId),
+      ])
+    : [[], []];
+  const conditionsByProduct = new Map<number, number[]>();
+  for (const mapping of mappings)
+    conditionsByProduct.set(mapping.productId, [
+      ...(conditionsByProduct.get(mapping.productId) || []),
+      mapping.conditionId,
+    ]);
+  const ratingsByProduct = new Map(
+    ratings.map((rating) => [rating.productId, rating]),
+  );
+  return (subset: T[]) =>
+    subset.map((product) => ({
+      ...product,
+      imageUrl: publicImageUrl(product.imageUrl),
+      price: Number(product.price),
+      discountPrice:
+        product.discountPrice === null ? null : Number(product.discountPrice),
+      rating:
+        ratingsByProduct.get(product.id)?.rating === null ||
+        ratingsByProduct.get(product.id)?.rating === undefined
+          ? null
+          : Number(ratingsByProduct.get(product.id)?.rating),
+      reviewCount: Number(ratingsByProduct.get(product.id)?.reviewCount || 0),
+      conditionIds: conditionsByProduct.get(product.id) || [],
+    }));
+}
+
 export async function handleView(request: Request, path: string) {
   const url = new URL(request.url);
   if (path === "walk-in-sale") return posWorkspaceState(request);
@@ -880,6 +939,73 @@ export async function handleView(request: Request, path: string) {
       })),
     });
   }
+  if (path === "browse") {
+    // Category and condition filters on the storefront. The home view ships only the
+    // first page of the catalogue, and filtering that page in the browser hid every
+    // product that was not on it; this answers the filter from the whole catalogue.
+    const categoryIds = [
+      ...new Set(
+        (url.searchParams.get("categories") || "").split(",").map(Number),
+      ),
+    ]
+      .filter((id) => Number.isInteger(id) && id > 0)
+      .slice(0, 200);
+    const conditionId = Number(url.searchParams.get("condition"));
+    const byCondition = Number.isInteger(conditionId) && conditionId > 0;
+    if (!categoryIds.length && !byCondition)
+      return json(
+        { products: [], capped: false },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    const db = getDb();
+    const rows = await db
+      .select(searchProductCard)
+      .from(products)
+      .where(
+        and(
+          eq(products.isActive, true),
+          categoryIds.length
+            ? inArray(products.categoryId, categoryIds)
+            : undefined,
+          byCondition
+            ? inArray(
+                products.id,
+                db
+                  .select({ id: productHealthConditions.productId })
+                  .from(productHealthConditions)
+                  .where(eq(productHealthConditions.conditionId, conditionId)),
+              )
+            : undefined,
+        ),
+      )
+      .orderBy(desc(products.isFeatured), desc(products.createdAt))
+      .limit(SEARCH_RESULT_LIMIT + 1);
+    const capped = rows.length > SEARCH_RESULT_LIMIT;
+    if (capped) rows.length = SEARCH_RESULT_LIMIT;
+    const [shape, live] = await Promise.all([
+      cardDetails(rows),
+      loadLiveOffers(),
+    ]);
+    // Priced the way the home view prices them, so a card does not change price
+    // depending on which list it arrived in.
+    const overrides = offerPriceMap(live);
+    return json(
+      {
+        products: shape(rows).map((product) => {
+          const offerPrice = overrides.get(product.id);
+          return offerPrice === undefined
+            ? product
+            : { ...product, discountPrice: offerPrice };
+        }),
+        capped,
+      },
+      {
+        headers: {
+          "Cache-Control": "public, max-age=30, stale-while-revalidate=120",
+        },
+      },
+    );
+  }
   if (path === "search") {
     const terms = searchTerms(url.searchParams.get("q") || "");
     if (!terms.length)
@@ -907,53 +1033,7 @@ export async function handleView(request: Request, path: string) {
     const capped = exact.length > SEARCH_RESULT_LIMIT;
     if (capped) exact.length = SEARCH_RESULT_LIMIT;
     const all = [...exact, ...alternatives];
-    const productIds = [...new Set(all.map((product) => product.id))];
-    const [mappings, ratings] = productIds.length
-      ? await Promise.all([
-          db
-            .select()
-            .from(productHealthConditions)
-            .where(inArray(productHealthConditions.productId, productIds)),
-          db
-            .select({
-              productId: productReviews.productId,
-              rating: sql<string | null>`avg(${productReviews.rating})`,
-              reviewCount: sql<number>`count(*)`,
-            })
-            .from(productReviews)
-            .where(
-              and(
-                eq(productReviews.isApproved, true),
-                inArray(productReviews.productId, productIds),
-              ),
-            )
-            .groupBy(productReviews.productId),
-        ])
-      : [[], []];
-    const conditionsByProduct = new Map<number, number[]>();
-    for (const mapping of mappings)
-      conditionsByProduct.set(mapping.productId, [
-        ...(conditionsByProduct.get(mapping.productId) || []),
-        mapping.conditionId,
-      ]);
-    const ratingsByProduct = new Map(
-      ratings.map((rating) => [rating.productId, rating]),
-    );
-    const shape = (rows: typeof all) =>
-      rows.map((product) => ({
-        ...product,
-        imageUrl: publicImageUrl(product.imageUrl),
-        price: Number(product.price),
-        discountPrice:
-          product.discountPrice === null ? null : Number(product.discountPrice),
-        rating:
-          ratingsByProduct.get(product.id)?.rating === null ||
-          ratingsByProduct.get(product.id)?.rating === undefined
-            ? null
-            : Number(ratingsByProduct.get(product.id)?.rating),
-        reviewCount: Number(ratingsByProduct.get(product.id)?.reviewCount || 0),
-        conditionIds: conditionsByProduct.get(product.id) || [],
-      }));
+    const shape = await cardDetails(all);
     const exactIds = new Set(exact.map((product) => product.id));
     return json(
       {

@@ -33,23 +33,45 @@
 
 @media(min-width:821px){
   /* Header hover menu -------------------------------------------------- */
+  /* A grid rather than flowing columns: an unfolding branch only makes its own row
+     taller, where columns would reshuffle every heading after it. */
   .category-nav-grid{
-    display:block;
-    column-count:3;
-    column-gap:10px;
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
     align-items:start;
+    gap:6px;
+    max-height:min(70vh,460px);
+    overflow-y:auto;
   }
   .category-nav-column{
     min-width:0;
     display:flex;
     flex-direction:column;
     gap:2px;
-    /* A heading must never be split from the subcategories under it. */
-    break-inside:avoid;
-    page-break-inside:avoid;
-    margin-bottom:6px;
+    border-radius:7px;
+    background:#faf7fb;
   }
-  .category-nav-column > a{font-weight:750!important;}
+  .category-nav-column.is-open{background:#f6eef8;}
+  .category-nav-row{display:flex;align-items:center;}
+  .desktop-nav-grid .category-nav-row > a{flex:1;min-width:0;font-weight:750!important;background:transparent;}
+  .desktop-nav-grid .category-nav-row > a.active{background:#f1e6f4;}
+  .category-nav-toggle{
+    flex:none;
+    width:30px;
+    height:30px;
+    margin-right:3px;
+    padding:0;
+    border:0;
+    border-radius:6px;
+    color:#792587;
+    background:transparent;
+    display:grid;
+    place-items:center;
+    cursor:pointer;
+  }
+  .category-nav-toggle:hover{background:#efe1f3;}
+  .category-nav-toggle svg{width:14px;height:14px;transition:transform .15s ease;}
+  .category-nav-column.is-open .category-nav-toggle svg{transform:rotate(180deg);}
   .category-nav-children{display:flex;flex-direction:column;gap:1px;padding:2px 0 6px;}
   .desktop-nav-grid .category-nav-children a{
     min-height:26px!important;
@@ -147,7 +169,7 @@
 /* Between the phone sheet and the full desktop panel the header menu narrows rather
    than losing a level. */
 @media(min-width:821px) and (max-width:1080px){
-  .category-nav-grid{column-count:2;}
+  .category-nav-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
 }
 
 /* Height discipline for the search-results rail ------------------------- */
@@ -180,3 +202,65 @@
   .search-category.is-open .rail-caret{transform:rotate(90deg);}
   .search-category.is-open > button{color:#792587;background:#f6eef8;}
 }
+
+/* Header menus fold away once used ---------------------------------------- */
+/* They open on hover and focus, both of which a click leaves in place. A used menu
+   stays folded until the pointer (or keyboard) comes back to its own trigger. */
+@media(min-width:821px){
+  .desktop-nav-dropdown.is-dismissed .desktop-nav-grid{
+    visibility:hidden!important;
+    opacity:0!important;
+    pointer-events:none!important;
+  }
+  .desktop-nav-dropdown.is-dismissed > button svg{transform:none!important;}
+
+  /* The condition in force, shown above the categories so it is never a hidden filter. */
+  .search-results-active .desktop-search-categories .search-active-filter{
+    margin:0 0 6px;
+    padding:6px 6px 6px 10px;
+    border:1px solid #eadfeb;
+    border-radius:8px;
+    background:#fff;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:6px;
+    font-size:11px;
+    color:#6f6674;
+  }
+  .search-results-active .desktop-search-categories .search-active-filter strong{color:#792587;}
+  .search-results-active .desktop-search-categories .search-active-filter button{
+    width:24px;
+    min-height:24px;
+    margin:0;
+    padding:0;
+    border:0;
+    border-radius:6px;
+    color:#792587;
+    background:transparent;
+    display:grid;
+    place-items:center;
+    font-size:16px;
+    line-height:1;
+  }
+  .search-results-active .desktop-search-categories .search-active-filter button:hover{background:#f6eef8;}
+}
+
+/* Mobile sheet: subcategories fold under their heading ------------------- */
+.mobile-shop-menu .mobile-category-row{display:flex;align-items:center;gap:4px;}
+.mobile-shop-menu .mobile-category-row > a{flex:1;min-width:0;}
+.mobile-shop-menu .mobile-category-toggle{
+  flex:none;
+  width:34px;
+  height:34px;
+  padding:0;
+  border:0;
+  border-radius:8px;
+  color:#792587;
+  background:transparent;
+  display:grid;
+  place-items:center;
+  cursor:pointer;
+}
+.mobile-shop-menu .mobile-category-toggle svg{width:16px;height:16px;transition:transform .15s ease;}
+.mobile-shop-menu .mobile-category-toggle.is-open svg{transform:rotate(180deg);}
