@@ -20,11 +20,11 @@ import {
   ChevronDown,
   ChevronRight,
   MessageCircle,
-  ArrowUp,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { BackToTop } from "./back-to-top";
 import { ConsultBanner } from "./consult-banner";
 import { HeroRotator } from "./hero-rotator";
 import { PrescriptionHero } from "./prescription-hero";
@@ -228,7 +228,6 @@ export function Storefront({
     products: CatalogProduct[];
   } | null>(null);
   const [visibleCount, setVisibleCount] = useState(PRODUCT_PAGE_SIZE);
-  const [showBackToTop, setShowBackToTop] = useState(false);
   const [searchResults, setSearchResults] = useState<
     (SearchPayload & { term: string }) | null
   >(null);
@@ -678,13 +677,6 @@ export function Storefront({
     })();
     return () => controller.abort();
   }, [browseKey]);
-  useEffect(() => {
-    const updateBackToTop = () =>
-      setShowBackToTop(window.scrollY > window.innerHeight * 0.6);
-    updateBackToTop();
-    window.addEventListener("scroll", updateBackToTop, { passive: true });
-    return () => window.removeEventListener("scroll", updateBackToTop);
-  }, []);
   useEffect(() => {
     const button = document.querySelector<HTMLButtonElement>(
       ".desktop-hero-row aside button",
@@ -1775,15 +1767,7 @@ export function Storefront({
           </span>
         </div>
       </footer>
-      <button
-        className={`back-to-top${showBackToTop ? " visible" : ""}`}
-        type="button"
-        onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-        aria-label="Back to top"
-        tabIndex={showBackToTop ? 0 : -1}
-      >
-        <ArrowUp />
-      </button>
+      <BackToTop />
     </div>
   );
 }

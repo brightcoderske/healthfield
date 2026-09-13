@@ -9,6 +9,7 @@ import { RichText } from "../rich-text";
 import Image from "next/image";
 import { ProductReviewForm } from "@/app/product-review-form";
 import { ProductCard } from "@/app/product-card";
+import { BackToTop } from "@/app/back-to-top";
 import { PublicFooter, type PublicContact } from "@/app/public-footer";
 import { getSession } from "@/lib/auth";
 import { CART_COOKIE, parseCart } from "@/lib/shopping-state";
@@ -227,6 +228,7 @@ export default async function ProductPage({
           </Link>
           <ProductCartLink initialCount={cartCount} />
         </header>
+        <BackToTop />
         <section className="product-primary">
           <div className="product-detail-image">
             {product.imageUrl ? (
@@ -272,6 +274,7 @@ export default async function ProductPage({
                   <span className="prescription-note-compact">Prescription required</span>
                 </span>
                 <Link href="/prescriptions/upload">Upload prescription</Link>
+                <Link href="/prescriptions/consult">Get a prescription</Link>
               </div>
             )}
             <ProductActions

@@ -11,18 +11,29 @@ const storefrontHosts = new Set(
     .filter(Boolean),
 );
 
+// Where browsers load product images from. The API host's firewall challenges ordinary
+// visitors, so images are linked through the storefront, which fetches them from here
+// server-side (app/uploads/products/[filename]/route.ts) and caches them on its CDN.
+function imageOrigin() {
+  // The www host, because the bare domain answers every request with a redirect to it.
+  return (process.env.IMAGE_PUBLIC_URL || "https://www.healthfieldpharmacy.co.ke").replace(/\/$/, "");
+}
+
 export function publicImageUrl(value: string | null | undefined) {
   if (!value) return null;
   if (value.startsWith("http://") || value.startsWith("https://")) {
     try {
       const url = new URL(value);
-      if (storefrontHosts.has(url.host) && url.pathname.startsWith("/uploads/products/")) {
-        return `${apiOrigin()}${url.pathname}`;
+      // Older rows hold absolute links on either host; both now point through the storefront.
+      const ownHost = storefrontHosts.has(url.host) || url.host === new URL(apiOrigin()).host;
+      if (ownHost && url.pathname.startsWith("/uploads/products/")) {
+        return `${imageOrigin()}${url.pathname}`;
       }
     } catch { /* keep original */ }
     return value;
   }
-  return `${apiOrigin()}${value.startsWith("/") ? value : `/${value}`}`;
+  const pathname = value.startsWith("/") ? value : `/${value}`;
+  return `${pathname.startsWith("/uploads/products/") ? imageOrigin() : apiOrigin()}${pathname}`;
 }
 
 export function json(data: unknown, init: ResponseInit = {}) {

@@ -661,14 +661,23 @@ export function CheckoutForm({
               <strong>Prescription medicine excluded from this checkout</strong>
               <span>
                 Upload the prescription so a pharmacist can review and price it
-                separately.
+                separately — or, if you don&rsquo;t have one yet, get one from our
+                healthcare professional.
               </span>
-              <Link
-                className="prescription-attention-link"
-                href={prescriptionUploadUrl}
-              >
-                Upload prescription
-              </Link>
+              <span className="prescription-route-links">
+                <Link
+                  className="prescription-attention-link"
+                  href={prescriptionUploadUrl}
+                >
+                  Upload prescription
+                </Link>
+                <Link
+                  className="prescription-attention-link"
+                  href="/prescriptions/consult"
+                >
+                  Get a prescription
+                </Link>
+              </span>
             </div>
           ) : null}
           <h2>Payment method</h2>

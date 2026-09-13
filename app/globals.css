@@ -2662,6 +2662,10 @@ to{transform:rotate(360deg);}
 .cart-prescription-status span{font-size:11px;font-weight:800;}
 .cart-prescription-status small{margin:0!important;text-align:center;}
 .prescription-attention-link{width:max-content;margin-top:6px;color:#c51d38!important;text-decoration:underline;font-size:10px;font-weight:850;animation:prescription-attention 0.75s ease-in-out 4;}
+/* Upload and consult sit side by side: a shopper without a prescription needs the way
+   to get one as much as a shopper with one needs the way to send it. */
+.prescription-route-links{display:flex;flex-wrap:wrap;align-items:center;gap:0 12px;}
+.product-detail .prescription-note a + a{margin-left:8px;}
 .checkout-prescription-warning{margin:16px 0;padding:12px;border:1px solid #efbfc7;border-radius:10px;background:#fff4f6;display:flex;flex-direction:column;align-items:flex-start;gap:4px;color:#742032;}
 .checkout-prescription-warning strong{font-size:12px;}
 .checkout-prescription-warning span{font-size:10px;line-height:1.45;}

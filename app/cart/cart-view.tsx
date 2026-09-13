@@ -118,20 +118,28 @@ export function CartView({
                 {offer.items.some((item) => item.prescriptionRequired) ? (
                   <>
                     <b>Excluded from cart total</b>
-                    <a
-                      className="prescription-attention-link"
-                      href={prescriptionUploadHref(
-                        offer.items
-                          .filter((item) => item.prescriptionRequired)
-                          .map((item) => ({
-                            id: item.productId,
-                            name: item.name,
-                            quantity: item.quantity,
-                          })),
-                      )}
-                    >
-                      Upload prescription
-                    </a>
+                    <span className="prescription-route-links">
+                      <a
+                        className="prescription-attention-link"
+                        href={prescriptionUploadHref(
+                          offer.items
+                            .filter((item) => item.prescriptionRequired)
+                            .map((item) => ({
+                              id: item.productId,
+                              name: item.name,
+                              quantity: item.quantity,
+                            })),
+                        )}
+                      >
+                        Upload prescription
+                      </a>
+                      <a
+                        className="prescription-attention-link"
+                        href="/prescriptions/consult"
+                      >
+                        Get a prescription
+                      </a>
+                    </span>
                   </>
                 ) : (
                   <b>KES {Number(offer.total).toLocaleString()}</b>
@@ -192,18 +200,26 @@ export function CartView({
                 {line.product.prescriptionRequired ? (
                   <>
                     <b>Excluded from cart total</b>
-                    <a
-                      className="prescription-attention-link"
-                      href={prescriptionUploadHref([
-                        {
-                          id: line.product.id,
-                          name: line.product.name,
-                          quantity: line.quantity,
-                        },
-                      ])}
-                    >
-                      Upload prescription
-                    </a>
+                    <span className="prescription-route-links">
+                      <a
+                        className="prescription-attention-link"
+                        href={prescriptionUploadHref([
+                          {
+                            id: line.product.id,
+                            name: line.product.name,
+                            quantity: line.quantity,
+                          },
+                        ])}
+                      >
+                        Upload prescription
+                      </a>
+                      <a
+                        className="prescription-attention-link"
+                        href="/prescriptions/consult"
+                      >
+                        Get a prescription
+                      </a>
+                    </span>
                   </>
                 ) : (
                   <b>

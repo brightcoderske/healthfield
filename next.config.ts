@@ -21,9 +21,10 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   compress: true,
   images: {
-    // Product media is optimized and served by the API/storage host. Keep the
-    // storefront out of the image-delivery path so Vercel never proxies or
-    // transforms those files through /_next/image.
+    // Product media is optimized when it is uploaded to the API/storage host. The API
+    // host's firewall blocks ordinary browsers, so app/uploads/products passes each file
+    // through once and the CDN caches it. Nothing is resized or re-encoded through
+    // /_next/image.
     unoptimized: true,
   },
   async redirects() {
