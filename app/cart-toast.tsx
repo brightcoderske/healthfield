@@ -7,9 +7,12 @@ import { useEffect, useRef, useState } from "react";
 const CART_ADDED_EVENT = "healthfield:cart-added";
 const VISIBLE_MS = 2000;
 
-/** Announces a successful add. Called from wherever something went into the basket. */
-export function announceCartAdded() {
-  window.dispatchEvent(new Event(CART_ADDED_EVENT));
+/**
+ * Announces a change to the basket. Called from wherever something went into it — and
+ * from the quantity buttons, which used to change the basket without a word.
+ */
+export function announceCartAdded(message = "Added to cart") {
+  window.dispatchEvent(new CustomEvent(CART_ADDED_EVENT, { detail: { message } }));
 }
 
 /**
@@ -22,6 +25,7 @@ export function announceCartAdded() {
  */
 export function CartToast() {
   const [visible, setVisible] = useState(false);
+  const [message, setMessage] = useState("Added to cart");
   const held = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -32,7 +36,8 @@ export function CartToast() {
         if (!held.current) setVisible(false);
       }, VISIBLE_MS);
     };
-    const show = () => {
+    const show = (event: Event) => {
+      setMessage((event as CustomEvent<{ message?: string }>).detail?.message || "Added to cart");
       setVisible(true);
       hideLater();
     };
@@ -65,7 +70,7 @@ export function CartToast() {
       onBlur={release}
     >
       <Check aria-hidden="true" />
-      <span>Added to cart</span>
+      <span>{message}</span>
       <Link prefetch={false} href="/checkout" onClick={() => setVisible(false)}>
         Checkout
       </Link>

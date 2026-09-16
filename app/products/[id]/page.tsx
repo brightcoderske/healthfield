@@ -340,8 +340,21 @@ export default async function ProductPage({
               productName={product.name}
               productUrl={productUrl}
               prescriptionRequired={product.prescriptionRequired}
-              initialQuantity={cart[product.id] || 0}
+              initialCart={cart}
               initialCartCount={cartCount}
+              unitPrice={price}
+              regularPrice={regularPrice}
+              groupName={product.groupName || undefined}
+              optionName={(optionName || product.variantName || "Option").trim()}
+              variants={variants.map((variant) => ({
+                id: variant.id,
+                name: product.groupName || product.name,
+                imageUrl: variant.imageUrl,
+                price: variant.price,
+                discountPrice: variant.discountPrice,
+                variantLabel: variant.variantLabel,
+                prescriptionRequired: product.prescriptionRequired,
+              }))}
             />
             <Link className="contact-pharmacy" href="/contact">
               Need advice? Contact our pharmacy team

@@ -17,6 +17,8 @@ type PickerProps = {
   onAdd: (variant: ProductCardProduct, quantity: number) => void;
   busy?: boolean;
   error?: string;
+  /** The option to open on — the one whose page the shopper is looking at. */
+  initialVariantId?: number;
 };
 
 /** Mounts only while it is open, so every opening starts at one of the default option. */
@@ -40,8 +42,13 @@ function VariantPickerPanel({
   onAdd,
   busy = false,
   error = "",
+  initialVariantId,
 }: PickerProps) {
-  const [chosenId, setChosenId] = useState(() => defaultVariant(variants).id);
+  const [chosenId, setChosenId] = useState(() =>
+    variants.some((variant) => variant.id === initialVariantId)
+      ? (initialVariantId as number)
+      : defaultVariant(variants).id,
+  );
   const [quantity, setQuantity] = useState(1);
   const panel = useRef<HTMLDivElement>(null);
 

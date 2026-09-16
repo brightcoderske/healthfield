@@ -157,3 +157,102 @@
 }
 .detail-variant-options > a.is-chosen small { color: rgba(255, 255, 255, 0.82); }
 .detail-variant-options > a:focus-visible { outline: 3px solid rgba(138, 39, 140, 0.2); outline-offset: 2px; }
+
+/* ---- Adding to the basket from the product page ------------------------------------
+   Before anything is added there is one clear button and nothing else. Once the product
+   is in the basket the button stays green and says so, the quantity control appears
+   beside it, and a product with options offers to add another one beneath. */
+.compact-product-actions .product-cart-controls.is-in-cart { align-items: stretch; }
+.compact-product-actions .product-quantity-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.compact-product-actions .product-quantity-label {
+  max-width: 76px;
+  overflow: hidden;
+  color: #5a5260;
+  font-size: 10px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compact-product-actions a.primary-cart-action.is-in-cart {
+  flex: 1;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid #218849 !important;
+  border-radius: 10px !important;
+  color: #fff !important;
+  background: #218849 !important;
+  box-shadow: 0 4px 12px #2188492b !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-weight: 800;
+  text-decoration: none;
+}
+.compact-product-actions a.primary-cart-action.is-in-cart:hover { background: #1a7340 !important; }
+.compact-product-actions a.primary-cart-action.is-in-cart svg { width: 16px; height: 16px; }
+.compact-product-actions .primary-cart-action.is-error { border-color: #bf3450 !important; background: #bf3450 !important; }
+/* A secondary action, so it reads as one: outlined, never a second filled button
+   competing with the green one above it. The page's general button styles fill every
+   button, hence the forcing. */
+.compact-product-actions button.product-add-another {
+  flex: 0 0 100%;
+  grid-column: 1 / -1;
+  min-height: 34px;
+  display: flex !important;
+  align-items: center;
+  justify-content: center !important;
+  border: 1px dashed #c9a6cf !important;
+  border-radius: 10px !important;
+  color: #792587 !important;
+  background: #fbf5fc !important;
+  box-shadow: none !important;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.compact-product-actions button.product-add-another:hover { border-style: solid !important; background: #f5e9f6 !important; }
+
+/* On a phone the button is the thing the thumb goes for, so it is full width and tall
+   enough to hit without looking. */
+@media (max-width: 700px) {
+  .compact-product-actions .product-add-form .primary-cart-action,
+  .compact-product-actions a.primary-cart-action.is-in-cart {
+    min-height: 46px !important;
+    font-size: 13px !important;
+  }
+  .compact-product-actions button.product-add-another { min-height: 40px !important; font-size: 12px !important; }
+}
+
+/* The running total under the controls: what this many cost, updated as the quantity
+   changes, with the undiscounted total struck through when there is one. */
+.compact-product-actions .product-cart-total {
+  flex: 0 0 100%;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 7px 10px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 10px;
+  background: #f1f9f4;
+  color: #3f5f4b;
+  font-size: 11px;
+  font-weight: 700;
+}
+.compact-product-actions .product-cart-total strong {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: #17643a;
+  font-size: 15px;
+  font-weight: 850;
+}
+.compact-product-actions .product-cart-total del { color: #8e9b93; font-size: 11px; font-weight: 600; }
