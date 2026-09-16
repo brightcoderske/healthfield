@@ -1,8 +1,8 @@
 /* eslint-disable @next/next/no-img-element */
 
-import Link from "next/link";
-import { Package, Tag } from "lucide-react";
+import { Tag } from "lucide-react";
 import { OfferShareButton } from "./offer-share-button";
+import { OfferItems } from "./offer-items";
 import type { Offer } from "./offer-data";
 import { PrescriptionAddButton } from "@/app/prescription-add-button";
 
@@ -53,40 +53,7 @@ export function OfferCard({
       </header>
       <h2>{offer.title}</h2>
       {offer.description && <p>{offer.description}</p>}
-      <ul className="offer-card-items">
-        {offer.items.map((item) => (
-          <li key={item.productId}>
-            <Link prefetch={false} href={`/products/${item.productId}`}>
-              {item.imageUrl ? (
-                <img
-                  src={item.imageUrl}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                />
-              ) : (
-                <span>
-                  <Package />
-                </span>
-              )}
-              <span>
-                <strong>{item.name}</strong>
-                <small>
-                  {item.quantity > 1 ? `${item.quantity} × ` : ""}
-                  {offer.isBundle ? (
-                    money(item.normalPrice)
-                  ) : (
-                    <>
-                      {money(item.offerPrice ?? item.normalPrice)}{" "}
-                      <del>{money(item.normalPrice)}</del>
-                    </>
-                  )}
-                </small>
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
+      <OfferItems items={offer.items} isBundle={offer.isBundle} />
       <footer>
         <div className="offer-card-price">
           <b>{money(offer.total)}</b>

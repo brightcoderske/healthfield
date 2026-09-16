@@ -31,6 +31,7 @@ import { PrescriptionHero } from "./prescription-hero";
 import { PrescriptionQuickActions } from "./prescription-quick-actions";
 import { ProductCard } from "./product-card";
 import { groupKey, groupVariants } from "@/lib/product-variants";
+import { rankSearchResults } from "@/lib/search-rank";
 import {
   CatalogueInterruption,
   type Guide,
@@ -375,6 +376,10 @@ export function Storefront({
           (!offersOnly || product.discountPrice !== null),
       );
     if (!queryWords.length) return { products: matching, matchedIds: null };
+    // Best match first — products named after what was typed ahead of ones that only
+    // mention it in their description. Ranked before options are grouped, so a product
+    // takes the place of its best-matching option.
+    const ranked = rankSearchResults(matching, query);
     // A word that only appears in one option — "green", "500 ml" — matches that row and
     // none of its siblings, which would leave the card showing a lone colour stripped of
     // the choice it belongs to. The rest of the group comes back in, and the rows that
@@ -384,7 +389,7 @@ export function Storefront({
     const siblings = pool.filter(
       (product) => !matchedIds.has(product.id) && matchedGroups.has(groupKey(product)),
     );
-    return { products: siblings.length ? [...matching, ...siblings] : matching, matchedIds };
+    return { products: siblings.length ? [...ranked, ...siblings] : ranked, matchedIds };
   },
     [
       searchedProducts,
@@ -407,11 +412,14 @@ export function Storefront({
   const similarGroups = useMemo(() => {
     const shown = new Set(searchedProducts.map((product) => groupKey(product)));
     return groupVariants(
-      (activeSearchResults?.similar || []).filter(
-        (product) => !shown.has(groupKey(product)),
+      rankSearchResults(
+        (activeSearchResults?.similar || []).filter(
+          (product) => !shown.has(groupKey(product)),
+        ),
+        query,
       ),
     );
-  }, [activeSearchResults, searchedProducts]);
+  }, [activeSearchResults, searchedProducts, query]);
   // Which offer and blog cards break up the catalogue scroll, and where. The rules
   // (spacing, relevance, urgency, seeded variation) live in lib/catalogue-breaks.
   const breakPlan = useMemo(
@@ -1666,13 +1674,9 @@ export function Storefront({
           <a href="/prescriptions/upload">
             <Upload /> Upload Prescription
           </a>
-          <a
-            href={
-              contact.whatsapp
-                ? `https://wa.me/${contact.whatsapp.replace(/\D/g, "")}`
-                : "/login"
-            }
-          >
+          {/* The pharmacist is reached in the site's own chat, where the conversation is
+              kept with the customer's account; WhatsApp stays available just below. */}
+          <a href="/chat">
             <HeartPulse /> Talk to a Pharmacist
           </a>
           {contact.phone && (
@@ -1773,7 +1777,7 @@ export function Storefront({
           <Link href="/#products">Shop products</Link>
           <a href="/prescriptions/upload">Upload prescription</a>
           <a href="/conditions">Shop by condition</a>
-          <a href={viewer ? "/chat" : "/login"}>Chat with us</a>
+          <a href="/chat">Chat with us</a>
           <a href="/account#orders">Track an order</a>
         </nav>
         <nav>

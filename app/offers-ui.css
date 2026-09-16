@@ -139,3 +139,48 @@
 .offer-kind.group{background:#eef2fd;color:#3552a4}
 .offer-kind.single{background:#f6ecf8;color:#70227e}
 .offers-table .offers-admin-actions{justify-content:flex-end}
+
+/* ---- Offer card layout across screen sizes ---------------------------------------
+   The price and the Add button used to share one line and wrap when they did not fit,
+   so whether the button sat beside the price or dropped beneath it depended on how long
+   the price happened to be — buttons in the same row of cards landed in different places.
+   The price now has its own line and the button always spans the card beneath it, so
+   every card in a row ends the same way, and on a phone it is a full-width target. */
+.offer-card > footer {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 9px;
+}
+.offer-card > footer .offer-card-price { justify-content: flex-start; }
+.offer-card > footer form { display: block; width: 100%; margin: 0; }
+.offer-card > footer button { width: 100%; min-height: 40px; font-size: 12px; }
+
+/* A collection past five products shows four and offers the rest. */
+.offer-card .offer-card-more {
+  align-self: flex-start;
+  margin: 7px 14px 0;
+  padding: 4px 10px;
+  border: 1px dashed #d4b8d8;
+  border-radius: 999px;
+  color: #70227e;
+  background: #fbf5fc;
+  font-size: 10.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.offer-card .offer-card-more:hover { border-style: solid; background: #f5e9f6; }
+
+/* Product names may take two lines rather than being cut off after a few words. */
+.offer-card-items strong {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+
+@media (max-width: 700px) {
+  .offer-card > footer button { min-height: 46px; font-size: 13px; }
+  .offer-card .offer-card-more { min-height: 32px; }
+}

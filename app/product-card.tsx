@@ -174,84 +174,107 @@ export function ProductCard({
   const groupBasketCount = options && cartQuantities
     ? options.reduce((total, variant) => total + (cartQuantities[variant.id] ?? 0), 0)
     : basketCount;
+  const rating = product.rating ? (
+    <div
+      className="approved-rating"
+      aria-label={`${product.rating.toFixed(1)} from ${product.reviewCount ?? 0} reviews`}
+    >
+      ★ {product.rating.toFixed(1)} <small>({product.reviewCount ?? 0})</small>
+    </div>
+  ) : null;
+
   return (
     <article className="approved-product">
-      {/* A card with a choice keeps the image box outside the link: the strip is there to
-          be swiped and tapped, and every one of those gestures would otherwise be a
-          navigation. The name below still opens the product. A plain product is
-          untouched — image and all — so nothing about the ordinary card changes. */}
-      {options && (
-        <div className="approved-product-image variant-image-box">
-          {discount > 0 && (
-            <span className="discount-badge">Save {discount}%</span>
-          )}
-          <div
-            className="variant-image-rail"
-            ref={rail}
-            onPointerDown={(event) => {
-              pressedAt.current = { x: event.clientX, y: event.clientY };
-            }}
-            onPointerUp={(event) => {
-              const start = pressedAt.current;
-              pressedAt.current = null;
-              if (!start) return;
-              // A few pixels of travel is a tap with a shaky thumb; more than that was a
-              // swipe, and a swipe must never open the page out from under it.
-              const moved =
-                Math.abs(event.clientX - start.x) > 8 || Math.abs(event.clientY - start.y) > 8;
-              if (!moved) router.push(`/products/${shown.id}`);
-            }}
-            onPointerCancel={() => {
-              pressedAt.current = null;
-            }}
-          >
-            {options.map((variant) => (
-              <span className="variant-image-slide" key={variant.id}>
-                {variant.imageUrl && !failedImages.includes(variant.id) ? (
-                  <img
-                    src={variant.imageUrl}
-                    alt={`${name}, ${variant.variantLabel || ""}`.trim()}
-                    loading="lazy"
-                    decoding="async"
-                    onError={() => setFailedImages((current) => [...current, variant.id])}
-                  />
-                ) : (
-                  <span className="product-image-missing">
-                    <Package />
-                    <small>Image pending</small>
-                  </span>
-                )}
-              </span>
-            ))}
+      {/* A card with options is built exactly like an ordinary card — the same wrapper
+          with the same image box and info block as its direct children — because every
+          card style is written against that shape. Moving the image out of the wrapper
+          once left this card with a white image panel and a different outline from the
+          cards beside it. The only difference is the wrapper is not itself a link: the
+          picture strip is swiped and its option buttons pressed, so the name is the link
+          and a tap on the picture opens the product. */}
+      {options ? (
+        <div className="approved-product-main has-variants">
+          <div className="approved-product-image variant-image-box">
+            {discount > 0 && (
+              <span className="discount-badge">Save {discount}%</span>
+            )}
+            <div
+              className="variant-image-rail"
+              ref={rail}
+              onPointerDown={(event) => {
+                pressedAt.current = { x: event.clientX, y: event.clientY };
+              }}
+              onPointerUp={(event) => {
+                const start = pressedAt.current;
+                pressedAt.current = null;
+                if (!start) return;
+                // A few pixels of travel is a tap with a shaky thumb; more than that was a
+                // swipe, and a swipe must never open the page out from under it.
+                const moved =
+                  Math.abs(event.clientX - start.x) > 8 || Math.abs(event.clientY - start.y) > 8;
+                if (!moved) router.push(`/products/${shown.id}`);
+              }}
+              onPointerCancel={() => {
+                pressedAt.current = null;
+              }}
+            >
+              {options.map((variant) => (
+                <div className="variant-image-slide" key={variant.id}>
+                  {variant.imageUrl && !failedImages.includes(variant.id) ? (
+                    <img
+                      src={variant.imageUrl}
+                      alt={`${name}, ${variant.variantLabel || ""}`.trim()}
+                      loading="lazy"
+                      decoding="async"
+                      onError={() => setFailedImages((current) => [...current, variant.id])}
+                    />
+                  ) : (
+                    <div className="product-image-missing">
+                      <Package />
+                      <small>Image pending</small>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="variant-options" role="group" aria-label={`${optionName} for ${name}`}>
+              {options.map((variant) => (
+                <button
+                  type="button"
+                  key={variant.id}
+                  className={variant.id === shown.id ? "is-chosen" : ""}
+                  aria-pressed={variant.id === shown.id}
+                  onClick={() => choose(variant.id)}
+                >
+                  {variant.variantLabel || "Standard"}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="variant-options" role="group" aria-label={`${optionName} for ${name}`}>
-            {options.map((variant) => (
-              <button
-                type="button"
-                key={variant.id}
-                className={variant.id === shown.id ? "is-chosen" : ""}
-                aria-pressed={variant.id === shown.id}
-                onClick={() => choose(variant.id)}
-              >
-                {variant.variantLabel || "Standard"}
-              </button>
-            ))}
+          <div className="approved-product-info">
+            <Link
+              prefetch={false}
+              className="product-card-name-link"
+              href={`/products/${shown.id}`}
+              aria-label={`View ${name}`}
+            >
+              <span className="product-card-name">{name}</span>
+            </Link>
+            {rating}
           </div>
         </div>
-      )}
-      <Link
-        prefetch={false}
-        className={`approved-product-main${options ? " has-variants" : ""}`}
-        href={`/products/${shown.id}`}
-        aria-label={`View ${name}`}
-      >
-        {!options && (
+      ) : (
+        <Link
+          prefetch={false}
+          className="approved-product-main"
+          href={`/products/${shown.id}`}
+          aria-label={`View ${name}`}
+        >
           <div className="approved-product-image">
             {discount > 0 && (
               <span className="discount-badge">Save {discount}%</span>
             )}
-            {
-showImage ? (
+            {showImage ? (
               <img
                 src={shown.imageUrl!}
                 alt={name}
@@ -266,20 +289,12 @@ showImage ? (
               </div>
             )}
           </div>
-        )}
-        <div className="approved-product-info">
-          <span className="product-card-name">{name}</span>
-          {!!product.rating && (
-            <div
-              className="approved-rating"
-              aria-label={`${product.rating.toFixed(1)} from ${product.reviewCount ?? 0} reviews`}
-            >
-              ★ {product.rating.toFixed(1)}{" "}
-              <small>({product.reviewCount ?? 0})</small>
-            </div>
-          )}
-        </div>
-      </Link>
+          <div className="approved-product-info">
+            <span className="product-card-name">{name}</span>
+            {rating}
+          </div>
+        </Link>
+      )}
       <form
         action="/api/wishlist"
         method="post"

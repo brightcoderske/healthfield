@@ -159,9 +159,10 @@
 }
 
 /* ---- Variants: the images are the options ------------------------------------
-   A group's variants each bring a picture, and the strip of pictures is the chooser.
-   Swiping it on a phone and pressing an option below are the same act, so both scroll
-   this one rail; the card then adds exactly what is on screen. */
+   The card itself is styled exactly like any other (it uses the same wrapper and image
+   box), so everything here is only what an options card adds: a picture strip that can
+   be swiped, and a row of small option pills resting inside the foot of the grey panel. */
+.approved-product .approved-product-image.variant-image-box { position: relative; }
 .approved-product .approved-product-image .variant-image-rail {
   display: grid;
   grid-auto-flow: column;
@@ -172,75 +173,62 @@
   overscroll-behavior-inline: contain;
   scroll-snap-type: x mandatory;
   scrollbar-width: none;
+  cursor: pointer;
 }
 .approved-product .approved-product-image .variant-image-rail::-webkit-scrollbar { display: none; }
-/* The strip opens the product on a tap and changes the option on a swipe, so it reads
-   as clickable — the product name below remains the keyboard route to the same page. */
-.approved-product .approved-product-image .variant-image-rail { cursor: pointer; }
-.variant-image-slide {
-  display: block;
+.approved-product .variant-image-slide {
   min-width: 0;
   height: 100%;
   scroll-snap-align: start;
   scroll-snap-stop: always;
 }
-.variant-image-slide img,
-.variant-image-slide .product-image-missing {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+.approved-product .variant-image-slide img,
+.approved-product .variant-image-slide .product-image-missing {
   width: 100%;
   height: 100%;
   object-fit: contain;
 }
-/* The options sit over the foot of the picture rather than below it. The grid rows are
-   a fixed height, so a card with colours has to occupy exactly the same box as one
-   without — anything else would push the row out of shape for every card beside it. */
-.variant-image-box { position: relative; }
-.variant-options {
+.approved-product .variant-options {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  left: 5px;
+  right: 5px;
+  bottom: 5px;
   z-index: 2;
   display: flex;
   flex-wrap: nowrap;
   gap: 3px;
-  padding: 10px 4px 3px;
   overflow-x: auto;
   scrollbar-width: none;
-  background: linear-gradient(to top, rgba(255, 255, 255, 0.97) 62%, rgba(255, 255, 255, 0));
 }
-.variant-options::-webkit-scrollbar { display: none; }
-.variant-options button {
+.approved-product .variant-options::-webkit-scrollbar { display: none; }
+.approved-product .variant-options button {
   flex: 0 0 auto;
-  min-width: 0;
-  max-width: 70%;
-  padding: 3px 8px;
-  /* A solid, bordered pill rather than a tint: these sit over artwork that may be a
-     photograph, a pale placeholder, or nothing at all, and they have to read as buttons
-     on every one of them. */
-  border: 1px solid #cdbcd1;
+  max-width: 64%;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid #ddd0e0;
   border-radius: 999px;
-  color: #4a4350;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(40, 28, 45, 0.16);
+  color: #564e5c;
+  background: rgba(255, 255, 255, 0.92);
   font-size: 9px;
   font-weight: 700;
-  line-height: 1.5;
+  line-height: 16px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
 }
-.variant-options button:hover { border-color: #b98cbd; color: #7a2482; }
-.variant-options button.is-chosen {
+.approved-product .variant-options button:hover { border-color: #b98cbd; color: #7a2482; }
+.approved-product .variant-options button.is-chosen {
   border-color: #8a278c;
   color: #fff;
   background: #8a278c;
 }
-.variant-options button:focus-visible { outline: 3px solid rgba(138, 39, 140, 0.18); outline-offset: 1px; }
+.approved-product .variant-options button:focus-visible { outline: 2px solid rgba(138, 39, 140, 0.35); outline-offset: 1px; }
+
+/* The name is the link on an options card; it reads exactly like the name on any card. */
+.approved-product .product-card-name-link { color: inherit; text-decoration: none; }
+.approved-product .product-card-name-link:hover .product-card-name { color: #792587; }
 
 /* "That worked": the same green tick the product page gives, so an add from the grid is
    acknowledged rather than only changing a small number. */

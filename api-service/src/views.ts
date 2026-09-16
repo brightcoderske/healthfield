@@ -66,6 +66,7 @@ import {
   requireTeamPermission,
   sessionHasPermission,
 } from "./staff-permissions";
+import { searchPhrase } from "../../lib/search-rank";
 import type { StaffPermission } from "../../lib/staff-permissions";
 
 const adminRoles = ["ADMIN", "SUPER_ADMIN"] as const;
@@ -660,6 +661,28 @@ function searchTerms(value: string) {
     .slice(0, 6);
 }
 
+/**
+ * Orders search results by where the words matched, mirroring lib/search-rank so the
+ * order is the same whether it comes from here or from the page's instant local results.
+ * A name that starts with the search leads, then names holding every word at the start of
+ * a word, then anywhere in the name, then some of the words, then the brand, then the
+ * description. Featured and newest only break ties within a rank.
+ */
+function searchRankOrder(query: string, terms: string[]) {
+  const phrase = searchPhrase(query);
+  const nameLike = (pattern: string) => like(products.name, pattern);
+  // "At the start of a word": at the very start, or after a space, bracket, dash or slash.
+  const startsWord = (term: string) =>
+    or(...["", "% ", "%(", "%-", "%/"].map((prefix) => nameLike(`${prefix}${term}%`)));
+  return sql`CASE
+    WHEN ${nameLike(`${phrase}%`)} THEN 0
+    WHEN ${and(...terms.map(startsWord))} THEN 1
+    WHEN ${and(...terms.map((term) => nameLike(`%${term}%`)))} THEN 2
+    WHEN ${or(...terms.map((term) => nameLike(`%${term}%`)))} THEN 3
+    WHEN ${and(...terms.map((term) => like(products.brand, `%${term}%`)))} THEN 4
+    ELSE 5 END`;
+}
+
 function matchesEveryTerm(terms: string[]) {
   return terms.map((term) => {
     const match = `%${term}%`;
@@ -1111,7 +1134,8 @@ export async function handleView(request: Request, path: string) {
     );
   }
   if (path === "search") {
-    const terms = searchTerms(url.searchParams.get("q") || "");
+    const rawQuery = url.searchParams.get("q") || "";
+    const terms = searchTerms(rawQuery);
     if (!terms.length)
       return json(
         { products: [], similar: [] },
@@ -1125,13 +1149,15 @@ export async function handleView(request: Request, path: string) {
         .select(searchProductCard)
         .from(products)
         .where(and(eq(products.isActive, true), ...matching))
-        .orderBy(desc(products.isFeatured), desc(products.createdAt))
+        // Best match first, so when there are more results than are returned it is the
+        // description-only matches that fall off the end, not the products named that way.
+        .orderBy(searchRankOrder(rawQuery, terms), desc(products.isFeatured), desc(products.createdAt))
         .limit(SEARCH_RESULT_LIMIT + 1),
       db
         .select(searchProductCard)
         .from(products)
         .where(and(eq(products.isActive, true), anyMatch))
-        .orderBy(desc(products.isFeatured), desc(products.createdAt))
+        .orderBy(searchRankOrder(rawQuery, terms), desc(products.isFeatured), desc(products.createdAt))
         .limit(12),
     ]);
     const capped = exact.length > SEARCH_RESULT_LIMIT;
