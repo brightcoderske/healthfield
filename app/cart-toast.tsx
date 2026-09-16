@@ -16,7 +16,7 @@ export function announceCartAdded(message = "Added to cart") {
 }
 
 /**
- * The small "Added to cart" note, with a way straight to checkout.
+ * The small "Added to cart" note, with a way on to the basket.
  *
  * Mounted once for the whole site and driven by an event, so the grid, the option
  * picker and the product page all show the same note without each carrying its own.
@@ -71,7 +71,9 @@ export function CartToast() {
     >
       <Check aria-hidden="true" />
       <span>{message}</span>
-      <Link prefetch={false} href="/checkout" onClick={() => setVisible(false)}>
+      {/* Labelled Checkout, but it goes to the basket first: that is where a customer
+          checks what they have, changes quantities, and sees the total before paying. */}
+      <Link prefetch={false} href="/cart" onClick={() => setVisible(false)}>
         Checkout
       </Link>
     </div>
