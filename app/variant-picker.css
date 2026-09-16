@@ -172,3 +172,59 @@
   .variant-picker-backdrop { align-items: center; padding: 20px; }
   .variant-picker { border-radius: 16px; box-shadow: 0 18px 50px rgba(28, 20, 32, 0.28); }
 }
+
+/* "Added to cart": a small translucent square in the middle of the screen, with a way
+   straight to checkout underneath. Deliberately small — it confirms, it does not
+   interrupt, and it covers nothing but itself. */
+.cart-toast {
+  position: fixed;
+  z-index: 1300;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 116px;
+  box-sizing: border-box;
+  padding: 12px 10px 10px;
+  border-radius: 14px;
+  color: #fff;
+  background: rgba(24, 18, 28, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 8px 26px rgba(24, 18, 28, 0.24);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  animation: cart-toast-in 0.16s ease-out;
+}
+.cart-toast > svg {
+  width: 26px;
+  height: 26px;
+  padding: 4px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  color: #fff;
+  background: #218849;
+}
+.cart-toast > a {
+  align-self: stretch;
+  padding: 5px 0;
+  border-radius: 8px;
+  color: #fff;
+  background: #218849;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-decoration: none;
+}
+.cart-toast > a:hover { background: #1a7340; }
+.cart-toast > a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@keyframes cart-toast-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.94); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cart-toast { animation: none; }
+}

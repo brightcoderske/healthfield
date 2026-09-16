@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { defaultVariant, variantDisplayName } from "@/lib/product-variants";
 import { PrescriptionAddButton } from "./prescription-add-button";
 import { VariantPicker } from "./variant-picker";
+import { announceCartAdded } from "./cart-toast";
 
 export type ProductCardProduct = {
   id: number;
@@ -89,6 +90,7 @@ export function ProductCard({
   }, []);
 
   function showAdded() {
+    announceCartAdded();
     setJustAdded(true);
     if (addedTimer.current) clearTimeout(addedTimer.current);
     addedTimer.current = setTimeout(() => setJustAdded(false), 1700);

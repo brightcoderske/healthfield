@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { CART_UPDATED_EVENT } from "./product-cart-link";
 import { PrescriptionAddButton } from "@/app/prescription-add-button";
 import { QuantityField } from "@/app/quantity-field";
+import { announceCartAdded } from "@/app/cart-toast";
 
 export function ProductActions({
   productId,
@@ -101,6 +102,7 @@ export function ProductActions({
     try {
       await sendCart(new FormData(formElement));
       showFeedback("added", 1600);
+      announceCartAdded();
     } catch {
       showFeedback("error", 2200);
     }
