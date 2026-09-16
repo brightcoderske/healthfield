@@ -61,3 +61,25 @@ test("feed content is plain text XML and does not contradict supplied identifier
   assert.match(result.feed, /<g:gtin>12345678<\/g:gtin>/);
   assert.doesNotMatch(result.feed, /<g:identifier_exists>no<\/g:identifier_exists>/);
 });
+
+test("a product's options are submitted separately but tied together for Google", () => {
+  const rows = [
+    product(1, { name: "Tote bag — Blue", variantLabel: "Blue", price: "1000.00" }),
+    product(2, { name: "Tote bag — Red", variantOf: 1, variantLabel: "Red", price: "1200.00" }),
+    product(3, { name: "Tote bag — Green", variantOf: 1, variantLabel: "Green", price: "1100.00" }),
+    product(4, { name: "Paracetamol" }),
+  ];
+  const { feed, itemCount } = buildGoogleMerchantFeed(rows, "https://healthfieldpharmacy.co.ke");
+
+  // Each option is its own item: its own price, its own barcode, its own page.
+  assert.equal(itemCount, 4);
+  assert.match(feed, /<g:link>https:\/\/healthfieldpharmacy\.co\.ke\/products\/2<\/g:link>/);
+  assert.match(feed, /<g:price>1200\.00 KES<\/g:price>/);
+
+  // All three carry the same group id, so the listing does not compete with itself.
+  const groupIds = [...feed.matchAll(/<g:item_group_id>([^<]+)<\/g:item_group_id>/g)].map((match) => match[1]);
+  assert.deepEqual(groupIds, ["hf-group-1", "hf-group-1", "hf-group-1"]);
+
+  // A product with no options is not put into a group of one.
+  assert.equal(groupIds.length, 3);
+});

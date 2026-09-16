@@ -1,0 +1,246 @@
+/* The list of options a product comes in, edited inside the product modal.
+   Each row becomes a real product row on save, so the table reads like the shelf: a
+   name, what it costs, what it scans as, and whether it is on sale. */
+.variant-editor {
+  grid-column: 1 / -1;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px;
+  border: 1px solid #e2d9e5;
+  border-radius: 10px;
+  background: #faf8fb;
+}
+.variant-editor > small {
+  display: block;
+  margin-top: 7px;
+  color: #6f6875;
+  font-size: 9px;
+  line-height: 1.45;
+}
+.variant-open,
+.variant-add,
+.variant-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #d9cede;
+  border-radius: 8px;
+  color: #5d2a66;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.variant-open svg,
+.variant-add svg,
+.variant-save svg { width: 13px; height: 13px; }
+.variant-open:hover,
+.variant-add:hover { border-color: #8a278c; background: #f7edf8; }
+.variant-save {
+  border-color: #8a278c;
+  color: #fff;
+  background: #8a278c;
+}
+.variant-save:hover { background: #76207a; }
+.variant-save:disabled { opacity: 0.6; cursor: wait; }
+
+.variant-editor > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 9px;
+}
+.variant-editor > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #49204f;
+  font-size: 11px;
+  font-weight: 850;
+}
+.variant-editor > header > span svg { width: 14px; height: 14px; }
+.variant-editor > header > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: #6f6875;
+  font-size: 9px;
+  font-weight: 750;
+}
+.variant-editor > header > label input {
+  width: 150px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid #ddd4e0;
+  border-radius: 7px;
+  font-size: 10px;
+}
+
+.variant-table { overflow-x: auto; }
+.variant-table-head,
+.variant-table-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.4fr) 84px 84px minmax(96px, 1fr) 92px 52px 34px;
+  align-items: center;
+  gap: 6px;
+  min-width: 620px;
+}
+.variant-table-head {
+  padding: 0 2px 5px;
+  color: #6f6875;
+  font-size: 8px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.variant-table-row + .variant-table-row { margin-top: 5px; }
+.variant-table-row input[type="text"],
+.variant-table-row input:not([type]) {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid #ddd4e0;
+  border-radius: 7px;
+  background: #fff;
+  font-size: 10px;
+}
+.variant-active { display: grid; place-items: center; margin: 0; }
+.variant-active input { width: 16px; height: 16px; accent-color: #792587; }
+.variant-remove {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  color: #bf3450;
+  background: #fff0f3;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.variant-remove svg { width: 13px; }
+.variant-remove:disabled { opacity: 0.35; cursor: default; }
+
+.variant-editor > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.variant-message {
+  margin: 8px 0 0;
+  color: #49204f;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+@media (max-width: 700px) {
+  .variant-editor > header > label input { width: 120px; }
+  .variant-editor > footer { flex-direction: column; align-items: stretch; }
+  .variant-editor > footer button { justify-content: center; }
+}
+
+/* Options are drawn exactly the way the taxonomy screen draws subcategories: the child
+   row is indented, tinted and separated by a hairline, with a small pale branch arrow
+   where the parent has a folder. Same measurements, same colours — a product with
+   options should not look like a different idea from a category with subcategories. */
+.compact-table-row.product-row.is-option {
+  padding-left: 30px;
+  background: #fcfafd;
+  border-top: 1px solid #f3eff4;
+}
+.compact-table-row.product-row.is-option .table-thumb { opacity: 0.72; transform: scale(0.82); }
+
+/* The name cell borrows the taxonomy's own class names, so the two screens cannot
+   drift apart: .tree-name holds a .tree-branch icon beside a .tree-label. */
+.compact-table-row.product-row .tree-name {
+  min-width: 0;
+  display: flex;
+  /* The table's own cell styling stacks its children; the branch icon has to sit beside
+     the name, not above it, so the direction is set explicitly rather than inherited. */
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.compact-table-row.product-row .tree-branch { width: 15px; height: 15px; flex: none; color: #a071a8; }
+.compact-table-row.product-row.is-option .tree-branch { width: 13px; height: 13px; color: #bda3c2; }
+.compact-table-row.product-row .tree-label {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.compact-table-row.product-row.is-option .tree-label .row-link { font-size: 10.5px; font-weight: 700; color: #4d4653; }
+
+/* The same tree in the bulk price table. A table row cannot take the indent itself, so
+   the name cell carries it. */
+tr.is-option td { background: #fcfafd; border-top: 1px solid #f3eff4; }
+tr.is-option .bulk-name { padding-left: 30px; }
+.bulk-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bulk-name .tree-branch { width: 15px; height: 15px; flex: none; color: #a071a8; }
+tr.is-option .bulk-name .tree-branch { width: 13px; height: 13px; color: #bda3c2; }
+tr.is-option .bulk-name > input { background: #fcfafd; font-size: 10.5px; }
+
+@media (max-width: 700px) {
+  .compact-table-row.product-row.is-option { padding-left: 22px; }
+  tr.is-option .bulk-name { padding-left: 22px; }
+}
+
+/* The heading row for a product that has options: it is the product, not one of them,
+   so it carries the category, the featured star and the price range, and leaves price
+   and stock per option to the rows beneath it. */
+.compact-table-row.product-row.is-product { background: #fdfcfe; }
+.compact-table-row.product-row.is-product .row-link { font-weight: 800; }
+.row-delete-na {
+  display: grid;
+  place-items: center;
+  color: #c8bdca;
+  font-size: 11px;
+  cursor: default;
+}
+
+/* Column headings must not run into one another when a column is only as wide as its
+   icon. */
+.compact-table-head.product-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The bulk table's heading row for a product that has options: it names the product and
+   hands pricing to the option rows beneath it. */
+tr.is-product .bulk-name { background: #fdfcfe; }
+.bulk-group-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bulk-group-name b { font-size: 11px; color: #2c2431; }
+.bulk-group-name small { color: #7a727e; font-size: 8.5px; }
+.bulk-group-note {
+  color: #9a919e;
+  background: #fdfcfe;
+  font-size: 9px;
+  font-style: italic;
+}
+.bulk-option-name {
+  flex: 1;
+  min-width: 0;
+  padding: 0 2px;
+  color: #4d4653;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+/* The meta line belongs under the name, not beside it — the name cell wraps, so it is
+   given a full row of its own. */
+.bulk-name > small { flex-basis: 100%; margin-left: 23px; }
+tr.is-option .bulk-name > small { margin-left: 21px; }
+tr:not(.is-option):not(.is-product) .bulk-name > small { margin-left: 0; }

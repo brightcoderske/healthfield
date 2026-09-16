@@ -323,6 +323,34 @@
       "when": 1788326400000,
       "tag": "0045_order_vat",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "5",
+      "when": 1789000000000,
+      "tag": "0046_featured_products_cap",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "5",
+      "when": 1789086400000,
+      "tag": "0047_product_variants",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "5",
+      "when": 1789172800000,
+      "tag": "0048_product_group_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "5",
+      "when": 1789259200000,
+      "tag": "0049_featured_active_only",
+      "breakpoints": true
     }
   ]
 }

@@ -35,7 +35,7 @@ button:disabled{cursor:not-allowed}
 }
 
 .compact-admin-page>.compact-table-tools,.compact-admin-page>.compact-table,.compact-admin-page>.compact-pagination{width:min(1180px,100%);margin-inline:auto}
-.compact-admin-page .product-row{grid-template-columns:40px minmax(140px,260px) minmax(90px,1fr) 88px 62px 30px;gap:4px}
+.compact-admin-page .product-row{grid-template-columns:40px minmax(140px,260px) minmax(90px,1fr) 88px 30px 62px 30px;gap:4px}
 .compact-admin-page .compact-table-head{min-height:28px;padding:0 7px}
 .compact-admin-page .compact-table-row{min-height:48px;padding:4px 7px}
 .compact-admin-page .compact-table-row>*{min-width:0;max-width:100%;overflow:hidden}
@@ -45,6 +45,7 @@ button:disabled{cursor:not-allowed}
 .compact-admin-page .compact-table-row>strong{display:flex;flex-direction:column}.compact-admin-page .compact-table-row small{font-size:7px;text-overflow:ellipsis}
 .compact-admin-page .status-active,.compact-admin-page .status-inactive{max-width:100%;padding:3px 5px;font-size:7px}
 .compact-admin-page .row-delete{width:27px;height:27px}
+.compact-admin-page .row-star{width:25px;height:25px}
 .compact-table-empty{min-height:150px;padding:20px;color:#766e7a;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;font-size:9px}.compact-table-empty svg{width:27px}.compact-table-empty strong{color:#403747;font-size:11px}
 .compact-pagination{padding:10px 0;display:flex;align-items:center;justify-content:flex-end;gap:8px}.compact-pagination button{min-height:32px;padding:0 9px;border:1px solid #dcd3e0;border-radius:7px;color:#682274;background:#fff;display:flex;align-items:center;gap:4px;font-size:9px;font-weight:800}.compact-pagination button:disabled{opacity:.45}.compact-pagination button svg{width:13px}.compact-pagination>span{color:#746d78;font-size:8px}
 
@@ -123,8 +124,8 @@ button:disabled{cursor:not-allowed}
   .compact-admin-page .compact-table-tools label{min-width:0;flex:1 1 auto;height:32px;padding:0 6px}
   .compact-admin-page .compact-table-tools>select{width:108px;min-width:88px;flex:0 1 108px;height:32px;padding:0 5px}
   .compact-admin-page .compact-table-tools>span{max-width:56px;overflow:hidden;text-overflow:ellipsis}
-  .compact-admin-page .compact-table-head,.compact-admin-page .compact-table-row{min-width:545px!important}
-  .compact-admin-page .product-row{grid-template-columns:36px minmax(105px,1.55fr) 70px 78px 54px 26px;gap:3px}
+  .compact-admin-page .compact-table-head,.compact-admin-page .compact-table-row{min-width:575px!important}
+  .compact-admin-page .product-row{grid-template-columns:36px minmax(105px,1.55fr) 70px 78px 26px 54px 26px;gap:3px}
   .compact-pagination{justify-content:space-between}.compact-pagination>span{text-align:center}.compact-pagination button{padding:0 7px}
   .taxonomy-page{padding-top:11px}.taxonomy-grid{gap:8px}.taxonomy-card form{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.taxonomy-table-head,.taxonomy-table article{min-width:0!important}.taxonomy-table{overflow:hidden}
   .campaign-page,.settings-page{padding:11px 8px 76px}.campaign-layout{margin-top:9px;gap:7px}.campaign-layout>form,.campaign-layout>section,.settings-page section{padding:9px}.campaign-page h1,.settings-page h1{font-size:18px}.settings-page section>div{gap:6px}.payment-toggle-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}

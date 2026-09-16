@@ -15,6 +15,8 @@ import "./footer-licence.css";
 import "./two-factor.css";
 import "./homepage-fixes.css";
 import "./product-page-polish.css";
+import "./variant-editor.css";
+import "./variant-picker.css";
 import "./registration-notice.css";
 import "./responsive-ui.css";
 import "./product-grid.css";

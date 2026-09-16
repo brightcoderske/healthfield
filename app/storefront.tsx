@@ -30,6 +30,7 @@ import { HeroRotator } from "./hero-rotator";
 import { PrescriptionHero } from "./prescription-hero";
 import { PrescriptionQuickActions } from "./prescription-quick-actions";
 import { ProductCard } from "./product-card";
+import { groupKey, groupVariants } from "@/lib/product-variants";
 import {
   CatalogueInterruption,
   type Guide,
@@ -53,6 +54,14 @@ type CatalogProduct = {
   reviewCount: number;
   discountPrice: number | null;
   prescriptionRequired: boolean;
+  // Only the homepage draw carries this; search and browse results do not.
+  isFeatured?: boolean;
+  // A variant's own name carries its label; the label-free name sits on the lead.
+  groupName?: string | null;
+  variantOf?: number | null;
+  variantLabel?: string | null;
+  variantName?: string | null;
+  variantOrder?: number | null;
 };
 type CatalogCategory = {
   id: number;
@@ -351,12 +360,11 @@ export function Storefront({
   // casual scroll of the homepage never puts prescription-only medicine in front of
   // someone who has not been prescribed it. Any active filter counts as intent too.
   const browsingOnly = !normalizedQuery && !selectedCategory && !selectedCondition && !offersOnly;
-  const filtered = useMemo(
-    () =>
-      (queryWords.length
-        ? searchedProducts
-        : mergeProducts(browsedProducts || [], searchedProducts)
-      ).filter(
+  const { products: filtered, matchedIds } = useMemo(() => {
+    const pool = queryWords.length
+      ? searchedProducts
+      : mergeProducts(browsedProducts || [], searchedProducts);
+    const matching = pool.filter(
         (product) =>
           productMatches(product, queryWords, initialCategories) &&
           (!browsingOnly || !product.prescriptionRequired) &&
@@ -365,7 +373,19 @@ export function Storefront({
           (!selectedCondition ||
             product.conditionIds.includes(selectedCondition)) &&
           (!offersOnly || product.discountPrice !== null),
-      ),
+      );
+    if (!queryWords.length) return { products: matching, matchedIds: null };
+    // A word that only appears in one option — "green", "500 ml" — matches that row and
+    // none of its siblings, which would leave the card showing a lone colour stripped of
+    // the choice it belongs to. The rest of the group comes back in, and the rows that
+    // actually matched are remembered so the card can open on one of them.
+    const matchedIds = new Set(matching.map((product) => product.id));
+    const matchedGroups = new Set(matching.map((product) => groupKey(product)));
+    const siblings = pool.filter(
+      (product) => !matchedIds.has(product.id) && matchedGroups.has(groupKey(product)),
+    );
+    return { products: siblings.length ? [...matching, ...siblings] : matching, matchedIds };
+  },
     [
       searchedProducts,
       browsedProducts,
@@ -377,10 +397,19 @@ export function Storefront({
       offersOnly,
     ],
   );
-  const similarProducts = useMemo(() => {
-    const exactIds = new Set(searchedProducts.map((product) => product.id));
-    return (activeSearchResults?.similar || []).filter(
-      (product) => !exactIds.has(product.id),
+  // Colours and sizes of the same product collapse into one card. Grouping happens here,
+  // after filtering, so a search for "500ml" still narrows to the right rows and then
+  // presents them as the product they belong to.
+  const groups = useMemo(() => groupVariants(filtered), [filtered]);
+  // Alternatives worth offering, minus anything the results already cover. Compared by
+  // group rather than by id: searching for the green one used to suggest the blue and
+  // red ones as separate products, when the card above already offers both.
+  const similarGroups = useMemo(() => {
+    const shown = new Set(searchedProducts.map((product) => groupKey(product)));
+    return groupVariants(
+      (activeSearchResults?.similar || []).filter(
+        (product) => !shown.has(groupKey(product)),
+      ),
     );
   }, [activeSearchResults, searchedProducts]);
   // Which offer and blog cards break up the catalogue scroll, and where. The rules
@@ -388,9 +417,9 @@ export function Storefront({
   const breakPlan = useMemo(
     () =>
       planBreaks({
-        products: filtered.slice(0, visibleCount).map((product) => ({
-          id: product.id,
-          name: product.name,
+        products: groups.slice(0, visibleCount).map((group) => ({
+          id: group.id,
+          name: group.name,
         })),
         offers,
         guides,
@@ -402,7 +431,7 @@ export function Storefront({
         ),
       }),
     [
-      filtered,
+      groups,
       visibleCount,
       offers,
       guides,
@@ -705,6 +734,12 @@ export function Storefront({
       }),
       data = await response.json().catch(() => null);
     if (response.ok && data?.cart) setCart(data.cart);
+  }
+
+  // The option picker adds straight through the API, so it hands back the basket it got
+  // rather than the page having to ask for it again.
+  function variantAdded(_productId: number, _quantity: number, updated?: Record<number, number>) {
+    if (updated) setCart(updated);
   }
 
   return (
@@ -1462,23 +1497,39 @@ export function Storefront({
           <div
             className={`approved-products ${selectedCategory || selectedCondition || query || offersOnly ? "catalogue-expanded" : ""}`}
           >
-            {filtered.slice(0, visibleCount).map((product, index) => {
+            {groups.slice(0, visibleCount).map((group, index) => {
               const slot = breakAt.get(index);
+              // A search opens the card on the option that actually matched; an ordinary
+              // browse opens on the cheapest one that is in stock.
+              const opening =
+                (matchedIds &&
+                  group.variants.find((variant) => matchedIds.has(variant.id))) ||
+                group.defaultVariant;
               return (
-                <Fragment key={product.id}>
+                <Fragment key={group.id}>
                   {slot && <CatalogueInterruption item={slot} />}
                   <ProductCard
-                    product={product}
-                    wishlistActive={wishlist.includes(product.id)}
-                    cartQuantity={cart[product.id]}
+                    // Keyed by the option it opens on, so a search that lands on a
+                    // different colour genuinely reopens the card there. Without this the
+                    // card keeps whatever was chosen before the search ran.
+                    key={opening.id}
+                    product={opening}
+                    variants={group.hasChoice ? group.variants : undefined}
+                    groupName={group.name}
+                    optionName={group.optionName}
+                    wishlistActive={group.variants.some((variant) =>
+                      wishlist.includes(variant.id),
+                    )}
+                    cartQuantities={cart}
                     returnTo="/#products"
                     onAddToCart={addToCart}
+                    onVariantAdded={variantAdded}
                   />
                 </Fragment>
               );
             })}
           </div>
-          {visibleCount < filtered.length && (
+          {visibleCount < groups.length && (
             <button
               className="catalogue-show-more"
               type="button"
@@ -1499,7 +1550,7 @@ export function Storefront({
                 <span>Try another category or search term.</span>
               </div>
             )}
-          {query.trim() && similarProducts.length > 0 && (
+          {query.trim() && similarGroups.length > 0 && (
             <section className="search-suggestions">
               <header>
                 <h3>
@@ -1510,14 +1561,20 @@ export function Storefront({
                 <span>Available alternatives from our catalogue</span>
               </header>
               <div className="approved-products catalogue-expanded">
-                {similarProducts.map((product) => (
+                {similarGroups.map((group) => (
                   <ProductCard
-                    key={product.id}
-                    product={product}
-                    wishlistActive={wishlist.includes(product.id)}
-                    cartQuantity={cart[product.id]}
+                    key={group.id}
+                    product={group.defaultVariant}
+                    variants={group.hasChoice ? group.variants : undefined}
+                    groupName={group.name}
+                    optionName={group.optionName}
+                    wishlistActive={group.variants.some((variant) =>
+                      wishlist.includes(variant.id),
+                    )}
+                    cartQuantities={cart}
                     returnTo="/#products"
                     onAddToCart={addToCart}
+                    onVariantAdded={variantAdded}
                   />
                 ))}
               </div>

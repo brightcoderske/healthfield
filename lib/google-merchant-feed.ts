@@ -13,6 +13,10 @@ export type MerchantProduct = {
   prescriptionRequired: boolean;
   rating: string | null;
   reviewCount: number;
+  /** The lead of this product's option list, when it has one. */
+  variantOf?: number | null;
+  /** This option's own name: "Blue", "500 ml". */
+  variantLabel?: string | null;
 };
 
 export type MerchantFeedResult = {
@@ -56,6 +60,20 @@ function identifierFields(product: MerchantProduct) {
   return "<g:identifier_exists>no</g:identifier_exists>";
 }
 
+/**
+ * Ties a product's options together for Google.
+ *
+ * Every option is submitted as its own item — it has its own price, barcode and page —
+ * and `item_group_id` is what tells Google they are one product in three colours rather
+ * than three products. Without it the same listing competes with itself.
+ */
+function variantFields(product: MerchantProduct) {
+  const label = product.variantLabel?.trim();
+  if (!label) return "";
+  const group = product.variantOf ?? product.id;
+  return `<g:item_group_id>hf-group-${group}</g:item_group_id>`;
+}
+
 export function buildGoogleMerchantFeed(rows: MerchantProduct[], origin: string): MerchantFeedResult {
   const siteOrigin = origin.replace(/\/$/, "");
   let missingImageCount = 0;
@@ -93,7 +111,7 @@ export function buildGoogleMerchantFeed(rows: MerchantProduct[], origin: string)
       `<g:link>${xml(`${siteOrigin}/products/${product.id}`)}</g:link><g:image_link>${xml(imageUrl)}</g:image_link>` +
       `<g:availability>in_stock</g:availability><g:price>${regularPrice.toFixed(2)} KES</g:price>` +
       `${salePrice === null ? "" : `<g:sale_price>${salePrice.toFixed(2)} KES</g:sale_price>`}` +
-      `<g:condition>new</g:condition>${identifierFields(product)}` +
+      `<g:condition>new</g:condition>${identifierFields(product)}${variantFields(product)}` +
       `<g:product_type>${xml(`Health & Beauty > ${product.category}`)}</g:product_type>${reviewFields}</item>`,
     );
   }

@@ -19,7 +19,7 @@ import { handlePosSale } from "./pos-sale";
 import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bRegistration, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, reconcilePendingStkPayments, recoverMissedMpesaPayments } from "./payment-handlers";
 import {
   handleAuth, handleBlogs, handleCampaigns, handleChats, handleCustomerOrderReceived, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptionSelection, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
-  handleProductImage, handleProducts, handleProductsBulk, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
+  handleProductImage, handleProducts, handleProductsBulk, handleProductVariants, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
 } from "./mutations";
 
 const envPath = resolve(process.cwd(), ".env");
@@ -171,6 +171,8 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (conditionMatch) return responseOf(handleTaxonomy(request, "conditions", Number(conditionMatch[1])));
   const productMatch = url.pathname.match(/^\/v1\/products\/(\d+)$/);
   if (productMatch) return responseOf(handleProducts(request, Number(productMatch[1])));
+  const variantMatch = url.pathname.match(/^\/v1\/products\/(\d+)\/variants$/);
+  if (variantMatch) return responseOf(handleProductVariants(request, Number(variantMatch[1])));
   const reviewMatch = url.pathname.match(/^\/v1\/products\/(\d+)\/reviews$/);
   if (reviewMatch) return responseOf(handleReviews(request, Number(reviewMatch[1])));
   if (url.pathname === "/v1/prescriptions") return responseOf(handlePrescriptions(request));

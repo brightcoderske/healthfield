@@ -3,9 +3,10 @@
 
 import { BookOpen, ChevronLeft, ChevronRight, Flame, Package, Sparkles, Tag } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { offerTilePresentation, type OfferTeaserProduct } from "@/lib/offer-teaser";
 import { OfferCountdown } from "./offer-countdown";
+import { useAutoRotate } from "./use-auto-rotate";
 
 export type Guide = { id:number; slug:string; title:string; excerpt:string; imageUrl:string|null };
 export type OfferTeaser = { id:number; title:string; slug:string; description:string|null; total:number; normalTotal:number; isBundle:boolean; itemCount:number; imageUrl:string|null; endsAt:string|null; items:OfferTeaserProduct[] };
@@ -69,7 +70,9 @@ function GuideSlide({ guide }: { guide: Guide }) {
 }
 
 function GuideRail({ guides }: { guides: Guide[] }) {
-  const rail = useRef<HTMLDivElement>(null);
+  // One ref serves both the arrows and the rotation, so a guide that auto-advanced and
+  // one an arrow moved leave the controls in the same state.
+  const rail = useAutoRotate<HTMLDivElement>(guides.length);
   const [controls, setControls] = useState({ previous: false, next: false });
 
   const updateControls = useCallback(() => {
@@ -78,7 +81,7 @@ function GuideRail({ guides }: { guides: Guide[] }) {
     const previous = element.scrollLeft > 2;
     const next = element.scrollLeft < element.scrollWidth - element.clientWidth - 2;
     setControls((current) => current.previous === previous && current.next === next ? current : { previous, next });
-  }, []);
+  }, [rail]);
 
   useEffect(() => {
     updateControls();
@@ -87,7 +90,7 @@ function GuideRail({ guides }: { guides: Guide[] }) {
     const observer = new ResizeObserver(updateControls);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [guides.length, updateControls]);
+  }, [guides.length, rail, updateControls]);
 
   function slide(direction: -1 | 1) {
     const element = rail.current;
@@ -112,8 +115,9 @@ function GuideRail({ guides }: { guides: Guide[] }) {
 }
 
 function PromotionRail({ promotions }: { promotions: Promotion[] }) {
+  const rail = useAutoRotate<HTMLDivElement>(promotions.length);
   return <aside className={`catalogue-break catalogue-break-promotion${promotions.length === 1 ? " is-single" : ""}`} aria-label="Product promotions">
-    <div className={`promotion-slider${promotions.length === 1 ? " is-single" : ""}`}>
+    <div className={`promotion-slider${promotions.length === 1 ? " is-single" : ""}`} ref={rail}>
       {promotions.map((promotion) => <Link
         prefetch={false}
         className="promotion-slide"
@@ -123,6 +127,19 @@ function PromotionRail({ promotions }: { promotions: Promotion[] }) {
       >
         <img src={promotion.imageUrl} alt={promotion.title} loading="lazy" decoding="async"/>
       </Link>)}
+    </div>
+  </aside>;
+}
+
+function OfferRail({ offers }: { offers: OfferTeaser[] }) {
+  const rail = useAutoRotate<HTMLDivElement>(offers.length);
+  return <aside className={`catalogue-break catalogue-break-offer${offers.length === 1 ? " is-single" : ""}`}>
+    <header className="offer-rail-header">
+      <span><Tag/> {offers.length === 1 && offers[0].isBundle ? "Collection offer" : "Offers on now"}</span>
+      <Link prefetch={false} href="/offers">View all offers <ChevronRight/></Link>
+    </header>
+    <div className={`offer-slider${offers.length === 1 ? " is-single" : ""}`} ref={rail}>
+      {offers.map((offer, index) => <OfferSlide key={offer.id} offer={offer} index={index}/>)}
     </div>
   </aside>;
 }
@@ -137,15 +154,7 @@ export function CatalogueInterruption({ item }: { item: Interruption }) {
 
   if (item.kind === "offer") {
     const list = item.offers && item.offers.length ? item.offers : [item.offer];
-    return <aside className={`catalogue-break catalogue-break-offer${list.length === 1 ? " is-single" : ""}`}>
-      <header className="offer-rail-header">
-        <span><Tag/> {list.length === 1 && list[0].isBundle ? "Collection offer" : "Offers on now"}</span>
-        <Link prefetch={false} href="/offers">View all offers <ChevronRight/></Link>
-      </header>
-      <div className={`offer-slider${list.length === 1 ? " is-single" : ""}`}>
-        {list.map((offer, index) => <OfferSlide key={offer.id} offer={offer} index={index}/>)}
-      </div>
-    </aside>;
+    return <OfferRail offers={list}/>;
   }
 
   if (item.kind === "promotion") {

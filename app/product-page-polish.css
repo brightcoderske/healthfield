@@ -120,3 +120,40 @@
 }
 
 .compact-product-actions .primary-cart-action,.compact-product-actions .view-cart-action{position:relative}.compact-product-actions .primary-cart-action.is-added{border-color:#218849!important;background:#218849!important;box-shadow:0 4px 12px #2188492b!important}.compact-product-actions .primary-cart-action:disabled{cursor:wait;opacity:.78}.cart-action-badge{position:absolute;z-index:2;top:-8px;right:-7px;min-width:17px;height:17px;padding:0 4px;border:2px solid #fff;border-radius:999px;color:#fff!important;background:#d72e7d!important;display:grid!important;place-items:center;font-size:8px!important;font-weight:900!important;line-height:1}.primary-cart-action .cart-action-badge{top:-9px;right:-8px}
+
+/* ---- Variants on the product page -------------------------------------------
+   Each option is a link to its own page, so the price beside a label is the price of
+   the thing that link leads to — not a guess the shopper has to check after arriving. */
+.detail-variants { margin: 6px 0 2px; }
+.detail-variants-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #6c6472;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.detail-variant-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.detail-variant-options > a {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 11px;
+  border: 1px solid #e4dce6;
+  border-radius: 10px;
+  color: #3b343f;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: none;
+}
+.detail-variant-options > a small { color: #7c7482; font-size: 10px; font-weight: 650; }
+.detail-variant-options > a:hover { border-color: #b98cbd; color: #7a2482; }
+.detail-variant-options > a.is-chosen {
+  border-color: #8a278c;
+  color: #fff;
+  background: #8a278c;
+}
+.detail-variant-options > a.is-chosen small { color: rgba(255, 255, 255, 0.82); }
+.detail-variant-options > a:focus-visible { outline: 3px solid rgba(138, 39, 140, 0.2); outline-offset: 2px; }

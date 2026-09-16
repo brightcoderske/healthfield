@@ -8,6 +8,33 @@ const protectedAreas: Array<{ prefix: string; roles: string[] }> = [
   { prefix: "/change-password", roles: ["CUSTOMER", "STAFF", "ADMIN", "SUPER_ADMIN"] },
 ];
 
+/**
+ * How long a visitor keeps the same arrangement of the catalogue.
+ *
+ * The homepage is deliberately shuffled so it does not read as the same twenty products
+ * every time. Doing that per request meant walking to the basket and pressing Back
+ * re-dealt the page, and whatever someone had just been looking at could vanish. The
+ * shuffle is therefore per *visit*: one seed, kept in a cookie, so Back returns to the
+ * page that was left, and a later visit gets a fresh arrangement.
+ */
+const LAYOUT_COOKIE = "healthfield_layout";
+const LAYOUT_COOKIE_MAX_AGE = 60 * 60 * 6;
+
+function withLayoutSeed(request: NextRequest, response: NextResponse) {
+  if (request.cookies.has(LAYOUT_COOKIE)) return response;
+  // Not a secret and never used for anything but arranging tiles, so a plain random
+  // integer is enough; it only has to differ between visitors.
+  const seed = Math.floor(Math.random() * 2 ** 31);
+  response.cookies.set(LAYOUT_COOKIE, String(seed), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: LAYOUT_COOKIE_MAX_AGE,
+    path: "/",
+  });
+  return response;
+}
+
 export async function proxy(request: NextRequest) {
   if (request.nextUrl.pathname.startsWith("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
     const fetchSite = request.headers.get("sec-fetch-site");
@@ -26,7 +53,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(clean);
   }
   const rule = protectedAreas.find(({ prefix }) => request.nextUrl.pathname.startsWith(prefix));
-  if (!rule) return NextResponse.next();
+  if (!rule) return withLayoutSeed(request, NextResponse.next());
 
   const token = request.cookies.get("healthfield_session")?.value;
   if (!token) {
@@ -65,5 +92,7 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/:path*", "/login", "/admin/:path*", "/staff/:path*", "/account/:path*", "/change-password"],
+  // "/" is here only so the homepage gets a layout seed on a visitor's first request;
+  // it matches no protected area and falls straight through.
+  matcher: ["/", "/api/:path*", "/login", "/admin/:path*", "/staff/:path*", "/account/:path*", "/change-password"],
 };

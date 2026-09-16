@@ -15,6 +15,7 @@ import { getSession } from "@/lib/auth";
 import { CART_COOKIE, parseCart } from "@/lib/shopping-state";
 import { ProductCartLink } from "./product-cart-link";
 import { richTextToPlainText } from "@/lib/rich-text-content";
+import { groupVariants } from "@/lib/product-variants";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,11 @@ type Recommendation = {
   discountPrice: string | null;
   packSize: string | null;
   prescriptionRequired: boolean;
+  groupName?: string | null;
+  variantOf?: number | null;
+  variantLabel?: string | null;
+  variantName?: string | null;
+  variantOrder?: number | null;
 };
 type Product = {
   id: number;
@@ -41,9 +47,24 @@ type Product = {
   warnings: string | null;
   storageInformation: string | null;
   prescriptionRequired: boolean;
+  groupName: string | null;
+  variantOf: number | null;
+  variantLabel: string | null;
+  variantName: string | null;
+};
+type Variant = {
+  id: number;
+  variantLabel: string | null;
+  price: number;
+  discountPrice: number | null;
+  imageUrl: string | null;
 };
 type ProductData = {
   product: Product;
+  /** Every option of this product, empty when there is nothing to choose. */
+  variants?: Variant[];
+  /** What the list of options is called, read from the lead. */
+  optionName?: string | null;
   rating: number | null;
   reviewCount: number;
   reviews: Array<{
@@ -136,11 +157,16 @@ function ProductRail({
         <Link href="/#products">View more</Link>
       </header>
       <div className="approved-products recommendation-products">
-        {items.map((item) => (
+        {/* Colours and sizes of the same product are one card here too, so a rail of
+            recommendations never reads as three near-identical products. */}
+        {groupVariants(items).map((group) => (
           <ProductCard
-            key={item.id}
-            product={item}
-            returnTo={`/products/${item.id}`}
+            key={group.id}
+            product={group.defaultVariant}
+            variants={group.hasChoice ? group.variants : undefined}
+            groupName={group.name}
+            optionName={group.optionName}
+            returnTo={`/products/${group.defaultVariant.id}`}
           />
         ))}
       </div>
@@ -167,8 +193,9 @@ export default async function ProductPage({
     getSession(),
   ]);
   if (!data) notFound();
-  const { product, rating, reviewCount, reviews, related, similar, bought } =
+  const { product, variants: variantRows, optionName, rating, reviewCount, reviews, related, similar, bought } =
     data;
+  const variants = variantRows || [];
   const price = Number(product.discountPrice ?? product.price);
   const regularPrice = Number(product.price);
   const discountPercent =
@@ -251,6 +278,37 @@ export default async function ProductPage({
                   {reviewCount} verified{" "}
                   {reviewCount === 1 ? "review" : "reviews"}
                 </small>
+              </div>
+            )}
+            {variants.length > 1 && (
+              // Each option is its own page, because each has its own price, stock and
+              // picture — and therefore its own address worth sharing and indexing. The
+              // instant swap lives on the grid card; here the choice is a real link.
+              <div className="detail-variants">
+                <span className="detail-variants-label">
+                  {(optionName || product.variantName || "Option").trim()}
+                </span>
+                <div className="detail-variant-options" role="group" aria-label={`Choose ${(optionName || product.variantName || "option").trim().toLowerCase()}`}>
+                  {variants.map((variant) => {
+                    const current = variant.id === product.id;
+                    return (
+                      <Link
+                        key={variant.id}
+                        prefetch={false}
+                        href={`/products/${variant.id}`}
+                        className={current ? "is-chosen" : ""}
+                        aria-current={current ? "true" : undefined}
+                      >
+                        {variant.variantLabel || "Standard"}
+                        {variant.discountPrice !== null && variant.discountPrice !== variant.price ? (
+                          <small>KES {Math.round(variant.discountPrice).toLocaleString("en-KE")}</small>
+                        ) : (
+                          <small>KES {Math.round(variant.price).toLocaleString("en-KE")}</small>
+                        )}
+                      </Link>
+                    );
+                  })}
+                </div>
               </div>
             )}
             {product.packSize && <p>{product.packSize}</p>}

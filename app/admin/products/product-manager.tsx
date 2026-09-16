@@ -1,18 +1,23 @@
 "use client";
 
-import { ArrowLeft, Camera, ChevronLeft, ChevronRight, ImageOff, Package, Plus, ScanLine, Search, Table2, Trash2, X } from "lucide-react";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Camera, ChevronLeft, ChevronRight, CornerDownRight, FolderTree, ImageOff, Package, Plus, ScanLine, Search, Star, Table2, Trash2, X } from "lucide-react";
+import { ChangeEvent, Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_MARKUP, marginPercent, sellingPriceFromCost } from "@/lib/profit";
+import { FEATURED_LIMIT, featuredEvictions } from "@/lib/featured-products";
 import { BulkEditor } from "./bulk-editor";
 import { useEditorDraft } from "../use-editor-draft";
 import { useModalViewport } from "../use-modal-viewport";
 import { RichTextEditor } from "./rich-text-editor";
+import { VariantEditor } from "./variant-editor";
 
 type Product = {
   id: number; categoryId: number; name: string; sku: string; barcode: string | null; brand: string | null; packSize: string | null;
   shortDescription: string | null; description: string | null; usageInformation: string | null; warnings: string | null; storageInformation: string | null;
   price: number; discountPrice: number | null; costPrice: string | number | null; costPriceEstimated?: boolean; imageUrl: string | null;
-  isFeatured: boolean; isActive: boolean; conditionIds: number[];
+  isFeatured: boolean; featuredAt?: string | null; isActive: boolean; conditionIds: number[];
+  // A variant is a product row, so a group is just rows pointing at their lead.
+  groupName?: string | null; variantOf?: number | null; variantLabel?: string | null;
+  variantName?: string | null; variantOrder?: number | null;
   prescriptionRequired: boolean;
 };
 type Option = { id: number; name: string };
@@ -30,6 +35,9 @@ export function ProductManager({ initialProducts, categories, conditions, branch
   const [stockLevels, setStockLevels] = useState<Record<number, string>>({});
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
+  // The featured shelf is ten products out of hundreds, so finding what is on it by
+  // scrolling the table was not realistic. This filter is how it gets managed.
+  const [featuredFilter, setFeaturedFilter] = useState<"all" | "featured" | "plain">("all");
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Product | "new" | null>(null);
   // Sizes the sheet to what the phone is actually showing, keyboard included, and keeps
@@ -47,13 +55,46 @@ export function ProductManager({ initialProducts, categories, conditions, branch
   const [costEstimated, setCostEstimated] = useState(false);
   const [barcode, setBarcode] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
-  const filtered = useMemo(() => items.filter((item) =>
-    `${item.name} ${item.brand || ""}`.toLowerCase().includes(query.toLowerCase()) &&
-    (category === "all" || item.categoryId === Number(category)),
-  ), [items, query, category]);
+  // Options are product rows, but they are not separate products: Blue and Red belong
+  // under the bag, not beside it. The table is built as products with their options
+  // beneath them, and searching, filtering and paging all work on the product — finding
+  // "Blue" brings the bag and the rest of its colours with it.
+  const groups = useMemo(() => {
+    const byLead = new Map<number, { lead: Product; children: Product[] }>();
+    const order: number[] = [];
+    for (const item of items) {
+      const leadId = item.variantOf ?? item.id;
+      let entry = byLead.get(leadId);
+      if (!entry) {
+        entry = { lead: item, children: [] };
+        byLead.set(leadId, entry);
+        order.push(leadId);
+      }
+      if (item.id === leadId) entry.lead = item;
+      else entry.children.push(item);
+    }
+    return order.map((leadId) => {
+      const entry = byLead.get(leadId) as { lead: Product; children: Product[] };
+      return {
+        ...entry,
+        children: [...entry.children].sort(
+          (left, right) => (left.variantOrder ?? 0) - (right.variantOrder ?? 0) || left.id - right.id,
+        ),
+      };
+    });
+  }, [items]);
+  const filtered = useMemo(() => groups.filter(({ lead, children }) =>
+    [lead, ...children].some((item) =>
+      `${item.groupName || ""} ${item.name} ${item.brand || ""}`.toLowerCase().includes(query.toLowerCase()) &&
+      (category === "all" || item.categoryId === Number(category)) &&
+      (featuredFilter === "all" || (featuredFilter === "featured" ? item.isFeatured : !item.isFeatured)),
+    ),
+  ), [groups, query, category, featuredFilter]);
+  const featuredCount = useMemo(() => items.filter((item) => item.isFeatured).length, [items]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const visibleProducts = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const visibleRowCount = visibleProducts.reduce((total, group) => total + 1 + group.children.length, 0);
 
   // Saving as a draft stores the product with the storefront listing switched off, so
   // half-finished work can be kept without ever being shown to a customer.
@@ -92,6 +133,19 @@ export function ProductManager({ initialProducts, categories, conditions, branch
     };
     const isNew = editing === "new";
     const targetId = isNew ? "new" : editing.id;
+    // Ticking "Featured product" on a full shelf costs another product its place, the
+    // same as the star in the table does, so it is confirmed the same way.
+    if (payload.isFeatured) {
+      const [dropping] = featuredEvictions(items.filter((item) => item.isFeatured), isNew ? null : editing.id);
+      const leaving = items.find((item) => item.id === dropping);
+      if (leaving && !window.confirm(
+        `Featured is full at ${FEATURED_LIMIT} products.
+
+Featuring "${payload.name}" will remove "${leaving.name}", which has been featured the longest.
+
+Continue?`,
+      )) return;
+    }
     setSavingId(targetId);
     try {
       if (imageFile) {
@@ -110,8 +164,14 @@ export function ProductManager({ initialProducts, categories, conditions, branch
       if (!response.ok) return setMessage(data.error || "Product could not be saved.");
       // Saved for real, so the on-device copy has done its job.
       draft.discard();
-      if (isNew) setItems((current) => [{ ...payload, id: data.id, sku: data.sku } as Product, ...current]);
-      else setItems((current) => current.map((item) => item.id === targetId ? { ...item, ...payload } : item));
+      // Whatever the shelf pushed off has to leave the table's stars too, or the count
+      // in the toolbar would disagree with what the homepage is actually showing.
+      const droppedIds = new Set((data.unfeatured || []).map((item: { id: number }) => item.id));
+      const withoutDropped = (rows: Product[]) => droppedIds.size
+        ? rows.map((item) => droppedIds.has(item.id) ? { ...item, isFeatured: false, featuredAt: null } : item)
+        : rows;
+      if (isNew) setItems((current) => [{ ...payload, id: data.id, sku: data.sku } as Product, ...withoutDropped(current)]);
+      else setItems((current) => withoutDropped(current).map((item) => item.id === targetId ? { ...item, ...payload } : item));
       setMessage("");
       setEditing(null);
       setImageFile(null);
@@ -136,6 +196,58 @@ export function ProductManager({ initialProducts, categories, conditions, branch
       setItems((current) => current.map((item) => item.id === product.id ? { ...item, imageUrl: null } : item));
       setEditing({ ...product, imageUrl: null });
     }
+    setSavingId(null);
+  }
+
+  /**
+   * Stars or unstars a product straight from the table.
+   *
+   * The shelf holds ten. Filling it and starring an eleventh is a real decision — it
+   * takes a product off the homepage — so it is confirmed by name rather than happening
+   * quietly. The eviction itself is decided on the server inside the same transaction;
+   * what is worked out here is only what to warn about, so the two cannot disagree about
+   * the rule.
+   */
+  async function toggleFeatured(product: Product) {
+    const next = !product.isFeatured;
+    if (next) {
+      // A product that is not on sale cannot show on the homepage, so starring it would
+      // only hold one of the ten places. The API refuses it too; this says so without a
+      // round trip.
+      if (!product.isActive) {
+        setMessage(`${product.groupName || product.name} is not on sale, so it cannot be featured. Set it active first.`);
+        return;
+      }
+      const [dropping] = featuredEvictions(items.filter((item) => item.isFeatured), product.id);
+      const leaving = items.find((item) => item.id === dropping);
+      if (leaving && !window.confirm(
+        `Featured is full at ${FEATURED_LIMIT} products.
+
+Adding "${product.name}" will remove "${leaving.name}", which has been featured the longest.
+
+Continue?`,
+      )) return;
+    }
+    setSavingId(product.id);
+    const response = await fetch(`/api/products/${product.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isFeatured: next }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) {
+      const dropped: Array<{ id: number; name: string }> = data.unfeatured || [];
+      const droppedIds = new Set(dropped.map((item) => item.id));
+      setItems((current) => current.map((item) =>
+        item.id === product.id ? { ...item, isFeatured: next, featuredAt: next ? new Date().toISOString() : null }
+        : droppedIds.has(item.id) ? { ...item, isFeatured: false, featuredAt: null }
+        : item));
+      setMessage(
+        !next ? `${product.name} is no longer featured.`
+        : dropped.length ? `${product.name} is featured. ${dropped.map((item) => item.name).join(", ")} made way for it.`
+        : `${product.name} is featured.`,
+      );
+    } else setMessage(data.error || "Featured could not be changed.");
     setSavingId(null);
   }
 
@@ -258,19 +370,71 @@ export function ProductManager({ initialProducts, categories, conditions, branch
         });
       }}
     /> : null}
-    <div className="compact-table-tools"><label><Search/><input value={query} onChange={(event)=>{setQuery(event.target.value);setPage(1)}} placeholder="Search all products by name or brand"/></label><select value={category} onChange={(event)=>{setCategory(event.target.value);setPage(1)}}><option value="all">All categories</option>{categories.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select><span>{filtered.length} products</span></div>
-    <div className="compact-table"><div className="compact-table-head product-row"><span>Image</span><span>Product</span><span>Category</span><span>Price</span><span>Status</span><span>Action</span></div>
-      {visibleProducts.map((product)=>{const saving=product.discountPrice!==null&&product.discountPrice<product.price?Math.round((1-product.discountPrice/product.price)*100):0;return <div className={`compact-table-row product-row ${savingId===product.id?"row-saving":""}`} key={product.id}><span className="table-thumb">{product.imageUrl?<img src={product.imageUrl} alt={product.name}/>:<Package/>}</span><span><button className="row-link" title={product.name} onClick={()=>openEditor(product)}>{product.name}</button><small>{product.brand || "No brand"}{product.packSize ? ` · ${product.packSize}` : ""}</small></span><span title={categories.find((item)=>item.id===product.categoryId)?.name || "Uncategorised"}>{categories.find((item)=>item.id===product.categoryId)?.name || "Uncategorised"}</span><strong>KES {(product.discountPrice??product.price).toLocaleString()}{saving>0&&<small>Save {saving}% · was KES {product.price.toLocaleString()}</small>}</strong><span className={product.isActive?"status-active":"status-inactive"}>{savingId===product.id?"Saving…":product.isActive?"Active":"Inactive"}</span><button className="row-delete" aria-label={`Delete ${product.name}`} disabled={savingId===product.id} onClick={()=>deactivate(product)}><Trash2/></button></div>})}
+    <div className="compact-table-tools"><label><Search/><input value={query} onChange={(event)=>{setQuery(event.target.value);setPage(1)}} placeholder="Search all products by name or brand"/></label><select value={category} onChange={(event)=>{setCategory(event.target.value);setPage(1)}}><option value="all">All categories</option>{categories.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select><select value={featuredFilter} onChange={(event)=>{setFeaturedFilter(event.target.value as typeof featuredFilter);setPage(1)}} aria-label="Filter by featured"><option value="all">Featured and not</option><option value="featured">Featured only</option><option value="plain">Not featured</option></select><span>{filtered.length} products · {featuredCount} of {FEATURED_LIMIT} featured</span></div>
+    <div className="compact-table"><div className="compact-table-head product-row"><span>Image</span><span>Product</span><span>Category</span><span>Price</span><span title="Featured on the homepage">Star</span><span>Status</span><span>Action</span></div>
+      {visibleProducts.map((group)=>{
+        const options=[group.lead,...group.children];
+        const money=(product:Product)=>`KES ${(product.discountPrice??product.price).toLocaleString()}`;
+        // A product with options is a heading with its options beneath it, the way a main
+        // category sits above its subcategories. The lead row is one of those options —
+        // it is the blue bag, not the bag — so it belongs under the heading with the
+        // rest, never standing in for the product itself.
+        const optionRow=(product:Product,isOption:boolean)=>{
+          const saving=product.discountPrice!==null&&product.discountPrice<product.price?Math.round((1-product.discountPrice/product.price)*100):0;
+          return <div className={`compact-table-row product-row ${savingId===product.id?"row-saving":""}${isOption?" is-option":""}`} key={product.id}>
+            <span className="table-thumb">{product.imageUrl?<img src={product.imageUrl} alt={product.name}/>:<Package/>}</span>
+            <span className="tree-name">
+              {isOption?<CornerDownRight className="tree-branch" aria-hidden="true"/>:null}
+              <span className="tree-label">
+                <button className="row-link" title={product.name} onClick={()=>openEditor(product)}>{isOption?(product.variantLabel||product.name):(product.groupName||product.name)}</button>
+                <small>{isOption?`Option of ${group.lead.groupName||group.lead.name}`:`${product.brand || "No brand"}${product.packSize ? ` · ${product.packSize}` : ""}`}</small>
+              </span>
+            </span>
+            <span title={categories.find((item)=>item.id===product.categoryId)?.name || "Uncategorised"}>{isOption?"":(categories.find((item)=>item.id===product.categoryId)?.name || "Uncategorised")}</span>
+            <strong>{money(product)}{saving>0&&<small>Save {saving}% · was KES {product.price.toLocaleString()}</small>}</strong>
+            <span className="featured-cell">{isOption?null:<button type="button" className={`row-star${product.isFeatured?" is-on":""}`} disabled={savingId===product.id||(!product.isFeatured&&!product.isActive)} onClick={()=>toggleFeatured(product)} aria-pressed={product.isFeatured} title={!product.isActive&&!product.isFeatured?`${product.name} is not on sale, so it cannot be featured`:product.isFeatured?`${product.name} is featured on the homepage`:`Feature ${product.name} on the homepage`} aria-label={product.isFeatured?`Remove ${product.name} from featured`:`Feature ${product.name}`}><Star/></button>}</span>
+            <span className={product.isActive?"status-active":"status-inactive"}>{savingId===product.id?"Saving…":product.isActive?"Active":"Inactive"}</span>
+            <button className="row-delete" aria-label={`Delete ${product.name}`} disabled={savingId===product.id} onClick={()=>deactivate(product)}><Trash2/></button>
+          </div>;
+        };
+        if(!group.children.length) return optionRow(group.lead,false);
+        const prices=options.map((product)=>product.discountPrice??product.price);
+        const low=Math.min(...prices), high=Math.max(...prices);
+        // How many options a customer can actually buy. A product with none of them on
+        // sale is not on the homepage, so it cannot hold a featured place either.
+        const live=options.filter((product)=>product.isActive).length;
+        return <Fragment key={`group-${group.lead.id}`}>
+          <div className="compact-table-row product-row is-product">
+            <span className="table-thumb">{group.lead.imageUrl?<img src={group.lead.imageUrl} alt={group.lead.groupName||group.lead.name}/>:<Package/>}</span>
+            <span className="tree-name">
+              <FolderTree className="tree-branch" aria-hidden="true"/>
+              <span className="tree-label">
+                <button className="row-link" title={group.lead.groupName||group.lead.name} onClick={()=>openEditor(group.lead)}>{group.lead.groupName||group.lead.name}</button>
+                <small>{group.lead.brand || "No brand"} · {options.length} {group.lead.variantName?`${group.lead.variantName.toLowerCase()} options`:"options"}</small>
+              </span>
+            </span>
+            <span title={categories.find((item)=>item.id===group.lead.categoryId)?.name || "Uncategorised"}>{categories.find((item)=>item.id===group.lead.categoryId)?.name || "Uncategorised"}</span>
+            <strong>{low===high?`KES ${low.toLocaleString()}`:`KES ${low.toLocaleString()} – ${high.toLocaleString()}`}</strong>
+            <span className="featured-cell"><button type="button" className={`row-star${group.lead.isFeatured?" is-on":""}`} disabled={savingId===group.lead.id||(!group.lead.isFeatured&&!live)} onClick={()=>toggleFeatured(group.lead)} aria-pressed={group.lead.isFeatured} title={group.lead.isFeatured?`${group.lead.groupName||group.lead.name} is featured on the homepage`:`Feature ${group.lead.groupName||group.lead.name} on the homepage`} aria-label={group.lead.isFeatured?`Remove ${group.lead.groupName||group.lead.name} from featured`:`Feature ${group.lead.groupName||group.lead.name}`}><Star/></button></span>
+            <span className={live?"status-active":"status-inactive"}>{live===options.length?"Active":live?`${live} of ${options.length} on sale`:"Inactive"}</span>
+            {/* Deleting the product would delete whichever option happens to be the row
+                that carries its history. Options are removed in the product's own
+                options table, which switches them off rather than destroying them. */}
+            <span className="row-delete-na" title="Remove options from inside the product, under Options">—</span>
+          </div>
+          {options.map((product)=>optionRow(product,true))}
+        </Fragment>;
+      })}
       {!visibleProducts.length&&<div className="compact-table-empty"><Package/><strong>No matching products</strong><span>Try another search or category.</span></div>}
     </div>
-    <nav className="compact-pagination" aria-label="Product table pages"><button type="button" onClick={()=>setPage((value)=>Math.max(1,value-1))} disabled={currentPage===1}><ChevronLeft/> Previous</button><span>Page <strong>{currentPage}</strong> of {pageCount} · showing {visibleProducts.length} of {filtered.length}</span><button type="button" onClick={()=>setPage((value)=>Math.min(pageCount,value+1))} disabled={currentPage===pageCount}>Next <ChevronRight/></button></nav>
+    <nav className="compact-pagination" aria-label="Product table pages"><button type="button" onClick={()=>setPage((value)=>Math.max(1,value-1))} disabled={currentPage===1}><ChevronLeft/> Previous</button><span>Page <strong>{currentPage}</strong> of {pageCount} · showing {visibleProducts.length} of {filtered.length}{visibleRowCount > visibleProducts.length ? ` · ${visibleRowCount - visibleProducts.length} options` : ""}</span><button type="button" onClick={()=>setPage((value)=>Math.min(pageCount,value+1))} disabled={currentPage===pageCount}>Next <ChevronRight/></button></nav>
     {editing && <div className="product-modal" onClick={()=>setEditing(null)}><form ref={formRef} onInput={captureForm} onSubmit={save} onInvalidCapture={(event)=>{
       // A required field the browser refuses to submit is often off screen on a phone,
       // so the press on Save looked like it did nothing at all.
       const field = event.target as HTMLElement;
       field.scrollIntoView?.({ block: "center", behavior: "smooth" });
       setMessage("Fill in the highlighted field, then press save again.");
-    }} onClick={(event)=>event.stopPropagation()}><header><div><span><h2>{editing==="new"?"Add product":"Edit product"}</h2><p>Changes update only this product row.</p></span></div><button type="button" onClick={()=>setEditing(null)}><X/></button></header>
+    }} onClick={(event)=>event.stopPropagation()}><header><div><span><h2>{editing==="new"?"Add product":`Editing ${activeEdit?.groupName || activeEdit?.name || "product"}`}</h2><p>Changes update only this product row.</p></span></div><button type="button" onClick={()=>setEditing(null)}><X/></button></header>
       {draft.recovered ? (
         <div className="editor-draft-notice" role="status">
           <strong>Unsaved work from {draft.recovered.age}</strong>
@@ -312,11 +476,40 @@ export function ProductManager({ initialProducts, categories, conditions, branch
         <label>Regular price (before discount)<input name="price" type="number" min="0" step=".01" value={regularPrice} onChange={event=>setRegularPrice(event.target.value)} required/><small>The normal or previous customer price.</small></label><label>Selling price (customer pays)<input name="discountPrice" type="number" min="0" max={regularPrice||undefined} step=".01" value={sellingPrice} onChange={event=>setSellingPrice(event.target.value)}/><small>{sellingPrice&&regularPrice&&Number(sellingPrice)<Number(regularPrice)?`Discount calculated automatically: Save ${Math.round((1-Number(sellingPrice)/Number(regularPrice))*100)}%`:`Leave blank when the product is not discounted.`}</small></label>
         <label className="full">Product image<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/bmp,image/tiff,.jpg,.jpeg,.png,.webp,.gif,.avif,.bmp,.tif,.tiff" onChange={chooseImage}/><small>JPEG, PNG, WebP, GIF, AVIF, BMP or TIFF. Maximum 2 MB.</small></label>
         {(imagePreview||activeEdit?.imageUrl)&&<div className="edit-image-preview full"><img src={imagePreview||activeEdit?.imageUrl||""} alt={activeEdit?.name||"New product preview"}/>{activeEdit?.imageUrl&&!imagePreview&&<button type="button" onClick={()=>removeImage(activeEdit)}><ImageOff/> Remove image now</button>}</div>}
+        {/* What the product comes in, before the long-form details: the options carry
+            their own prices and barcodes, so they belong beside the price and picture. */}
+        {activeEdit && <VariantEditor
+          key={activeEdit.id}
+          product={activeEdit}
+          siblings={items.filter((item) => {
+            const lead = activeEdit.variantOf ?? activeEdit.id;
+            return item.id === lead || item.variantOf === lead;
+          })}
+          onSaved={(saved) => {
+            // Saving options can rename this product, create siblings and switch others
+            // off. The table is reconciled from what came back rather than reloaded, so
+            // the page and filters someone is working are not thrown away.
+            const byId = new Map(saved.map((row) => [row.id, row]));
+            setItems((current) => {
+              // Spread the saved row over the existing one, never the other way round: a
+              // row from the options endpoint describes the product, not its health
+              // conditions, and dropping those would empty the picker on the open form.
+              const merged = current.map((item) => byId.has(item.id) ? { ...item, ...byId.get(item.id), conditionIds: byId.get(item.id)?.conditionIds ?? item.conditionIds } as Product : item);
+              const known = new Set(current.map((item) => item.id));
+              const added = saved.filter((row) => !known.has(row.id)) as unknown as Product[];
+              return [...added, ...merged];
+            });
+            const refreshed = byId.get(activeEdit.id);
+            if (refreshed) setEditing((current) => current && current !== "new"
+              ? { ...current, ...refreshed, conditionIds: refreshed.conditionIds ?? current.conditionIds } as Product
+              : current);
+          }}
+        />}
         <div className="full rich-text-field"><span>Detailed description</span><RichTextEditor key={editing === "new" ? "new-product-description" : `product-description-${activeEdit?.id}`} restoreRef={restoreDescription} defaultValue={activeEdit?.description||""} rows={10} maxLength={10000} helper="Formatting counts toward the limit, so a richly styled description uses more than its visible text"/></div>
         <label className="full">How to use<textarea name="usageInformation" defaultValue={activeEdit?.usageInformation||""} rows={6} maxLength={10000} placeholder="Dosage and directions shown on the customer product page"/></label>
         <label className="full">Important warnings<textarea name="warnings" defaultValue={activeEdit?.warnings||""} rows={6} maxLength={10000} placeholder="Contraindications, interactions and when to seek help"/></label>
         <label className="full">Storage information<textarea name="storageInformation" defaultValue={activeEdit?.storageInformation||""} rows={4} maxLength={10000} placeholder="Temperature, light, moisture and child-safety guidance"/></label>
-        <fieldset className="full condition-picker"><legend>Health conditions supported by this product</legend>{conditions.map((item)=><label key={item.id}><input type="checkbox" name="conditionIds" value={item.id} defaultChecked={activeEdit?.conditionIds.includes(item.id)}/><span>{item.name}</span></label>)}</fieldset>
+        <fieldset className="full condition-picker"><legend>Health conditions supported by this product</legend>{conditions.map((item)=><label key={item.id}><input type="checkbox" name="conditionIds" value={item.id} defaultChecked={activeEdit?.conditionIds?.includes(item.id)}/><span>{item.name}</span></label>)}</fieldset>
         {branches.length ? (
           // Collapsed by default: stock is the exception when editing a product, so it
           // should not push the buttons people came for further down the form.

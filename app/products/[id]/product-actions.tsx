@@ -12,6 +12,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { CART_UPDATED_EVENT } from "./product-cart-link";
 import { PrescriptionAddButton } from "@/app/prescription-add-button";
+import { QuantityField } from "@/app/quantity-field";
 
 export function ProductActions({
   productId,
@@ -154,70 +155,16 @@ export function ProductActions({
         </PrescriptionAddButton>
       ) : (
         <div className="product-cart-controls">
-          <div className="quantity-stepper">
-            <form
-              action="/api/cart"
-              method="post"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void setCartQuantity(quantity - 1);
-              }}
-            >
-              <input type="hidden" name="productId" value={productId} />
-              <input type="hidden" name="action" value="set" />
-              <input type="hidden" name="quantity" value={quantity - 1} />
-              <input
-                type="hidden"
-                name="return"
-                value={`/products/${productId}`}
-              />
-              <button
-                type="submit"
-                disabled={
-                  quantity <= 0 || cartState === "saving" || quantitySaving
-                }
-                aria-label="Decrease this product quantity"
-              >
-                <Minus />
-              </button>
-            </form>
-            <input
-              type="number"
-              min="0"
-              max="99"
-              inputMode="numeric"
-              value={quantity}
-              readOnly
-              aria-label={`${productName} quantity in cart`}
-              aria-live="polite"
-            />
-            <form
-              action="/api/cart"
-              method="post"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void setCartQuantity(quantity + 1);
-              }}
-            >
-              <input type="hidden" name="productId" value={productId} />
-              <input type="hidden" name="action" value="set" />
-              <input type="hidden" name="quantity" value={quantity + 1} />
-              <input
-                type="hidden"
-                name="return"
-                value={`/products/${productId}`}
-              />
-              <button
-                type="submit"
-                disabled={
-                  quantity >= 99 || cartState === "saving" || quantitySaving
-                }
-                aria-label="Increase this product quantity"
-              >
-                <Plus />
-              </button>
-            </form>
-          </div>
+          {/* The number is typed into, not only nudged: wanting twelve of something
+              should not mean pressing a button twelve times. */}
+          <QuantityField
+            className="quantity-stepper quantity-field"
+            value={quantity}
+            min={0}
+            onChange={(next) => void setCartQuantity(next)}
+            disabled={cartState === "saving" || quantitySaving}
+            label={`${productName} quantity in cart`}
+          />
           <form
             className="product-add-form"
             action="/api/cart"

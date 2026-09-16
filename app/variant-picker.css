@@ -1,0 +1,174 @@
+/* Choosing an option, and how many, before it goes in the basket. Sized as a sheet on a
+   phone and a small dialog on a desktop, because on a phone the thumb is at the bottom
+   of the screen and that is where the Add button should be. */
+.variant-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0;
+  background: rgba(28, 20, 32, 0.46);
+  backdrop-filter: blur(2px);
+}
+.variant-picker {
+  width: 100%;
+  max-width: 420px;
+  max-height: 88vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 14px 14px 16px;
+  border-radius: 16px 16px 0 0;
+  background: #fff;
+  box-shadow: 0 -10px 40px rgba(28, 20, 32, 0.22);
+  animation: variant-picker-rise 0.18s ease-out;
+}
+@keyframes variant-picker-rise {
+  from { transform: translateY(14px); opacity: 0.6; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .variant-picker { animation: none; }
+}
+
+.variant-picker > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 11px;
+}
+.variant-picker > header div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.variant-picker > header strong { color: #221c27; font-size: 14px; font-weight: 800; overflow-wrap: anywhere; }
+.variant-picker > header small { color: #7b7381; font-size: 10px; font-weight: 650; }
+.variant-picker > header button {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border: 0;
+  border-radius: 8px;
+  color: #6c6472;
+  background: #f4f0f5;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.variant-picker > header button svg { width: 15px; height: 15px; }
+
+.variant-picker-options { display: flex; flex-direction: column; gap: 6px; }
+.variant-picker-options > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1.5px solid #e7dfe9;
+  border-radius: 11px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+.variant-picker-options > button:hover { border-color: #c79ccd; }
+.variant-picker-options > button.is-chosen { border-color: #8a278c; background: #fbf4fc; }
+.variant-picker-thumb {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #f6f2f7;
+  color: #b1a5b5;
+}
+.variant-picker-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.variant-picker-thumb svg { width: 18px; height: 18px; }
+.variant-picker-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.variant-picker-label b { color: #2b2430; font-size: 12px; font-weight: 750; overflow-wrap: anywhere; }
+.variant-picker-label small { color: #776f7d; font-size: 10.5px; font-weight: 650; }
+
+.variant-picker-quantity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+.variant-picker-quantity > span { color: #4e4754; font-size: 11px; font-weight: 750; }
+
+.variant-picker-error { margin: 9px 0 0; color: #bf3450; font-size: 10.5px; font-weight: 650; }
+
+.variant-picker > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 13px;
+}
+.variant-picker-total { display: flex; align-items: baseline; gap: 6px; color: #221c27; font-size: 15px; font-weight: 850; }
+.variant-picker-total del { color: #948b98; font-size: 11px; font-weight: 600; }
+.variant-picker-add {
+  flex: 1;
+  max-width: 62%;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 11px;
+  color: #fff;
+  background: #8a278c;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.variant-picker-add:hover { background: #76207a; }
+.variant-picker-add:disabled { opacity: 0.65; cursor: wait; }
+
+/* The typed quantity control, shared by the picker, the product page and the basket. */
+.quantity-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #e2dae4;
+  border-radius: 10px;
+  background: #fff;
+}
+.quantity-field button {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border: 0;
+  border-radius: 8px;
+  color: #5d5563;
+  background: #f6f2f7;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.quantity-field button svg { width: 13px; height: 13px; }
+.quantity-field button:hover:not(:disabled) { color: #7a2482; background: #f5e9f6; }
+.quantity-field button:disabled { opacity: 0.4; cursor: not-allowed; }
+.quantity-field input {
+  width: 46px;
+  min-width: 0;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  color: #241e29;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
+  /* Typing into it is the point, so it must not look like a label. */
+  cursor: text;
+}
+.quantity-field input:focus-visible {
+  outline: 2px solid rgba(138, 39, 140, 0.35);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+
+@media (min-width: 620px) {
+  .variant-picker-backdrop { align-items: center; padding: 20px; }
+  .variant-picker { border-radius: 16px; box-shadow: 0 18px 50px rgba(28, 20, 32, 0.28); }
+}

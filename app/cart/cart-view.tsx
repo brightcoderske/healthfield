@@ -10,6 +10,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { QuantityField } from "@/app/quantity-field";
 import Link from "next/link";
 import { prescriptionUploadHref } from "@/lib/prescription-selection";
 
@@ -45,7 +47,44 @@ export function CartView({
   initialOffers?: CartOffer[];
 }) {
   const catalog = initialCatalog;
-  const [cart] = useState<Record<number, number>>(initialCart);
+  const [cart, setCart] = useState<Record<number, number>>(initialCart);
+  const router = useRouter();
+  const [savingLine, setSavingLine] = useState<number | null>(null);
+
+  /**
+   * Writes a typed quantity straight to the basket.
+   *
+   * Plus and minus used to be two little forms that reloaded the page, which is why the
+   * number between them could only ever be nudged. Sending it directly means it can be
+   * typed instead, and the page is refreshed afterwards so the line total, the basket
+   * total and the delivery estimate all follow.
+   */
+  async function setLineQuantity(productId: number, quantity: number) {
+    setSavingLine(productId);
+    const body = new URLSearchParams({
+      productId: String(productId),
+      action: "set",
+      quantity: String(quantity),
+      return: "/cart",
+    });
+    try {
+      const response = await fetch("/api/cart", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) return;
+      // The basket this screen shows is held in state, so it has to be told: a server
+      // refresh alone would re-run the page but hand the same frozen quantities back.
+      if (data?.cart) setCart(data.cart);
+      // And the refresh keeps everything derived on the server — the header count, the
+      // delivery estimate — in step with it.
+      router.refresh();
+    } finally {
+      setSavingLine(null);
+    }
+  }
 
   const lines = useMemo(
     () =>
@@ -236,49 +275,14 @@ export function CartView({
                   <small>awaiting prescription</small>
                 </div>
               ) : (
-                <div className="cart-quantity">
-                  <form action="/api/cart" method="post">
-                    <input
-                      type="hidden"
-                      name="productId"
-                      value={line.product.id}
-                    />
-                    <input type="hidden" name="action" value="set" />
-                    <input
-                      type="hidden"
-                      name="quantity"
-                      value={line.quantity - 1}
-                    />
-                    <input type="hidden" name="return" value="/cart" />
-                    <button
-                      type="submit"
-                      aria-label={`Reduce ${line.product.name} quantity`}
-                    >
-                      <Minus />
-                    </button>
-                  </form>
-                  <span>{line.quantity}</span>
-                  <form action="/api/cart" method="post">
-                    <input
-                      type="hidden"
-                      name="productId"
-                      value={line.product.id}
-                    />
-                    <input type="hidden" name="action" value="set" />
-                    <input
-                      type="hidden"
-                      name="quantity"
-                      value={line.quantity + 1}
-                    />
-                    <input type="hidden" name="return" value="/cart" />
-                    <button
-                      type="submit"
-                      aria-label={`Increase ${line.product.name} quantity`}
-                    >
-                      <Plus />
-                    </button>
-                  </form>
-                </div>
+                <QuantityField
+                  className="cart-quantity quantity-field"
+                  value={line.quantity}
+                  min={1}
+                  onChange={(next) => void setLineQuantity(line.product.id, next)}
+                  disabled={savingLine === line.product.id}
+                  label={`${line.product.name} quantity`}
+                />
               )}
               <form
                 action="/api/cart"

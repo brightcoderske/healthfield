@@ -99,7 +99,7 @@
 .product-row{grid-template-columns:52px minmax(220px, 2fr) minmax(
       130px,
       1fr
-    ) 100px 72px 38px;}
+    ) 100px 34px 72px 38px;}
 .compact-table-head{min-height:31px;padding:0 10px;color:#716a75;background:#f3eff4;font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;}
 .compact-table-row{min-height:58px;padding:6px 10px;border-top:1px solid #eeeaf0;font-size:10px;transition:opacity 0.18s,
     background 0.18s;}
@@ -115,6 +115,16 @@
 .row-delete{width:30px;height:30px;border:0;border-radius:7px;color:#bf3450;background:#fff0f3;display:grid;place-items:center;cursor:pointer;}
 .row-delete svg{width:14px;}
 .row-delete:disabled{opacity:0.45;cursor:wait;}
+/* The featured shelf, managed from the table itself. An outline star is a product that
+   could be featured; a filled one is a product that is. */
+.featured-cell{display:grid;place-items:center;}
+.row-star{width:28px;height:28px;border:0;border-radius:7px;color:#b3a9b6;background:#f5f1f6;display:grid;place-items:center;cursor:pointer;transition:color .15s,background .15s;}
+.row-star svg{width:14px;fill:none;}
+.row-star:hover{color:#8a278c;background:#f7edf8;}
+.row-star.is-on{color:#d98a04;background:#fff6e3;}
+.row-star.is-on svg{fill:currentColor;}
+.row-star:disabled{opacity:0.45;cursor:wait;}
+.row-star:focus-visible{outline:3px solid rgba(138,39,140,.18);outline-offset:2px;}
 .status-active,
 .status-inactive{width:max-content;padding:3px 6px;border-radius:20px;font-size:8px;font-weight:800;}
 .status-active{color:#16773b;background:#eaf8ef;}

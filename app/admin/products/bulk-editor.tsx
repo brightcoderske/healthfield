@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Save, Search, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, CornerDownRight, FolderTree, Save, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { marginPercent, sellingPriceFromCost } from "@/lib/profit";
 
@@ -13,6 +13,12 @@ export type BulkProduct = {
   discountPrice: number | null;
   costPrice: string | number | null;
   isActive: boolean;
+  // An option is a product row that belongs under another one, so the table lists it as
+  // a branch of its product rather than as a product of its own.
+  groupName?: string | null;
+  variantOf?: number | null;
+  variantLabel?: string | null;
+  variantOrder?: number | null;
 };
 
 export type BulkBranch = { id: number; name: string };
@@ -86,12 +92,36 @@ export function BulkEditor({
     return map;
   }, [stock]);
 
+  // Products with their options beneath them. Filtering and paging work on the product,
+  // so a page of twenty-five is twenty-five products — pricing a bag means seeing all of
+  // its colours together, not meeting them scattered through an alphabetical list.
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
-    return products
-      .filter((product) => (category === "all" || product.categoryId === Number(category))
-        && (!term || `${product.name} ${product.brand || ""}`.toLowerCase().includes(term)))
-      .sort((first, second) => first.name.localeCompare(second.name, "en"));
+    const matches = (product: BulkProduct) =>
+      (category === "all" || product.categoryId === Number(category)) &&
+      (!term || `${product.groupName || ""} ${product.name} ${product.brand || ""}`.toLowerCase().includes(term));
+    const byLead = new Map<number, { lead: BulkProduct; children: BulkProduct[] }>();
+    for (const product of products) {
+      const leadId = product.variantOf ?? product.id;
+      let entry = byLead.get(leadId);
+      if (!entry) {
+        entry = { lead: product, children: [] };
+        byLead.set(leadId, entry);
+      }
+      if (product.id === leadId) entry.lead = product;
+      else entry.children.push(product);
+    }
+    return [...byLead.values()]
+      .filter((entry) => [entry.lead, ...entry.children].some(matches))
+      .map((entry) => ({
+        ...entry,
+        children: [...entry.children].sort(
+          (first, second) => (first.variantOrder ?? 0) - (second.variantOrder ?? 0) || first.id - second.id,
+        ),
+      }))
+      .sort((first, second) =>
+        (first.lead.groupName || first.lead.name).localeCompare(second.lead.groupName || second.lead.name, "en"),
+      );
   }, [products, query, category]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -245,12 +275,43 @@ export function BulkEditor({
           </tr>
         </thead>
         <tbody>
-          {visible.map((product) => {
+          {visible.flatMap((group) => {
+            const hasOptions = group.children.length > 0;
+            const options = [group.lead, ...group.children];
+            // A product with options is a heading with its options beneath it. The lead is
+            // one of the options — it is the blue bag, not the bag — so it is listed with
+            // the rest rather than standing in for the product.
+            const heading = hasOptions ? [
+              <tr key={`group-${group.lead.id}`} className="is-product">
+                <td className="bulk-name">
+                  <FolderTree className="tree-branch" aria-hidden="true"/>
+                  <span className="bulk-group-name">
+                    <b>{group.lead.groupName || group.lead.name}</b>
+                    <small>{group.lead.brand || "No brand"} · {options.length} options</small>
+                  </span>
+                </td>
+                <td colSpan={3 + branches.length} className="bulk-group-note">Priced per option below</td>
+              </tr>,
+            ] : [];
+            return [...heading, ...(hasOptions ? options : [group.lead]).map((product) => {
             const margin = marginPercent(value(product, "costPrice"), value(product, "sellingPrice"));
-            return <tr key={product.id} className={edits[product.id] ? "is-edited" : undefined}>
+            const isOption = hasOptions;
+            return <tr key={product.id} className={`${edits[product.id] ? "is-edited" : ""}${isOption ? " is-option" : ""}`.trim() || undefined}>
               <td className="bulk-name">
-                <input aria-label={`Name of ${product.name}`} value={value(product, "name")} onChange={(event) => edit(product.id, { name: event.target.value })}/>
-                <small>{product.brand || "No brand"}{margin !== null ? ` · ${margin}% margin` : ""}{product.isActive ? "" : " · inactive"}</small>
+                {isOption ? <CornerDownRight className="tree-branch" aria-hidden="true"/> : null}
+                {isOption ? (
+                  // The stored name of an option is "{product} — {label}", and that is what
+                  // a basket and a past order line show. Renaming it belongs in the
+                  // product's own options table, where the label is what gets typed.
+                  <span className="bulk-option-name" title="Rename this option in the product's Options table">
+                    {product.variantLabel || product.name}
+                  </span>
+                ) : (
+                  <input aria-label={`Name of ${product.name}`} value={value(product, "name")} onChange={(event) => edit(product.id, { name: event.target.value })}/>
+                )}
+                <small>{isOption
+                  ? `Option of ${group.lead.groupName || group.lead.name}${margin !== null ? ` · ${margin}% margin` : ""}${product.isActive ? "" : " · inactive"}`
+                  : `${product.brand || "No brand"}${margin !== null ? ` · ${margin}% margin` : ""}${product.isActive ? "" : " · inactive"}`}</small>
               </td>
               <td><input type="number" min="0" step=".01" inputMode="decimal" aria-label={`Buying price of ${product.name}`}
                 value={value(product, "costPrice")} onChange={(event) => priceFromCost(product, event.target.value)}/></td>
@@ -264,6 +325,7 @@ export function BulkEditor({
                   onChange={(event) => edit(product.id, { stock: { ...edits[product.id]?.stock, [branch.id]: event.target.value } })}/>
               </td>)}
             </tr>;
+          })];
           })}
         </tbody>
       </table>

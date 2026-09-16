@@ -2,7 +2,7 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import bcrypt, { hash } from "bcryptjs";
-import { and, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import sharp from "sharp";
 import { z } from "zod";
 import {
@@ -20,6 +20,7 @@ import { repriceDeliveryForBranch, resolveDeliveryQuote } from "./delivery";
 import { sendSms, smsConfiguration } from "./sms";
 import { marketingSms } from "../../lib/sms-templates";
 import { MAX_VAT_RATE, parseVatRate, vatOnNet } from "../../lib/vat";
+import { featuredEvictions } from "../../lib/featured-products";
 import { extractContentReferences, isPersonalised, renderContentBlocks, renderMergeFields, type MergeRecipient } from "../../lib/campaign-merge";
 import { campaignContentResolver, loadCampaignContent } from "./campaign-content";
 import { apportionBundle, isBundle, loadLiveOffers, offerPriceMap, offerTotal } from "./offers";
@@ -840,6 +841,260 @@ const productSchema = z.object({
   stock: productStockSchema,
 });
 
+/** Thrown when something switched off is starred; turned into a 400 by the handlers. */
+class FeaturedInactiveError extends Error {
+  constructor(public productName: string) {
+    super(`${productName} is not on sale, so it cannot be featured. Set it active first.`);
+  }
+}
+
+/**
+ * Keeps the featured shelf at ten.
+ *
+ * Featuring is a fixed number of slots, not a flag anyone can set on as many products
+ * as they like — an open-ended list made "featured first" meaningless on the storefront.
+ * Starring an eleventh product pushes off whichever has been featured the longest, and
+ * this runs inside the caller's transaction so the shelf is never briefly eleven deep.
+ *
+ * Returns the products that lost their star, so the screen that made the change can say
+ * which ones they were instead of leaving someone to notice later.
+ */
+async function applyFeatured(
+  tx: Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0],
+  productId: number,
+  isFeatured: boolean | undefined,
+) {
+  if (isFeatured === undefined) return [] as Array<{ id: number; name: string }>;
+  if (!isFeatured) {
+    await tx.update(products).set({ isFeatured: false, featuredAt: null }).where(eq(products.id, productId));
+    return [] as Array<{ id: number; name: string }>;
+  }
+  // A product that is not on sale cannot appear on the homepage, so featuring one would
+  // do nothing except hold one of the ten places against a product that could have used
+  // it. Checked here, inside the transaction, so it holds however the star was pressed.
+  const [target] = await tx
+    .select({ isActive: products.isActive, name: products.name })
+    .from(products)
+    .where(eq(products.id, productId))
+    .limit(1);
+  if (!target?.isActive) throw new FeaturedInactiveError(target?.name || "That product");
+  const shelf = await tx
+    .select({ id: products.id, name: products.name, featuredAt: products.featuredAt })
+    .from(products)
+    .where(eq(products.isFeatured, true));
+  const evictedIds = featuredEvictions(shelf, productId);
+  if (evictedIds.length) {
+    await tx.update(products).set({ isFeatured: false, featuredAt: null }).where(inArray(products.id, evictedIds));
+  }
+  // An edit that merely re-saves an already-featured product must not restart its age,
+  // or nothing would ever reach the front of the eviction queue.
+  const alreadyFeatured = shelf.some((row) => row.id === productId);
+  await tx
+    .update(products)
+    .set({ isFeatured: true, featuredAt: alreadyFeatured ? undefined : new Date() })
+    .where(eq(products.id, productId));
+  const evicted = new Set(evictedIds);
+  return shelf.filter((row) => evicted.has(row.id)).map((row) => ({ id: row.id, name: row.name }));
+}
+
+const variantRowSchema = z.object({
+  id: z.coerce.number().int().positive().optional(),
+  label: z.string().trim().min(1).max(80),
+  price: z.coerce.number().nonnegative(),
+  discountPrice: z.coerce.number().nonnegative().nullable().optional(),
+  costPrice: z.coerce.number().nonnegative().nullable().optional(),
+  barcode: z.string().trim().max(100).nullable().optional(),
+  packSize: z.string().trim().max(100).nullable().optional(),
+  imageUrl: z.string().trim().max(500).nullable().optional(),
+  isActive: z.boolean().optional().default(true),
+  stock: productStockSchema,
+});
+
+/**
+ * Saves a product's list of options — Blue/Red/Green, 100/200/500 ml.
+ *
+ * Each option is a product row, because an option is what the shop counts, scans and
+ * costs. The row this is called on becomes the lead: it keeps its id, its stock and its
+ * order history, and simply gains a label. The rest are its siblings.
+ *
+ * A row's stored `name` carries its label, so the basket, the snapshotted order line,
+ * the till and the receipt are all correct without knowing variants exist; the
+ * label-free product name is kept once, on the lead, in `groupName`.
+ *
+ * Options are never deleted, only switched off. A colour that sold last month is still
+ * what that order line points at, and what its cost batch belongs to.
+ */
+export async function handleProductVariants(request: Request, id: number) {
+  if (request.method !== "PUT") return json({ error: "Method not allowed." }, { status: 405 });
+  const auth = await requireSession(request, [...admins]);
+  if ("response" in auth) return auth.response;
+  const parsed = z
+    .object({ optionName: z.string().trim().max(40).optional(), variants: z.array(variantRowSchema).max(40) })
+    .safeParse(await body(request));
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = issue?.path.join(" ");
+    return json({ error: issue ? `${field ? `${field}: ` : ""}${issue.message}` : "Invalid options." }, { status: 400 });
+  }
+  const db = getDb();
+  // A manager can price a product; only the owner decides what it cost. The same rule
+  // the single-product update applies, enforced here too — this endpoint writes the same
+  // column, and hiding the field in the browser would not have stopped a crafted request.
+  const ownerOnly = auth.session.role === "SUPER_ADMIN";
+  if (!ownerOnly) for (const row of parsed.data.variants) row.costPrice = undefined;
+  const [target] = await db.select().from(products).where(eq(products.id, id)).limit(1);
+  if (!target) return json({ error: "Product not found." }, { status: 404 });
+  // Options belong to the lead. Calling this on a sibling edits the whole list, which is
+  // what someone who opened that row and pressed "options" means by it.
+  const leadId = target.variantOf ?? target.id;
+  const [lead] = leadId === target.id ? [target] : await db.select().from(products).where(eq(products.id, leadId)).limit(1);
+  if (!lead) return json({ error: "Product not found." }, { status: 404 });
+  const baseName = (lead.groupName || lead.name).trim();
+  const rows = parsed.data.variants;
+  const labels = rows.map((row) => row.label.toLowerCase());
+  if (new Set(labels).size !== labels.length) {
+    return json({ error: "Two options have the same name. Give each one a different name." }, { status: 400 });
+  }
+  const existing = await db
+    .select({ id: products.id })
+    .from(products)
+    .where(or(eq(products.id, leadId), eq(products.variantOf, leadId)));
+  const known = new Set(existing.map((row) => row.id));
+  if (rows.some((row) => row.id && !known.has(row.id))) {
+    return json({ error: "One of the options no longer belongs to this product." }, { status: 409 });
+  }
+  const createdIds = await db.transaction(async (tx) => {
+    // Fewer than two options is not a list: the product goes back to being a plain
+    // product under its own name, and anything left over is switched off.
+    if (rows.length < 2) {
+      await tx
+        .update(products)
+        .set({ name: baseName, groupName: null, variantLabel: null, variantName: null, variantOrder: 0, variantOf: null })
+        .where(eq(products.id, leadId));
+      const strays = [...known].filter((rowId) => rowId !== leadId);
+      if (strays.length) await tx.update(products).set({ isActive: false }).where(inArray(products.id, strays));
+      return [] as number[];
+    }
+    const kept = new Set<number>([leadId]);
+    const newIds: number[] = [];
+    for (const [index, row] of rows.entries()) {
+      const shared = {
+        name: `${baseName} — ${row.label}`,
+        // Held on every row of the group, not only the lead: a rail of recommendations or
+        // a search result may contain one colour and nothing else, and it still has to be
+        // able to say which product that colour belongs to.
+        groupName: baseName,
+        variantLabel: row.label,
+        variantOrder: index,
+        price: row.price.toString(),
+        discountPrice: row.discountPrice == null ? null : row.discountPrice.toString(),
+        costPrice: row.costPrice == null ? undefined : row.costPrice.toFixed(2),
+        costPriceEstimated: row.costPrice == null ? undefined : false,
+        barcode: row.barcode || null,
+        packSize: row.packSize || null,
+        imageUrl: row.imageUrl === undefined ? undefined : normalizeStoredImageUrl(row.imageUrl),
+        isActive: row.isActive,
+      };
+      // The first row is the lead itself, so the product keeps its id, its stock and
+      // every order that already points at it.
+      if (index === 0) {
+        await tx
+          .update(products)
+          .set({ ...shared, groupName: baseName, variantName: parsed.data.optionName?.trim() || null, variantOf: null })
+          .where(eq(products.id, leadId));
+        await applyProductStock(tx, leadId, auth.session.userId, row.stock);
+        continue;
+      }
+      if (row.id && row.id !== leadId && known.has(row.id)) {
+        await tx.update(products).set({ ...shared, variantOf: leadId }).where(eq(products.id, row.id));
+        await applyProductStock(tx, row.id, auth.session.userId, row.stock);
+        kept.add(row.id);
+        continue;
+      }
+      const suffix = `${Date.now().toString(36)}${index}`;
+      const slugStem = `${baseName} ${row.label}`
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+      const [record] = await tx.insert(products).values({
+        ...shared,
+        // What a variant does not own is the product's, read from the lead. It is copied
+        // onto the row because these columns are NOT NULL or are read directly by other
+        // screens; the lead stays the only place any of it is edited.
+        categoryId: lead.categoryId,
+        brand: lead.brand,
+        shortDescription: lead.shortDescription,
+        description: lead.description,
+        usageInformation: lead.usageInformation,
+        warnings: lead.warnings,
+        storageInformation: lead.storageInformation,
+        prescriptionRequired: lead.prescriptionRequired,
+        // A new option shows the product's picture until it is given its own. A colour
+        // usually wants its own photograph, but an empty frame on the storefront while
+        // nobody has uploaded one yet is worse than showing the product it belongs to.
+        imageUrl: row.imageUrl === undefined ? lead.imageUrl : normalizeStoredImageUrl(row.imageUrl),
+        slug: `${slugStem}-${suffix}`,
+        sku: `HF-${suffix.toUpperCase()}`,
+        costPriceEstimated: row.costPrice == null,
+        variantOf: leadId,
+      });
+      const conditions = await tx
+        .select({ conditionId: productHealthConditions.conditionId })
+        .from(productHealthConditions)
+        .where(eq(productHealthConditions.productId, leadId));
+      if (conditions.length) {
+        await tx.insert(productHealthConditions).values(
+          conditions.map((condition) => ({ productId: record.insertId, conditionId: condition.conditionId })),
+        );
+      }
+      const stores = await tx.select({ id: branches.id }).from(branches).where(eq(branches.isActive, true));
+      if (stores.length) {
+        await tx.insert(branchInventory).values(
+          stores.map((store) => ({ branchId: store.id, productId: record.insertId, quantityAvailable: 0, quantityReserved: 0, reorderLevel: 5, updatedBy: auth.session.userId })),
+        );
+      }
+      await applyProductStock(tx, record.insertId, auth.session.userId, row.stock);
+      kept.add(record.insertId);
+      newIds.push(record.insertId);
+    }
+    const dropped = [...known].filter((rowId) => !kept.has(rowId));
+    if (dropped.length) await tx.update(products).set({ isActive: false }).where(inArray(products.id, dropped));
+    return newIds;
+  });
+  const saved = await db
+    .select()
+    .from(products)
+    .where(or(eq(products.id, leadId), eq(products.variantOf, leadId)))
+    .orderBy(asc(products.variantOrder), asc(products.id));
+  // The admin table holds whole products, so these rows have to come back shaped like
+  // the ones it already holds. Returning them without their condition links would leave
+  // the screen merging a product that appears to support no conditions at all.
+  const conditionLinks = await db
+    .select({ productId: productHealthConditions.productId, conditionId: productHealthConditions.conditionId })
+    .from(productHealthConditions)
+    .where(inArray(productHealthConditions.productId, saved.map((product) => product.id)));
+  return json({
+    ok: true,
+    leadId,
+    created: createdIds,
+    products: saved.map((product) => ({
+      ...product,
+      // Buying prices leave the server only for the owner. Stripping them in the browser
+      // would still have shipped the figures to it.
+      costPrice: ownerOnly ? product.costPrice : null,
+      costPriceEstimated: ownerOnly ? product.costPriceEstimated : false,
+      imageUrl: publicImageUrl(product.imageUrl),
+      price: Number(product.price),
+      discountPrice: product.discountPrice === null ? null : Number(product.discountPrice),
+      conditionIds: conditionLinks
+        .filter((link) => link.productId === product.id)
+        .map((link) => link.conditionId),
+    })),
+  });
+}
+
 export async function handleProducts(request: Request, id?: number) {
   const db = getDb();
   if (request.method === "GET" && !id) {
@@ -870,15 +1125,24 @@ export async function handleProducts(request: Request, id?: number) {
     const suffix = Date.now().toString(36);
     const generatedSku = `HF-${suffix.toUpperCase()}`;
     const baseSlug = values.name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    let evicted: Array<{ id: number; name: string }> = [];
+    try {
     const created = await db.transaction(async (tx) => {
-      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: generatedSku, barcode: values.barcode || null, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, usageInformation: values.usageInformation || null, warnings: values.warnings || null, storageInformation: values.storageInformation || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), costPrice: values.costPrice == null ? null : values.costPrice.toFixed(2), costPriceEstimated: values.costPrice == null, packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: values.isFeatured, isActive: values.isActive });
+      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: generatedSku, barcode: values.barcode || null, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, usageInformation: values.usageInformation || null, warnings: values.warnings || null, storageInformation: values.storageInformation || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), costPrice: values.costPrice == null ? null : values.costPrice.toFixed(2), costPriceEstimated: values.costPrice == null, packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: false, isActive: values.isActive });
+      // Featuring is applied through the shelf rule rather than written straight in,
+      // so a new product starred on creation evicts the oldest just like any other.
+      evicted = await applyFeatured(tx, record.insertId, values.isFeatured || undefined);
       if (values.conditionIds.length) await tx.insert(productHealthConditions).values(values.conditionIds.map((conditionId) => ({ productId: record.insertId, conditionId })));
       const stores = await tx.select({ id: branches.id }).from(branches).where(eq(branches.isActive, true));
       if (stores.length) await tx.insert(branchInventory).values(stores.map((store) => ({ branchId: store.id, productId: record.insertId, quantityAvailable: 0, quantityReserved: 0, reorderLevel: 5, updatedBy: auth.session.userId })));
       await applyProductStock(tx, record.insertId, auth.session.userId, values.stock);
       return record;
     });
-    return json({ ok: true, id: created.insertId, sku: generatedSku }, { status: 201 });
+    return json({ ok: true, id: created.insertId, sku: generatedSku, unfeatured: evicted }, { status: 201 });
+    } catch (error) {
+      if (error instanceof FeaturedInactiveError) return json({ error: error.message }, { status: 400 });
+      throw error;
+    }
   }
   if (!id || !Number.isInteger(id)) return json({ error: "Invalid product." }, { status: 400 });
   if (request.method === "DELETE") {
@@ -900,22 +1164,41 @@ export async function handleProducts(request: Request, id?: number) {
       const [duplicate] = await db.select({ id: products.id }).from(products).where(and(eq(products.barcode, parsed.data.barcode), ne(products.id, id))).limit(1);
       if (duplicate) return json({ error: "That barcode or QR code is already assigned to another product." }, { status: 409 });
     }
-    const { conditionIds, stock, ...update } = parsed.data;
+    const { conditionIds, stock, isFeatured, ...update } = parsed.data;
+    let evicted: Array<{ id: number; name: string }> = [];
     const normalized = { ...update, imageUrl: parsed.data.imageUrl === undefined ? undefined : normalizeStoredImageUrl(parsed.data.imageUrl) };
+    const columns = {
+      ...normalized,
+      price: parsed.data.price?.toString(),
+      discountPrice: parsed.data.discountPrice === null ? null : parsed.data.discountPrice?.toString(),
+      costPrice: parsed.data.costPrice === undefined ? undefined : parsed.data.costPrice === null ? null : parsed.data.costPrice.toFixed(2),
+      // A buying price someone typed is confirmed; that is what takes the row off the
+      // estimated list the profit report counts.
+      costPriceEstimated: parsed.data.costPrice === undefined ? undefined : parsed.data.costPrice === null,
+    };
+    // Featuring is applied separately, below, so a request that only stars a product
+    // leaves nothing here to write — and an UPDATE with no columns is an error, not a
+    // no-op. This is what the star in the product table sends.
+    const hasColumns = Object.values(columns).some((value) => value !== undefined);
+    try {
     await db.transaction(async (tx) => {
-      await tx.update(products).set({
-        ...normalized,
-        price: parsed.data.price?.toString(),
-        discountPrice: parsed.data.discountPrice === null ? null : parsed.data.discountPrice?.toString(),
-        costPrice: parsed.data.costPrice === undefined ? undefined : parsed.data.costPrice === null ? null : parsed.data.costPrice.toFixed(2),
-        // A buying price someone typed is confirmed; that is what takes the row off the
-        // estimated list the profit report counts.
-        costPriceEstimated: parsed.data.costPrice === undefined ? undefined : parsed.data.costPrice === null,
-      }).where(eq(products.id, id));
+      if (hasColumns) await tx.update(products).set(columns).where(eq(products.id, id));
+      // Featured is not written with the rest of the fields: it is a shelf of ten, and
+      // putting a product on it can take another one off. Taking a product off sale also
+      // takes its star, so a switched-off product never holds a place on the shelf.
+      evicted = await applyFeatured(
+        tx,
+        id,
+        parsed.data.isActive === false ? false : isFeatured,
+      );
       await applyProductStock(tx, id, auth.session.userId, stock);
       if (conditionIds) { await tx.delete(productHealthConditions).where(eq(productHealthConditions.productId, id)); if (conditionIds.length) await tx.insert(productHealthConditions).values(conditionIds.map((conditionId) => ({ productId: id, conditionId }))); }
     });
-    return json({ ok: true });
+    } catch (error) {
+      if (error instanceof FeaturedInactiveError) return json({ error: error.message }, { status: 400 });
+      throw error;
+    }
+    return json({ ok: true, unfeatured: evicted });
   }
   return json({ error: "Method not allowed." }, { status: 405 });
 }

@@ -1,5 +1,7 @@
 export const CART_COOKIE = "healthfield_cart";
 export const WISHLIST_COOKIE = "healthfield_wishlist";
+/** Which shuffle of the catalogue this visitor is seeing. Set by the middleware. */
+export const LAYOUT_COOKIE = "healthfield_layout";
 
 /**
  * The cart cookie holds products and offer bundles separately:

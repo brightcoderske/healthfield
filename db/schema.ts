@@ -1,4 +1,5 @@
 import {
+  type AnyMySqlColumn,
   boolean,
   bigint,
   decimal,
@@ -150,6 +151,32 @@ export const products = mysqlTable("products", {
   activeIngredient: varchar("active_ingredient", { length: 190 }),
   prescriptionRequired: boolean("prescription_required").default(false).notNull(),
   isFeatured: boolean("is_featured").default(false).notNull(),
+  // When the star was put on, which is what decides who falls off the shelf when an
+  // eleventh product is featured. The product's own createdAt cannot answer that.
+  featuredAt: timestamp("featured_at").default(sql`null`),
+  // --- Variants -------------------------------------------------------------
+  // A variant is a product row, not an attribute, because a variant is what the shop
+  // actually counts: blue bags and red bags run out separately, scan as different
+  // barcodes, and can be bought at different cost. Everything that already hangs off a
+  // product id — stock, batches, order lines, dispensing, profit — therefore keeps
+  // working untouched, and only the storefront has to collapse a group into one card.
+  //
+  // The lead variant is a normal product row with `variantOf` null; the others point at
+  // it. A product with no siblings and no label is a plain product and behaves exactly
+  // as it did before any of this existed.
+  // `name` is always the sellable thing's full name, label and all, so every existing
+  // reader — basket, order line, till, receipt, dispensing list — is right without
+  // knowing variants exist. This is the label-free product name, carried by every row of
+  // a group so that a single row pulled into a search result or a recommendation rail
+  // can still say which product it belongs to.
+  groupName: varchar("group_name", { length: 220 }),
+  variantOf: int("variant_of").references((): AnyMySqlColumn => products.id),
+  // What this one is called within its list: "Blue", "500 ml", "Large". Free text,
+  // because a pharmacy's lists are not drawn from any fixed vocabulary.
+  variantLabel: varchar("variant_label", { length: 80 }),
+  // What the list itself is called, held on the lead: "Colour", "Size", "Volume".
+  variantName: varchar("variant_name", { length: 40 }),
+  variantOrder: int("variant_order").default(0).notNull(),
   isActive: boolean("is_active").default(true).notNull(),
   usageInformation: text("usage_information"),
   warnings: text("warnings"),
@@ -163,6 +190,9 @@ export const products = mysqlTable("products", {
   // Without this it is a full scan plus a filesort on every catalogue load; with it,
   // MySQL walks the index backwards and sorts nothing.
   index("products_storefront_idx").on(table.isActive, table.isFeatured, table.createdAt),
+  index("products_featured_idx").on(table.isActive, table.isFeatured, table.featuredAt),
+  // Walking a group: every variant of a lead, in the order the shop arranged them.
+  index("products_variant_of_idx").on(table.variantOf, table.variantOrder),
 ]);
 
 export const branchInventory = mysqlTable("branch_inventory", {

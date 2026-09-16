@@ -78,6 +78,14 @@ const productCard = {
   discountPrice: products.discountPrice,
   packSize: products.packSize,
   prescriptionRequired: products.prescriptionRequired,
+  groupName: products.groupName,
+  // Every card carries its variant fields, so a list can be collapsed into groups
+  // wherever it is rendered without a second round trip to find out what a row belongs
+  // to. A plain product simply reports nulls here.
+  variantOf: products.variantOf,
+  variantLabel: products.variantLabel,
+  variantName: products.variantName,
+  variantOrder: products.variantOrder,
 };
 const searchProductCard = {
   ...productCard,
@@ -240,6 +248,41 @@ function offerPayload(offer: ResolvedOffer) {
   };
 }
 
+// How many products the homepage view draws. Wider than a first screenful so the page
+// can shuffle within it, capped so the random ordering stays a cheap sort.
+const homeCatalogueColumns = {
+  id: products.id,
+  name: products.name,
+  price: products.price,
+  imageUrl: products.imageUrl,
+  packSize: products.packSize,
+  brand: products.brand,
+  categoryId: products.categoryId,
+  shortDescription: products.shortDescription,
+  description: products.description,
+  discountPrice: products.discountPrice,
+  prescriptionRequired: products.prescriptionRequired,
+  isFeatured: products.isFeatured,
+  groupName: products.groupName,
+  variantOf: products.variantOf,
+  variantLabel: products.variantLabel,
+  variantName: products.variantName,
+  variantOrder: products.variantOrder,
+  rating: sql<
+    string | null
+  >`avg(case when ${productReviews.isApproved} = true then ${productReviews.rating} end)`,
+  reviewCount: sql<number>`count(case when ${productReviews.isApproved} = true then 1 end)`,
+};
+
+const HOME_CATALOGUE_DRAW = 60;
+// How long one draw of the catalogue lasts. An unseeded rand() gave a different sixty
+// products every time the cache lapsed, so a shopper who stepped into the basket and came
+// back could find what they had been looking at simply gone. Seeding it by the clock
+// means the draw holds still for a few hours, is identical for everyone (so it caches
+// once rather than per visitor), and then rotates on its own.
+const HOME_DRAW_HOURS = 3;
+const homeDrawSeed = () => Math.floor(Date.now() / (HOME_DRAW_HOURS * 60 * 60 * 1000));
+
 async function home() {
   const db = getDb();
   const [
@@ -252,29 +295,31 @@ async function home() {
     promotionalRows,
   ] = await Promise.all([
     db
-      .select({
-        id: products.id,
-        name: products.name,
-        price: products.price,
-        imageUrl: products.imageUrl,
-        packSize: products.packSize,
-        brand: products.brand,
-        categoryId: products.categoryId,
-        shortDescription: products.shortDescription,
-        description: products.description,
-        discountPrice: products.discountPrice,
-        prescriptionRequired: products.prescriptionRequired,
-        rating: sql<
-          string | null
-        >`avg(case when ${productReviews.isApproved} = true then ${productReviews.rating} end)`,
-        reviewCount: sql<number>`count(case when ${productReviews.isApproved} = true then 1 end)`,
-      })
+      .select(homeCatalogueColumns)
       .from(products)
       .leftJoin(productReviews, eq(productReviews.productId, products.id))
-      .where(eq(products.isActive, true))
+      // Prescription-only medicine is deliberately absent from the homepage: nobody
+      // browsing casually should be shown it. It stays fully searchable — /search and
+      // /browse below are unfiltered — so someone who knows what they were prescribed
+      // still finds it by name.
+      .where(
+        and(
+          eq(products.isActive, true),
+          eq(products.prescriptionRequired, false),
+          // Leads only. A group is one card, so drawing its siblings here would let a
+          // three-colour bag take three of the sixty slots and crowd out everything else.
+          // The siblings are fetched below, against whatever this draw landed on.
+          isNull(products.variantOf),
+        ),
+      )
       .groupBy(products.id)
-      .orderBy(desc(products.isFeatured), desc(products.createdAt))
-      .limit(50),
+      // The featured shelf leads, and the rest is a fresh random draw from the whole
+      // catalogue rather than the newest fifty rows. Ordering by featured-then-newest
+      // meant the same products led the homepage until someone added stock, which is
+      // exactly the staleness this replaces. The draw is wider than the grid shows so
+      // the page itself still has something to arrange per visit.
+      .orderBy(desc(products.isFeatured), sql`rand(${homeDrawSeed()})`)
+      .limit(HOME_CATALOGUE_DRAW),
     db.select().from(productHealthConditions),
     db.select().from(siteSettings).limit(1),
     db
@@ -330,9 +375,28 @@ async function home() {
         desc(promotionalBanners.createdAt),
       ),
   ]);
+  // Every colour and size of what the draw landed on. Fetched as a second query rather
+  // than joined into the first, because the draw has to be over groups — see the
+  // leads-only filter above — and a shopper still has to be able to choose.
+  const leadIds = rows.map((row) => row.id);
+  const siblings = leadIds.length
+    ? await db
+        .select(homeCatalogueColumns)
+        .from(products)
+        .leftJoin(productReviews, eq(productReviews.productId, products.id))
+        .where(
+          and(
+            eq(products.isActive, true),
+            eq(products.prescriptionRequired, false),
+            inArray(products.variantOf, leadIds),
+          ),
+        )
+        .groupBy(products.id)
+        .orderBy(asc(products.variantOf), asc(products.variantOrder))
+    : [];
   const live = await loadLiveOffers();
   const overrides = offerPriceMap(live);
-  const catalog = rows.map((row) => {
+  const catalog = [...rows, ...siblings].map((row) => {
     // A live single-product offer presents as the selling price. The stored price is
     // left alone, so the moment the offer ends the original pricing is back.
     const offerPrice = overrides.get(row.id);
@@ -518,12 +582,52 @@ async function productDetail(id: number) {
       !normalizedRelated.some((relatedItem) => relatedItem.id === item.id),
   );
   const liveOfferPrice = offerPriceMap(liveOffers).get(product.id);
+  // The rest of this product's colours or sizes. Each is its own page — a variant has
+  // its own price, stock and picture, so it earns its own address to share and for a
+  // search engine to index — and the chooser on the page is a row of links between them.
+  const group = product.variantOf ?? product.id;
+  const siblings = await db
+    .select({
+      id: products.id,
+      variantLabel: products.variantLabel,
+      variantOrder: products.variantOrder,
+      // Both are held on the lead only, and the page being viewed may be a sibling.
+      variantName: products.variantName,
+      groupName: products.groupName,
+      price: products.price,
+      discountPrice: products.discountPrice,
+      imageUrl: products.imageUrl,
+    })
+    .from(products)
+    .where(
+      and(
+        eq(products.isActive, true),
+        or(eq(products.id, group), eq(products.variantOf, group)),
+      ),
+    )
+    .orderBy(asc(products.variantOrder), asc(products.id));
+  const offerPrices = offerPriceMap(liveOffers);
   return {
     product: {
       ...product,
       imageUrl: publicImageUrl(product.imageUrl),
       discountPrice: liveOfferPrice ?? product.discountPrice,
     },
+    // What the list of options is called, and the product's label-free name: both live on
+    // the lead, so a sibling's own page has to read them from there rather than itself.
+    optionName: siblings.find((sibling) => sibling.id === group)?.variantName || null,
+    groupName: siblings.find((sibling) => sibling.id === group)?.groupName || null,
+    variants:
+      siblings.length > 1
+        ? siblings.map((sibling) => ({
+            ...sibling,
+            imageUrl: publicImageUrl(sibling.imageUrl),
+            price: Number(sibling.price),
+            discountPrice:
+              offerPrices.get(sibling.id) ??
+              (sibling.discountPrice === null ? null : Number(sibling.discountPrice)),
+          }))
+        : [],
     rating:
       reviewSummary?.rating === null ? null : Number(reviewSummary?.rating),
     reviewCount: Number(reviewSummary?.count ?? 0),
@@ -1032,12 +1136,35 @@ export async function handleView(request: Request, path: string) {
     ]);
     const capped = exact.length > SEARCH_RESULT_LIMIT;
     if (capped) exact.length = SEARCH_RESULT_LIMIT;
-    const all = [...exact, ...alternatives];
+    // A match brings the rest of its options with it. Searching "green" should open the
+    // product on green, not show a lone row stripped of the choice it belongs to — and
+    // the matched row stays first, which is what the card opens on.
+    const matchedGroups = [...new Set(exact.map((row) => row.variantOf ?? row.id))];
+    const found = new Set(exact.map((row) => row.id));
+    const groupSiblings = matchedGroups.length
+      ? (
+          await db
+            .select(searchProductCard)
+            .from(products)
+            .where(
+              and(
+                eq(products.isActive, true),
+                or(
+                  inArray(products.id, matchedGroups),
+                  inArray(products.variantOf, matchedGroups),
+                ),
+              ),
+            )
+            .orderBy(asc(products.variantOrder), asc(products.id))
+        ).filter((row) => !found.has(row.id))
+      : [];
+    const results = [...exact, ...groupSiblings];
+    const all = [...results, ...alternatives];
     const shape = await cardDetails(all);
-    const exactIds = new Set(exact.map((product) => product.id));
+    const exactIds = new Set(results.map((product) => product.id));
     return json(
       {
-        products: shape(exact),
+        products: shape(results),
         capped,
         similar: shape(
           alternatives
@@ -1384,6 +1511,10 @@ export async function handleView(request: Request, path: string) {
           packSize: products.packSize,
           category: categories.name,
           prescriptionRequired: products.prescriptionRequired,
+          // Options are submitted as their own items and tied together by item_group_id,
+          // so a three-colour product does not compete with itself in search results.
+          variantOf: products.variantOf,
+          variantLabel: products.variantLabel,
           rating: sql<
             string | null
           >`avg(case when ${productReviews.isApproved}=true then ${productReviews.rating} end)`,
