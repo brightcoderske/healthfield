@@ -62,7 +62,7 @@ type CheckoutResult = {
   id: number;
   orderNumber: string;
   total: number;
-  state: "WAITING" | "REVIEW" | "PAID" | "FAILED";
+  state: "WAITING" | "REVIEW" | "PAID" | "FAILED" | "PLACED";
   message: string;
 };
 
@@ -327,10 +327,12 @@ export function CheckoutForm({
       const data = await response.json().catch(() => ({}));
       if (!response.ok)
         return setError(data.error ?? "Unable to start checkout.");
-      const nextState =
+      const nextState: CheckoutResult["state"] =
         data.paymentStatus === "PAID"
           ? "PAID"
-          : paymentMethod === "MANUAL_MPESA"
+          : paymentMethod === "CASH_ON_DELIVERY"
+            ? "PLACED"
+            : paymentMethod === "MANUAL_MPESA"
             ? "WAITING"
             : data.paymentStatus === "FAILED"
               ? "FAILED"
@@ -342,7 +344,7 @@ export function CheckoutForm({
         state: nextState,
         message: data.paymentMessage || "Payment request started.",
       });
-      if (nextState === "PAID") await clearCheckoutCart();
+      if (nextState === "PAID" || nextState === "PLACED") await clearCheckoutCart();
     } catch {
       setError("Unable to reach checkout. Please try again.");
     } finally {
@@ -469,7 +471,9 @@ export function CheckoutForm({
         )}
         <span>{result.orderNumber}</span>
         <h1>
-          {result.state === "PAID"
+          {result.state === "PLACED"
+            ? "Order placed — pay on delivery"
+            : result.state === "PAID"
             ? "Payment confirmed — order placed"
             : result.state === "REVIEW"
               ? "Payment proof received"

@@ -407,7 +407,11 @@ export async function handleOrders(request: Request, id?: number) {
     const {status,fulfilments,...details}=parsed.data;
     if(order.status==="AWAITING_PAYMENT"&&order.paymentStatus!=="PAID"&&status!=="AWAITING_PAYMENT")return json({error:"A frozen prescription proposal cannot enter fulfilment before customer payment. Manage it from the prescription request."},{status:409});
     if (["BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED"].includes(status) && order.prescriptionStatus !== "NOT_REQUIRED" && order.prescriptionStatus !== "APPROVED") return json({ error: "Approve the linked prescription before fulfilling or dispatching this order." }, { status: 409 });
-    if (["CONFIRMED","BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED"].includes(status) && order.paymentStatus !== "PAID") return json({ error: "Confirm payment before approving, processing or dispatching this order." }, { status: 409 });
+    // Cash on delivery is paid to the rider at the door, so it moves through fulfilment
+    // unpaid; completing it is what records the cash as collected.
+    const cashOnDelivery = order.paymentMethod === "CASH_ON_DELIVERY" && order.fulfilmentMethod === "DELIVERY";
+    if (!cashOnDelivery && ["CONFIRMED","BEING_FULFILLED","PARTIALLY_READY","READY_FOR_DISPATCH","OUT_FOR_DELIVERY","READY_FOR_PICKUP","COMPLETED"].includes(status) && order.paymentStatus !== "PAID") return json({ error: "Confirm payment before approving, processing or dispatching this order." }, { status: 409 });
+    const collectingCash = cashOnDelivery && status === "COMPLETED" && order.paymentStatus !== "PAID";
     if (!canTransitionOrderStatus(order.status, status, order.fulfilmentMethod)) {
       const next = allowedOrderStatuses(order.status, order.fulfilmentMethod).filter((entry) => entry !== order.status).map((entry) => entry.replaceAll("_", " ").toLowerCase());
       return json({ error: next.length ? `An order marked ${order.status.replaceAll("_", " ").toLowerCase()} can only move to ${next.join(" or ")}.` : `An order marked ${order.status.replaceAll("_", " ").toLowerCase()} cannot move to another status.` }, { status: 409 });
@@ -455,7 +459,12 @@ export async function handleOrders(request: Request, id?: number) {
           await tx.delete(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map((item) => item.id)));
           if (status !== "CANCELLED" && target.length) await tx.insert(orderItemFulfilments).values(target.map((row) => ({ ...row, quantityPacked: finalStatus ? row.quantityReserved : row.quantityPacked, status: finalStatus ? "READY" as const : row.status, handledBy: auth.session.userId })));
         }
-        await tx.update(orders).set({ status, ...(detailsEditable ? details : {}) }).where(eq(orders.id, id));
+        await tx.update(orders).set({ status, ...(detailsEditable ? details : {}), ...(collectingCash ? { paymentStatus: "PAID" as const, amountPaid: order.total, paymentReference: order.paymentReference || `COD-${order.orderNumber}` } : {}) }).where(eq(orders.id, id));
+        if (collectingCash) {
+          const paidAt = new Date();
+          await tx.update(paymentTransactions).set({ status: "PAID", receiptNumber: `COD-${order.orderNumber}`, verifiedAt: paidAt, reviewedBy: auth.session.userId, reviewedAt: paidAt, resultCode: "0", resultDescription: "Cash collected on delivery" }).where(and(eq(paymentTransactions.orderId, id), eq(paymentTransactions.method, "CASH_ON_DELIVERY"), ne(paymentTransactions.status, "PAID")));
+          await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "CASH_ON_DELIVERY_COLLECTED", entityType: "order", entityId: String(id), metadata: { orderNumber: order.orderNumber, amount: Number(order.total) } });
+        }
         await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_UPDATED", entityType: "order", entityId: String(id), metadata: { orderNumber: order.orderNumber, fromStatus: order.status, toStatus: status, fulfilmentBranches: target.map((row) => row.branchId), actorRole: auth.session.role } });
       });
     } catch(error) { return json({ error:error instanceof Error?error.message:"Order could not be updated." },{status:400}); }
