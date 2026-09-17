@@ -162,6 +162,21 @@
   /* Typing into it is the point, so it must not look like a label. */
   cursor: text;
 }
+/* The number always has room for three digits. An older basket rule fixed the whole
+   control at 90px, which left the number 17px to share with two 30px buttons: "10" fitted
+   with nothing to spare, so on a phone with a larger text size it showed as "1". The
+   width is now measured in characters, so it holds however large the text is set. */
+.quantity-field input {
+  flex: 0 0 auto;
+  min-width: 3.6ch;
+}
+.cart-quantity.quantity-field {
+  /* As wide as its buttons and number, not the row it sits in. */
+  width: fit-content;
+  max-width: 100%;
+  justify-self: start;
+}
+.cart-quantity.quantity-field input { width: 4.2ch; }
 .quantity-field input:focus-visible {
   outline: 2px solid rgba(138, 39, 140, 0.35);
   outline-offset: 1px;

@@ -171,7 +171,15 @@ Continue?`,
         ? rows.map((item) => droppedIds.has(item.id) ? { ...item, isFeatured: false, featuredAt: null } : item)
         : rows;
       if (isNew) setItems((current) => [{ ...payload, id: data.id, sku: data.sku } as Product, ...withoutDropped(current)]);
-      else setItems((current) => withoutDropped(current).map((item) => item.id === targetId ? { ...item, ...payload } : item));
+      else {
+        // A product with options is renamed and edited across all of its rows, so the server
+        // sends them all back; those replace what the table held.
+        const changed = new Map<number, Product>((data.products || []).map((row: Product) => [row.id, row]));
+        setItems((current) => withoutDropped(current).map((item) =>
+          changed.has(item.id) ? { ...item, ...changed.get(item.id) }
+          : item.id === targetId ? { ...item, ...payload }
+          : item));
+      }
       setMessage("");
       setEditing(null);
       setImageFile(null);
@@ -251,13 +259,54 @@ Continue?`,
     setSavingId(null);
   }
 
-  async function deactivate(product: Product) {
-    if (!window.confirm(`Permanently delete ${product.name}? Historical order text will be preserved.`)) return;
+  /**
+   * Deletes a product for good — or, with wholeProduct, a product and all its options.
+   *
+   * The server is asked first what else the delete would take with it, and the
+   * confirmation names it: stock receipts and batches, offers, banners, blog links. Past
+   * orders are kept and say so. Only then is it deleted, and whatever the delete changed
+   * about the options that remain comes back and replaces them in the table.
+   */
+  async function deleteProduct(product: Product, wholeProduct = false) {
+    const title = product.groupName || product.name;
+    const query = wholeProduct ? "scope=group" : "";
     setSavingId(product.id);
-    const response = await fetch(`/api/products/${product.id}`, { method: "DELETE" });
-    const data = await response.json().catch(() => ({}));
-    if (response.ok) setItems((current) => current.filter((item) => item.id !== product.id)); else setMessage(data.error || "Product could not be deleted.");
-    setSavingId(null);
+    setMessage("");
+    try {
+      const preview = await fetch(`/api/products/${product.id}?preview=1${query ? `&${query}` : ""}`, { method: "DELETE" });
+      const plan = await preview.json().catch(() => ({}));
+      if (!preview.ok) return setMessage(plan.error || "Product could not be deleted.");
+      const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+      const removes = [
+        plan.removes?.stockReceiptLines ? plural(plan.removes.stockReceiptLines, "stock receipt line") : "",
+        plan.removes?.batches ? plural(plan.removes.batches, "stock batch", "stock batches") : "",
+        plan.removes?.offers ? plural(plan.removes.offers, "offer listing") : "",
+        plan.removes?.banners ? plural(plan.removes.banners, "promotional banner") : "",
+        plan.removes?.blogLinks ? plural(plan.removes.blogLinks, "blog link") : "",
+      ].filter(Boolean);
+      const what = wholeProduct && plan.products > 1 ? `${title} and all ${plan.products} of its options` : product.variantOf || product.variantLabel ? `the "${product.variantLabel || product.name}" option of ${title}` : title;
+      const lines = [
+        `Permanently delete ${what}?`,
+        "",
+        "This cannot be undone.",
+        removes.length ? `It will also remove ${removes.join(", ")}.` : "",
+        plan.keeps?.orderLines ? `${plural(plan.keeps.orderLines, "past order line")} will be kept, with the name and price they sold at.` : "",
+      ].filter((line, index, all) => line !== "" || (index > 0 && all[index - 1] !== ""));
+      if (!window.confirm(lines.join("\n"))) return;
+
+      const response = await fetch(`/api/products/${product.id}${query ? `?${query}` : ""}`, { method: "DELETE" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return setMessage(data.error || "Product could not be deleted.");
+      const gone = new Set<number>(data.deleted || [product.id]);
+      const updated = new Map<number, Product>((data.products || []).map((row: Product) => [row.id, row]));
+      setItems((current) => current
+        .filter((item) => !gone.has(item.id))
+        .map((item) => (updated.has(item.id) ? { ...item, ...updated.get(item.id) } : item)));
+      if (editing !== "new" && editing && gone.has(editing.id)) setEditing(null);
+      setMessage(`${what.charAt(0).toUpperCase()}${what.slice(1)} deleted.`);
+    } finally {
+      setSavingId(null);
+    }
   }
   const activeEdit = editing === "new" ? null : editing;
 
@@ -394,7 +443,7 @@ Continue?`,
             <strong>{money(product)}{saving>0&&<small>Save {saving}% · was KES {product.price.toLocaleString()}</small>}</strong>
             <span className="featured-cell">{isOption?null:<button type="button" className={`row-star${product.isFeatured?" is-on":""}`} disabled={savingId===product.id||(!product.isFeatured&&!product.isActive)} onClick={()=>toggleFeatured(product)} aria-pressed={product.isFeatured} title={!product.isActive&&!product.isFeatured?`${product.name} is not on sale, so it cannot be featured`:product.isFeatured?`${product.name} is featured on the homepage`:`Feature ${product.name} on the homepage`} aria-label={product.isFeatured?`Remove ${product.name} from featured`:`Feature ${product.name}`}><Star/></button>}</span>
             <span className={product.isActive?"status-active":"status-inactive"}>{savingId===product.id?"Saving…":product.isActive?"Active":"Inactive"}</span>
-            <button className="row-delete" aria-label={`Delete ${product.name}`} disabled={savingId===product.id} onClick={()=>deactivate(product)}><Trash2/></button>
+            <button className="row-delete" aria-label={`Delete ${product.name}`} disabled={savingId===product.id} onClick={()=>deleteProduct(product)}><Trash2/></button>
           </div>;
         };
         if(!group.children.length) return optionRow(group.lead,false);
@@ -420,7 +469,7 @@ Continue?`,
             {/* Deleting the product would delete whichever option happens to be the row
                 that carries its history. Options are removed in the product's own
                 options table, which switches them off rather than destroying them. */}
-            <span className="row-delete-na" title="Remove options from inside the product, under Options">—</span>
+            <button className="row-delete" aria-label={`Delete ${group.lead.groupName||group.lead.name} and all its options`} title="Delete this product and all its options" disabled={savingId===group.lead.id} onClick={()=>deleteProduct(group.lead,true)}><Trash2/></button>
           </div>
           {options.map((product)=>optionRow(product,true))}
         </Fragment>;
@@ -457,7 +506,7 @@ Continue?`,
         </div>
       ) : null}
       <div className="product-form-grid">
-        <label>Product name<input name="name" defaultValue={activeEdit?.name||""} required/></label><label>Brand<input name="brand" defaultValue={activeEdit?.brand||""}/></label>
+        <label>Product name<input name="name" defaultValue={activeEdit?.groupName||activeEdit?.name||""} required/>{activeEdit?.groupName ? <small>{`Renames the whole product. Its options show as ${activeEdit.groupName} — option.`}</small> : null}</label><label>Brand<input name="brand" defaultValue={activeEdit?.brand||""}/></label>
         <label>Category<select name="categoryId" defaultValue={activeEdit?.categoryId||""} required><option value="">Select category</option>{categories.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Pack size<input name="packSize" defaultValue={activeEdit?.packSize||""}/></label>
         <label className="full">Short description<textarea name="shortDescription" defaultValue={activeEdit?.shortDescription||""} rows={3} maxLength={500} placeholder="A concise customer-facing product summary"/><small>Used in catalogue summaries and search. Maximum 500 characters.</small></label>
         <label className="full product-code-field">Barcode or QR code<span><input name="barcode" value={barcode} onChange={(event)=>setBarcode(event.target.value)} inputMode="numeric" placeholder="Scan with USB scanner or type the code"/><button type="button" onClick={()=>setScannerOpen(true)}><Camera/> Scan with camera</button></span><small>The POS recognises this code immediately. A connected USB scanner can type directly into this field.</small></label>

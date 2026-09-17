@@ -7,7 +7,7 @@ import sharp from "sharp";
 import { z } from "zod";
 import {
   branches, branchInventory, campaigns, chatConversations, chatMessages, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions,
-  activityLogs, authSessions, blogPostProducts, blogPosts, categories, offerItems, offers, emailVerificationTokens, healthConditions, prescriptionRequestItems, prescriptions, productHealthConditions, productReviews, products, promotionalBanners, siteSettings, staffPermissions, twoFactorChallenges, users,
+  activityLogs, authSessions, blogPostProducts, blogPosts, categories, offerItems, offers, emailVerificationTokens, healthConditions, prescriptionRequestItems, prescriptions, productHealthConditions, productReviews, products, promotionalBanners, siteSettings, staffPermissions, twoFactorChallenges, users, productBatches, posStockReceiptItems,
 } from "../../db/schema";
 import { DEFAULT_STAFF_PERMISSIONS, STAFF_PERMISSION_VALUES, normalizeStaffPermissions } from "../../lib/staff-permissions";
 import { healthfieldOrderNumber } from "../../lib/order-number";
@@ -897,6 +897,150 @@ async function applyFeatured(
   return shelf.filter((row) => evicted.has(row.id)).map((row) => ({ id: row.id, name: row.name }));
 }
 
+/**
+ * The fields that belong to a product rather than to one of its options.
+ *
+ * A product with options is several rows, one per option, and these fields are held on
+ * every one of them. Editing any of them from any option's form updates them across the
+ * whole product — otherwise the storefront showed whichever option's copy it happened to
+ * read, and an edit made on one option looked as though it had not saved.
+ */
+const SHARED_PRODUCT_FIELDS = [
+  "categoryId",
+  "brand",
+  "shortDescription",
+  "description",
+  "usageInformation",
+  "warnings",
+  "storageInformation",
+  "prescriptionRequired",
+] as const;
+
+/** The product a row belongs to: its lead's id, and every row of it, lead first. */
+async function productGroupOf(db: ReturnType<typeof getDb>, id: number) {
+  const [row] = await db
+    .select({ id: products.id, variantOf: products.variantOf, variantLabel: products.variantLabel })
+    .from(products)
+    .where(eq(products.id, id))
+    .limit(1);
+  if (!row) return null;
+  const leadId = row.variantOf ?? row.id;
+  const rows = await db
+    .select({
+      id: products.id,
+      name: products.name,
+      groupName: products.groupName,
+      variantOf: products.variantOf,
+      variantLabel: products.variantLabel,
+      variantName: products.variantName,
+      variantOrder: products.variantOrder,
+    })
+    .from(products)
+    .where(or(eq(products.id, leadId), eq(products.variantOf, leadId)))
+    .orderBy(asc(products.variantOrder), asc(products.id));
+  return { row, leadId, rows, hasOptions: rows.length > 1 };
+}
+
+/**
+ * A product's label-free name from whatever was typed into its title.
+ *
+ * Forms used to show an option's stored name, "Femella Panty Liners — Wrapped", so a title
+ * saved from one of those still carries the label; it is taken off rather than doubled.
+ */
+function productBaseName(typed: string, label: string | null) {
+  const name = typed.trim();
+  const suffix = label ? ` — ${label}` : "";
+  return suffix && name.endsWith(suffix) ? name.slice(0, -suffix.length).trim() : name;
+}
+
+/** Product rows shaped the way the admin product table holds them. */
+async function adminProductRows(db: ReturnType<typeof getDb>, ids: number[], showsCost: boolean) {
+  if (!ids.length) return [];
+  const rows = await db
+    .select()
+    .from(products)
+    .where(inArray(products.id, ids))
+    .orderBy(asc(products.variantOrder), asc(products.id));
+  const links = await db
+    .select({ productId: productHealthConditions.productId, conditionId: productHealthConditions.conditionId })
+    .from(productHealthConditions)
+    .where(inArray(productHealthConditions.productId, ids));
+  return rows.map((product) => ({
+    ...product,
+    // Buying prices leave the server only for the owner. Stripping them in the browser
+    // would still have shipped the figures to it.
+    costPrice: showsCost ? product.costPrice : null,
+    costPriceEstimated: showsCost ? product.costPriceEstimated : false,
+    imageUrl: publicImageUrl(product.imageUrl),
+    price: Number(product.price),
+    discountPrice: product.discountPrice === null ? null : Number(product.discountPrice),
+    conditionIds: links.filter((link) => link.productId === product.id).map((link) => link.conditionId),
+  }));
+}
+
+/**
+ * Deletes products outright, and everything that exists only because of them.
+ *
+ * Deleting used to clear three tables and then fail on whichever of the others still
+ * pointed at the product — its stock receipts, its batches, an offer it was in, a blog
+ * link, or its own options — so a product the shop had ever received stock for could not
+ * be deleted at all, and simply stayed in the list.
+ *
+ * What is removed: stock levels, stock receipt lines and batches, offer membership, blog
+ * links, promotional banners, reviews and health-condition links. What is kept: past
+ * order and prescription lines. Those keep the name and price they were sold at and only
+ * lose their link to the product, so sales, receipts and reports stay correct. A supplier
+ * receipt keeps its recorded total.
+ *
+ * Deleting the lead of a product with options hands the lead to the next option, and a
+ * product left with a single option becomes an ordinary product again under its own name.
+ */
+async function deleteProducts(
+  tx: Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0],
+  ids: number[],
+  group: NonNullable<Awaited<ReturnType<typeof productGroupOf>>>,
+) {
+  await tx.delete(offerItems).where(inArray(offerItems.productId, ids));
+  await tx.delete(blogPostProducts).where(inArray(blogPostProducts.productId, ids));
+  await tx.delete(promotionalBanners).where(inArray(promotionalBanners.productId, ids));
+  await tx.delete(productReviews).where(inArray(productReviews.productId, ids));
+  await tx.delete(productHealthConditions).where(inArray(productHealthConditions.productId, ids));
+  await tx.delete(branchInventory).where(inArray(branchInventory.productId, ids));
+  // Batches point at receipt lines, so they go first.
+  await tx.delete(productBatches).where(inArray(productBatches.productId, ids));
+  await tx.delete(posStockReceiptItems).where(inArray(posStockReceiptItems.productId, ids));
+
+  const deleting = new Set(ids);
+  const remaining = group.rows.filter((row) => !deleting.has(row.id));
+  const lead = group.rows.find((row) => row.id === group.leadId);
+  if (group.hasOptions && remaining.length) {
+    const newLead = deleting.has(group.leadId) ? remaining[0] : lead!;
+    if (newLead.id !== group.leadId) {
+      // The options are pointed at their new lead before the old one is removed; the
+      // database will not remove a product that other rows still point at.
+      await tx
+        .update(products)
+        .set({ variantOf: null, variantName: lead?.variantName ?? newLead.variantName })
+        .where(eq(products.id, newLead.id));
+      const others = remaining.filter((row) => row.id !== newLead.id).map((row) => row.id);
+      if (others.length) await tx.update(products).set({ variantOf: newLead.id }).where(inArray(products.id, others));
+    }
+    if (remaining.length === 1) {
+      const only = remaining[0];
+      const baseName = (only.groupName || lead?.groupName || only.name).trim();
+      await tx
+        .update(products)
+        .set({ name: baseName, groupName: null, variantLabel: null, variantName: null, variantOrder: 0, variantOf: null })
+        .where(eq(products.id, only.id));
+    }
+  }
+  // Options before their lead, for the same reason.
+  const options = ids.filter((id) => id !== group.leadId);
+  if (options.length) await tx.delete(products).where(inArray(products.id, options));
+  if (deleting.has(group.leadId)) await tx.delete(products).where(eq(products.id, group.leadId));
+  return remaining.map((row) => row.id);
+}
+
 const variantRowSchema = z.object({
   id: z.coerce.number().int().positive().optional(),
   label: z.string().trim().min(1).max(80),
@@ -1063,35 +1207,15 @@ export async function handleProductVariants(request: Request, id: number) {
     if (dropped.length) await tx.update(products).set({ isActive: false }).where(inArray(products.id, dropped));
     return newIds;
   });
-  const saved = await db
-    .select()
+  const savedIds = await db
+    .select({ id: products.id })
     .from(products)
-    .where(or(eq(products.id, leadId), eq(products.variantOf, leadId)))
-    .orderBy(asc(products.variantOrder), asc(products.id));
-  // The admin table holds whole products, so these rows have to come back shaped like
-  // the ones it already holds. Returning them without their condition links would leave
-  // the screen merging a product that appears to support no conditions at all.
-  const conditionLinks = await db
-    .select({ productId: productHealthConditions.productId, conditionId: productHealthConditions.conditionId })
-    .from(productHealthConditions)
-    .where(inArray(productHealthConditions.productId, saved.map((product) => product.id)));
+    .where(or(eq(products.id, leadId), eq(products.variantOf, leadId)));
   return json({
     ok: true,
     leadId,
     created: createdIds,
-    products: saved.map((product) => ({
-      ...product,
-      // Buying prices leave the server only for the owner. Stripping them in the browser
-      // would still have shipped the figures to it.
-      costPrice: ownerOnly ? product.costPrice : null,
-      costPriceEstimated: ownerOnly ? product.costPriceEstimated : false,
-      imageUrl: publicImageUrl(product.imageUrl),
-      price: Number(product.price),
-      discountPrice: product.discountPrice === null ? null : Number(product.discountPrice),
-      conditionIds: conditionLinks
-        .filter((link) => link.productId === product.id)
-        .map((link) => link.conditionId),
-    })),
+    products: await adminProductRows(db, savedIds.map((row) => row.id), ownerOnly),
   });
 }
 
@@ -1146,13 +1270,31 @@ export async function handleProducts(request: Request, id?: number) {
   }
   if (!id || !Number.isInteger(id)) return json({ error: "Invalid product." }, { status: 400 });
   if (request.method === "DELETE") {
-    await db.transaction(async (tx) => {
-      await tx.delete(productHealthConditions).where(eq(productHealthConditions.productId, id));
-      await tx.delete(productReviews).where(eq(productReviews.productId, id));
-      await tx.delete(branchInventory).where(eq(branchInventory.productId, id));
-      await tx.delete(products).where(eq(products.id, id));
-    });
-    return json({ ok: true });
+    const url = new URL(request.url);
+    const group = await productGroupOf(db, id);
+    if (!group) return json({ error: "That product no longer exists." }, { status: 404 });
+    // scope=group deletes a product together with all of its options.
+    const ids = url.searchParams.get("scope") === "group" ? group.rows.map((row) => row.id) : [id];
+    const count = async (table: typeof orderItems | typeof posStockReceiptItems | typeof productBatches | typeof offerItems | typeof blogPostProducts | typeof promotionalBanners) => {
+      const [row] = await db.select({ n: sql<number>`count(*)` }).from(table).where(inArray(table.productId, ids));
+      return Number(row?.n ?? 0);
+    };
+    const [orderLines, stockReceiptLines, batches, offers, blogLinks, banners] = await Promise.all([
+      count(orderItems), count(posStockReceiptItems), count(productBatches), count(offerItems), count(blogPostProducts), count(promotionalBanners),
+    ]);
+    const summary = { products: ids.length, keeps: { orderLines }, removes: { stockReceiptLines, batches, offers, blogLinks, banners } };
+    // preview=1 reports what a delete would take with it, so the screen can say so before
+    // anything is removed. Nothing is written.
+    if (url.searchParams.get("preview") === "1") return json({ ok: true, preview: true, ...summary });
+    try {
+      const remainingIds = await db.transaction((tx) => deleteProducts(tx, ids, group));
+      // Deleting an option can hand the lead to another option, or turn a product left
+      // with one option back into an ordinary product; the table is sent what it now is.
+      return json({ ok: true, deleted: ids, ...summary, products: await adminProductRows(db, remainingIds, auth.session.role === "SUPER_ADMIN") });
+    } catch (error) {
+      console.error("[products.delete]", { id, ids, message: error instanceof Error ? error.message : String(error) });
+      return json({ error: "The product could not be deleted. Nothing was removed." }, { status: 409 });
+    }
   }
   if (request.method === "PATCH") {
     const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), barcode: z.string().trim().max(100).nullable().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(10000).nullable().optional(), usageInformation: z.string().trim().max(10000).nullable().optional(), warnings: z.string().trim().max(10000).nullable().optional(), storageInformation: z.string().trim().max(10000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), prescriptionRequired: z.boolean().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional(), stock: productStockSchema }).safeParse(await body(request));
@@ -1165,6 +1307,23 @@ export async function handleProducts(request: Request, id?: number) {
       if (duplicate) return json({ error: "That barcode or QR code is already assigned to another product." }, { status: 409 });
     }
     const { conditionIds, stock, isFeatured, ...update } = parsed.data;
+    const group = await productGroupOf(db, id);
+    if (!group) return json({ error: "That product no longer exists." }, { status: 404 });
+    // A product with options is several rows. Its title and its shared details are the
+    // product's, so they are written to every option; price, stock, barcode, pack size,
+    // picture and on-sale stay with the option being edited.
+    let renameTo: string | undefined;
+    const shared: Record<string, unknown> = {};
+    if (group.hasOptions) {
+      if (update.name !== undefined) renameTo = productBaseName(update.name, group.row.variantLabel);
+      delete (update as { name?: string }).name;
+      for (const field of SHARED_PRODUCT_FIELDS) {
+        if (update[field] !== undefined) {
+          shared[field] = update[field];
+          delete (update as Record<string, unknown>)[field];
+        }
+      }
+    }
     let evicted: Array<{ id: number; name: string }> = [];
     const normalized = { ...update, imageUrl: parsed.data.imageUrl === undefined ? undefined : normalizeStoredImageUrl(parsed.data.imageUrl) };
     const columns = {
@@ -1192,13 +1351,33 @@ export async function handleProducts(request: Request, id?: number) {
         parsed.data.isActive === false ? false : isFeatured,
       );
       await applyProductStock(tx, id, auth.session.userId, stock);
-      if (conditionIds) { await tx.delete(productHealthConditions).where(eq(productHealthConditions.productId, id)); if (conditionIds.length) await tx.insert(productHealthConditions).values(conditionIds.map((conditionId) => ({ productId: id, conditionId }))); }
+      const groupIds = group.hasOptions ? group.rows.map((row) => row.id) : [id];
+      if (Object.keys(shared).length) await tx.update(products).set(shared).where(inArray(products.id, groupIds));
+      if (renameTo) {
+        // The label-free title on every option, and each option's full name rebuilt from it.
+        for (const row of group.rows) {
+          await tx
+            .update(products)
+            .set({ groupName: renameTo, name: row.variantLabel ? `${renameTo} — ${row.variantLabel}` : renameTo })
+            .where(eq(products.id, row.id));
+        }
+      }
+      if (conditionIds) {
+        await tx.delete(productHealthConditions).where(inArray(productHealthConditions.productId, groupIds));
+        if (conditionIds.length) {
+          await tx.insert(productHealthConditions).values(
+            groupIds.flatMap((productId) => conditionIds.map((conditionId) => ({ productId, conditionId }))),
+          );
+        }
+      }
     });
     } catch (error) {
       if (error instanceof FeaturedInactiveError) return json({ error: error.message }, { status: 400 });
       throw error;
     }
-    return json({ ok: true, unfeatured: evicted });
+    // A product with options changed across all of its rows, so the table is sent them all.
+    const changed = group.hasOptions ? await adminProductRows(db, group.rows.map((row) => row.id), auth.session.role === "SUPER_ADMIN") : undefined;
+    return json({ ok: true, unfeatured: evicted, products: changed });
   }
   return json({ error: "Method not allowed." }, { status: 405 });
 }
