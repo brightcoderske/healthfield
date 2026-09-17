@@ -1,8 +1,7 @@
-/* eslint-disable @next/next/no-img-element */
-
 import { Tag } from "lucide-react";
 import { OfferShareButton } from "./offer-share-button";
 import { OfferItems } from "./offer-items";
+import { OfferArtwork } from "./offer-artwork";
 import type { Offer } from "./offer-data";
 import { PrescriptionAddButton } from "@/app/prescription-add-button";
 
@@ -34,9 +33,7 @@ export function OfferCard({
       id={`offer-${offer.id}`}
     >
       {showArtwork && offer.imageUrl ? (
-        <div className="shared-offer-artwork">
-          <img src={offer.imageUrl} alt={`${offer.title} offer`} />
-        </div>
+        <OfferArtwork src={offer.imageUrl} title={offer.title} />
       ) : null}
       <header>
         <span className="offer-card-flag">
@@ -51,7 +48,9 @@ export function OfferCard({
           <OfferShareButton slug={offer.slug} title={offer.title} />
         </span>
       </header>
-      <h2>{offer.title}</h2>
+      {/* On an offer's own page the title is already the page heading directly above,
+          so the card does not repeat it. */}
+      {showArtwork ? null : <h2>{offer.title}</h2>}
       {offer.description && <p>{offer.description}</p>}
       <OfferItems items={offer.items} isBundle={offer.isBundle} />
       <footer>

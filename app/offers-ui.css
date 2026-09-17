@@ -184,3 +184,32 @@
   .offer-card > footer button { min-height: 46px; font-size: 13px; }
   .offer-card .offer-card-more { min-height: 32px; }
 }
+
+/* ---- Single offer page ---------------------------------------------------------------
+   The artwork is pinned inside its panel. "height: 100%" does not hold for an image in a
+   grid cell whose height comes from the panel, so a tall picture rendered at its natural
+   size and spilled out underneath the offer's title, products and price. The panel now
+   clips, and the image fills the space inside its padding and is contained within it,
+   whatever shape the uploaded picture is. */
+.shared-offer-card .shared-offer-artwork {
+  position: relative;
+  overflow: hidden;
+}
+.shared-offer-card .shared-offer-artwork img {
+  position: absolute;
+  inset: 18px;
+  width: calc(100% - 36px);
+  height: calc(100% - 36px);
+  max-width: none;
+  object-fit: contain;
+}
+@media (max-width: 700px) {
+  .shared-offer-card .shared-offer-artwork img {
+    inset: 12px;
+    width: calc(100% - 24px);
+    height: calc(100% - 24px);
+  }
+}
+/* Without its repeated title, the card's description sits directly under its header. */
+.shared-offer-card > header + p { margin-top: 12px; }
+.shared-offer-card > header + .offer-card-items { margin-top: 12px; }
