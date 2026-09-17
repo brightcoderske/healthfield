@@ -9,6 +9,10 @@ import {
   type PrescriptionStatus,
 } from "@/lib/prescription-workflow";
 import { PrescriptionAddButton } from "@/app/prescription-add-button";
+import { AccountTabs } from "./account-tabs";
+import { AccountList } from "./account-list";
+import { consultationStatusLabels, type ConsultationStatus } from "@/lib/consultation-workflow";
+import type { ConsultationSummary } from "./consultations/types";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +48,14 @@ type Data = {
   }>;
 };
 
+function countLabel(count: number, noun: string) {
+  return count ? `${count} ${noun}${count === 1 ? "" : "s"}` : `No ${noun}s yet`;
+}
+
+function consultationLabel(status: string) {
+  return consultationStatusLabels[status as ConsultationStatus] || status.replaceAll("_", " ");
+}
+
 function prescriptionLabel(status: string) {
   return prescriptionStatuses.includes(status as PrescriptionStatus)
     ? prescriptionStatusLabels[status as PrescriptionStatus]
@@ -52,23 +64,34 @@ function prescriptionLabel(status: string) {
 
 export default async function AccountPage() {
   const user = await requireRole(["CUSTOMER"]);
-  const data = await backendJson<Partial<Data>>("/v1/views/account");
+  const [data, consultationData] = await Promise.all([
+    backendJson<Partial<Data>>("/v1/views/account"),
+    // A problem loading consultations should not take the whole account page down with it.
+    backendJson<{ consultations: ConsultationSummary[] }>("/v1/views/consultations").catch(() => ({ consultations: [] })),
+  ]);
   const orders = data.orders || [],
     prescriptions = data.prescriptions || [],
+    consultations = consultationData.consultations || [],
     catalog = data.catalog || [];
   return (
     <main className="customer-account compact-account">
-      <header>
+      {/* One line: back to the shop, the greeting, and sign out. */}
+      <header className="account-topbar">
         <Link href="/#products">← Continue shopping</Link>
+        <h1>Hello, {user.firstName}</h1>
         <form action="/api/auth/logout" method="post">
           <button>Sign out</button>
         </form>
       </header>
-      <div className="account-welcome">
-        <span>My Healthfield</span>
-        <h1>Hello, {user.firstName}</h1>
-        <p>Shop, track orders, prescriptions and pharmacy support.</p>
-      </div>
+      {/* All three services are in view the moment the page opens, as tabs that stay
+          pinned while the page scrolls; each jumps to its section below. */}
+      <AccountTabs
+        tabs={[
+          { id: "orders", label: "My orders", detail: countLabel(orders.length, "order") },
+          { id: "prescriptions", label: "Prescriptions", detail: countLabel(prescriptions.length, "prescription") },
+          { id: "consultations", label: "My consultations", detail: countLabel(consultations.length, "consultation") },
+        ]}
+      />
       <section className="account-orders account-table" id="orders">
         <div>
           <h2>My orders</h2>
@@ -80,7 +103,7 @@ export default async function AccountPage() {
           <span>Amount</span>
         </header>
         {orders.length ? (
-          orders.map((order) => (
+          <AccountList noun="order">{orders.map((order) => (
             <Link href={`/account/orders/${order.id}`} key={order.id}>
               <span>
                 <strong>{order.orderNumber}</strong>
@@ -102,7 +125,7 @@ export default async function AccountPage() {
               </em>
               <b>KES {Number(order.total).toLocaleString()}</b>
             </Link>
-          ))
+          ))}</AccountList>
         ) : (
           <div className="account-empty">
             <Package />
@@ -112,18 +135,6 @@ export default async function AccountPage() {
             </span>
           </div>
         )}
-      </section>
-      <section className="account-consultation-card" aria-labelledby="account-consultations-title">
-        <div className="account-consultation-icon"><Stethoscope /></div>
-        <div>
-          <span>Professional support</span>
-          <h2 id="account-consultations-title">My consultations</h2>
-          <p>Follow your conversations, replies and prescription decisions in one place.</p>
-        </div>
-        <nav aria-label="Consultation actions">
-          <Link href="/account/consultations">View my consultations</Link>
-          <Link href="/prescriptions/consult">Start a consultation</Link>
-        </nav>
       </section>
       <section
         className="account-orders account-table account-prescriptions"
@@ -139,7 +150,7 @@ export default async function AccountPage() {
           <span>Proposal</span>
         </header>
         {prescriptions.length ? (
-          prescriptions.map((request) => (
+          <AccountList noun="prescription">{prescriptions.map((request) => (
             <Link
               href={`/account/prescriptions/${request.id}`}
               key={request.id}
@@ -165,7 +176,7 @@ export default async function AccountPage() {
                   : new Date(request.createdAt).toLocaleDateString("en-KE")}
               </b>
             </Link>
-          ))
+          ))}</AccountList>
         ) : (
           <div className="account-empty">
             <FileText />
@@ -174,6 +185,41 @@ export default async function AccountPage() {
               <small>
                 Review progress and saved proposals will appear here.
               </small>
+            </span>
+          </div>
+        )}
+      </section>
+      <section className="account-orders account-table account-consultations" id="consultations">
+        <div>
+          <h2>My consultations</h2>
+          <Link href="/prescriptions/consult">Start a consultation</Link>
+        </div>
+        <header>
+          <span>Consultation</span>
+          <span>Current stage</span>
+          <span>Last update</span>
+        </header>
+        {consultations.length ? (
+          <AccountList noun="consultation">
+            {consultations.map((item) => (
+              <Link href={`/account/consultations/${item.id}`} key={item.id}>
+                <span>
+                  <strong>{item.reference}</strong>
+                  <small>{item.concern}</small>
+                </span>
+                <em className={`rx-status ${item.status.toLowerCase().replaceAll("_", "-")}`}>
+                  {consultationLabel(item.status)}
+                </em>
+                <b>{new Date(item.lastMessageAt || item.createdAt).toLocaleDateString("en-KE")}</b>
+              </Link>
+            ))}
+          </AccountList>
+        ) : (
+          <div className="account-empty">
+            <Stethoscope />
+            <span>
+              <strong>No consultations yet</strong>
+              <small>Describe your symptoms and a healthcare professional will review your case.</small>
             </span>
           </div>
         )}

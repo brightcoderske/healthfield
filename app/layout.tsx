@@ -17,6 +17,7 @@ import "./homepage-fixes.css";
 import "./product-page-polish.css";
 import "./variant-editor.css";
 import "./variant-picker.css";
+import "./account-tabs.css";
 import { CartToast } from "./cart-toast";
 import "./registration-notice.css";
 import "./responsive-ui.css";

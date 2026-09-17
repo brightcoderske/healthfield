@@ -1,0 +1,133 @@
+/* ---- Customer account: the three services as sticky tabs ---------------------------
+   Pinned to the top of the account page while it scrolls, so orders, prescriptions and
+   consultations are always one tap away. Only the account page uses this. */
+.account-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 14px 0 4px;
+  padding: 8px 0;
+  background: rgba(247, 244, 248, 0.94);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.account-tabs > a {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid #e4dce6;
+  border-radius: 12px;
+  color: #3a3240;
+  background: #fff;
+  text-decoration: none;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.account-tabs > a > svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: #8a278c;
+}
+.account-tabs > a > span { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.account-tabs > a strong {
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-tabs > a small {
+  overflow: hidden;
+  color: #7a7280;
+  font-size: 9.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-tabs > a:hover { border-color: #c79ccd; }
+.account-tabs > a.is-active {
+  border-color: #8a278c;
+  color: #fff;
+  background: #8a278c;
+}
+.account-tabs > a.is-active > svg,
+.account-tabs > a.is-active small { color: rgba(255, 255, 255, 0.88); }
+.account-tabs > a:focus-visible { outline: 3px solid rgba(138, 39, 140, 0.25); outline-offset: 2px; }
+
+/* The top of the page is kept short — back link, greeting and sign out on one line, then the tabs — so the orders
+   list starts within the first screen. */
+.compact-account { padding-top: 12px; }
+.compact-account > .account-topbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.compact-account > .account-topbar > a,
+.compact-account > .account-topbar button { white-space: nowrap; }
+.compact-account > .account-topbar h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 17px;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compact-account > .account-tabs { margin: 6px 0 2px; }
+
+/* A jumped-to section lands with its heading below the tabs, not underneath them. */
+.compact-account #orders,
+.compact-account #prescriptions,
+.compact-account #consultations { scroll-margin-top: 92px; }
+
+/* On wider screens the account page is a two-column grid. The tabs and the three sections
+   each take the full width, so they read top to bottom in the tabs' order instead of the
+   tabs being squeezed into one cell and the sections pairing up side by side. */
+.compact-account > .account-tabs,
+.compact-account > #orders,
+.compact-account > #prescriptions,
+.compact-account > #consultations { grid-column: 1 / -1; align-self: start; }
+
+/* "Show 12 more orders" under a folded list. */
+.compact-account .account-see-all {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-top: 1px solid #eee8f0;
+  color: #792587;
+  background: #fcfafd;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+  cursor: pointer;
+}
+.compact-account .account-see-all:hover { background: #f7eef8; }
+.compact-account .account-see-all:focus-visible { outline: 3px solid rgba(138, 39, 140, 0.25); outline-offset: -3px; }
+
+@media (max-width: 560px) {
+  /* On a phone the three tabs stack their text: icon above, label, count. */
+  .account-tabs { gap: 5px; padding: 6px 0; }
+  .account-tabs > a {
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 4px;
+    text-align: center;
+  }
+  .account-tabs > a > span { align-items: center; }
+  .account-tabs > a strong { font-size: 10.5px; }
+  .account-tabs > a small { font-size: 9px; }
+  .compact-account #orders,
+  .compact-account #prescriptions,
+  .compact-account #consultations { scroll-margin-top: 104px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .account-tabs > a { transition: none; }
+}
