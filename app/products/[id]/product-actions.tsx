@@ -14,6 +14,7 @@ import { QuantityField } from "@/app/quantity-field";
 import { announceCartAdded } from "@/app/cart-toast";
 import { VariantPicker } from "@/app/variant-picker";
 import type { ProductCardProduct } from "@/app/product-card";
+import { trackAddToCart } from "@/lib/meta-pixel";
 
 /**
  * Adding this product to the basket, from its own page.
@@ -174,6 +175,16 @@ export function ProductActions({
       setPicking(false);
       showFeedback("added", 1600);
       announceCartAdded();
+      const variant = hasOptions ? variants.find((item) => item.id === id) : undefined;
+      const price = variant ? Number(variant.discountPrice ?? variant.price) : unitPrice;
+      if (price !== undefined && Number.isFinite(price)) {
+        trackAddToCart({
+          contentId: id,
+          contentName: productName,
+          quantity: amount,
+          value: price * amount,
+        });
+      }
     } catch (error) {
       setPickerError(error instanceof Error ? error.message : "This could not be added.");
       showFeedback("error", 2200);

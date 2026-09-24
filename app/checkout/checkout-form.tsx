@@ -24,6 +24,7 @@ import { createCheckoutToken } from "@/lib/checkout-token";
 import { MapPicker, type PinnedLocation } from "../map-picker";
 import { deliveryFeeOf, useDeliveryQuote, type DeliveryOptions } from "../use-delivery-quote";
 import { parseVatRate, vatOnNet, vatRateLabel } from "@/lib/vat";
+import { trackInitiateCheckout, trackPurchase } from "@/lib/meta-pixel";
 
 type Product = {
   id: number;
@@ -187,6 +188,43 @@ export function CheckoutForm({
   const vatRate = vat?.enabled ? parseVatRate(vat.rate) : 0;
   const vatAmount = vatRate ? vatOnNet(subtotal, vatRate) ?? 0 : 0;
   const total = Math.round((subtotal + deliveryFee + vatAmount) * 100) / 100;
+
+  // Fired once, the moment there is a real basket to check out — not merely for
+  // landing on this page while it is empty.
+  const checkoutTracked = useRef(false);
+  useEffect(() => {
+    if (checkoutTracked.current) return;
+    if (!lines.length && !offers.length) return;
+    checkoutTracked.current = true;
+    trackInitiateCheckout({
+      contentIds: [
+        ...lines.map((line) => line.product!.id),
+        ...offers.map((offer) => `offer-${offer.id}`),
+      ],
+      numItems: lines.reduce((sum, line) => sum + line.quantity, 0) + offers.length,
+      value: subtotal,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines, offers]);
+
+  // Fired once an order is actually placed — PAID (online payment confirmed) or
+  // PLACED (cash on delivery, accepted without upfront payment) — never for merely
+  // reaching checkout or for a payment still WAITING/REVIEW/FAILED.
+  const purchaseTracked = useRef(false);
+  useEffect(() => {
+    if (!result || purchaseTracked.current) return;
+    if (result.state !== "PAID" && result.state !== "PLACED") return;
+    purchaseTracked.current = true;
+    trackPurchase({
+      orderId: result.id,
+      orderNumber: result.orderNumber,
+      contentIds: [
+        ...lines.map((line) => line.product!.id),
+        ...offers.map((offer) => `offer-${offer.id}`),
+      ],
+      value: result.total,
+    });
+  }, [result, lines, offers]);
 
   useEffect(() => {
     if (!result || !["WAITING", "REVIEW"].includes(result.state)) return;

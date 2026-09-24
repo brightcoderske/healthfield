@@ -8,6 +8,7 @@ import { defaultVariant, variantDisplayName } from "@/lib/product-variants";
 import { PrescriptionAddButton } from "./prescription-add-button";
 import { VariantPicker } from "./variant-picker";
 import { announceCartAdded } from "./cart-toast";
+import { trackAddToCart } from "@/lib/meta-pixel";
 
 export type ProductCardProduct = {
   id: number;
@@ -122,6 +123,12 @@ export function ProductCard({
       setPicking(false);
       showAdded();
       onVariantAdded?.(variant.id, quantity, data.cart);
+      trackAddToCart({
+        contentId: variant.id,
+        contentName: variantDisplayName(name, variant.variantLabel),
+        quantity,
+        value: Number(variant.discountPrice ?? variant.price) * quantity,
+      });
     } catch {
       setPickerError("Could not reach the server. Please try again.");
     } finally {
@@ -348,6 +355,12 @@ export function ProductCard({
                 // actually come back rather than firing on the press.
                 await onAddToCart(event);
                 showAdded();
+                trackAddToCart({
+                  contentId: shown.id,
+                  contentName: variantDisplay,
+                  quantity: 1,
+                  value: sellingPrice,
+                });
               })}
             >
               <input type="hidden" name="productId" value={shown.id} />

@@ -14,6 +14,7 @@ import { PublicFooter, type PublicContact } from "@/app/public-footer";
 import { getSession } from "@/lib/auth";
 import { CART_COOKIE, parseCart } from "@/lib/shopping-state";
 import { ProductCartLink } from "./product-cart-link";
+import { ViewContentPixel } from "./view-content-pixel";
 import { richTextToPlainText } from "@/lib/rich-text-content";
 import { groupVariants } from "@/lib/product-variants";
 
@@ -240,6 +241,7 @@ export default async function ProductPage({
             __html: JSON.stringify(productSchema).replace(/</g, "\\u003c"),
           }}
         />
+        <ViewContentPixel productId={product.id} productName={product.name} value={price} />
         <header className="product-page-header">
           <Link className="product-header-back" href="/#products">
             <ArrowLeft />

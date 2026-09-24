@@ -19,6 +19,7 @@ import "./variant-editor.css";
 import "./variant-picker.css";
 import "./account-tabs.css";
 import { CartToast } from "./cart-toast";
+import { MetaPixel } from "./meta-pixel";
 import "./registration-notice.css";
 import "./responsive-ui.css";
 import "./product-grid.css";
@@ -67,7 +68,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" data-scroll-behavior="smooth">
-      <body className={geist.variable}><script type="application/ld+json" dangerouslySetInnerHTML={{__html:JSON.stringify({"@context":"https://schema.org","@type":"Pharmacy",name:"Healthfield Pharmacy",url:process.env.APP_URL??"https://healthfieldpharmacy.co.ke",logo:`${(process.env.APP_URL??"https://healthfieldpharmacy.co.ke").replace(/\/$/,"")}/healthfield-logo-clean.png`,areaServed:["Juja","Nairobi","Kahawa West","Thika Road"],medicalSpecialty:"Pharmacy"}).replace(/</g,"\\u003c")}}/>{children}<CartToast/></body>
+      <body className={geist.variable}><script type="application/ld+json" dangerouslySetInnerHTML={{__html:JSON.stringify({"@context":"https://schema.org","@type":"Pharmacy",name:"Healthfield Pharmacy",url:process.env.APP_URL??"https://healthfieldpharmacy.co.ke",logo:`${(process.env.APP_URL??"https://healthfieldpharmacy.co.ke").replace(/\/$/,"")}/healthfield-logo-clean.png`,areaServed:["Juja","Nairobi","Kahawa West","Thika Road"],medicalSpecialty:"Pharmacy"}).replace(/</g,"\\u003c")}}/>{process.env.NEXT_PUBLIC_META_PIXEL_ID?<MetaPixel pixelId={process.env.NEXT_PUBLIC_META_PIXEL_ID}/>:null}{children}<CartToast/></body>
     </html>
   );
 }
