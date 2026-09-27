@@ -22,6 +22,10 @@ type Product = {
 };
 type Option = { id: number; name: string };
 const PAGE_SIZE = 25;
+// So a filter chosen while hunting for something stays put across reloads instead of
+// silently resetting to "all" the next time this page is opened.
+const FEATURED_FILTER_KEY = "healthfield-admin-products-featured-filter";
+const PRESCRIPTION_FILTER_KEY = "healthfield-admin-products-prescription-filter";
 
 export function ProductManager({ initialProducts, categories, conditions, branches = [], stock = [], canEditCost = false }: { branches?: Array<{id:number;name:string}>; stock?: Array<{branchId:number;productId:number;quantityAvailable:number;reorderLevel:number}>; initialProducts: Product[]; categories: Option[]; conditions: Option[]; canEditCost?: boolean }) {
   const [items, setItems] = useState(initialProducts);
@@ -38,6 +42,17 @@ export function ProductManager({ initialProducts, categories, conditions, branch
   // The featured shelf is ten products out of hundreds, so finding what is on it by
   // scrolling the table was not realistic. This filter is how it gets managed.
   const [featuredFilter, setFeaturedFilter] = useState<"all" | "featured" | "plain">("all");
+  // Prescription-required products aren't their own category — they're scattered across
+  // every category — so finding them by scrolling is just as unrealistic as featured was.
+  const [prescriptionFilter, setPrescriptionFilter] = useState<"all" | "required" | "otc">("all");
+  useEffect(() => {
+    try {
+      const savedFeatured = localStorage.getItem(FEATURED_FILTER_KEY);
+      if (savedFeatured === "featured" || savedFeatured === "plain") setFeaturedFilter(savedFeatured);
+      const savedPrescription = localStorage.getItem(PRESCRIPTION_FILTER_KEY);
+      if (savedPrescription === "required" || savedPrescription === "otc") setPrescriptionFilter(savedPrescription);
+    } catch {}
+  }, []);
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Product | "new" | null>(null);
   // Sizes the sheet to what the phone is actually showing, keyboard included, and keeps
@@ -87,10 +102,12 @@ export function ProductManager({ initialProducts, categories, conditions, branch
     [lead, ...children].some((item) =>
       `${item.groupName || ""} ${item.name} ${item.brand || ""}`.toLowerCase().includes(query.toLowerCase()) &&
       (category === "all" || item.categoryId === Number(category)) &&
-      (featuredFilter === "all" || (featuredFilter === "featured" ? item.isFeatured : !item.isFeatured)),
+      (featuredFilter === "all" || (featuredFilter === "featured" ? item.isFeatured : !item.isFeatured)) &&
+      (prescriptionFilter === "all" || (prescriptionFilter === "required" ? item.prescriptionRequired : !item.prescriptionRequired)),
     ),
-  ), [groups, query, category, featuredFilter]);
+  ), [groups, query, category, featuredFilter, prescriptionFilter]);
   const featuredCount = useMemo(() => items.filter((item) => item.isFeatured).length, [items]);
+  const prescriptionCount = useMemo(() => items.filter((item) => item.prescriptionRequired).length, [items]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const visibleProducts = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
@@ -419,7 +436,7 @@ Continue?`,
         });
       }}
     /> : null}
-    <div className="compact-table-tools"><label><Search/><input value={query} onChange={(event)=>{setQuery(event.target.value);setPage(1)}} placeholder="Search all products by name or brand"/></label><select value={category} onChange={(event)=>{setCategory(event.target.value);setPage(1)}}><option value="all">All categories</option>{categories.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select><select value={featuredFilter} onChange={(event)=>{setFeaturedFilter(event.target.value as typeof featuredFilter);setPage(1)}} aria-label="Filter by featured"><option value="all">Featured and not</option><option value="featured">Featured only</option><option value="plain">Not featured</option></select><span>{filtered.length} products · {featuredCount} of {FEATURED_LIMIT} featured</span></div>
+    <div className="compact-table-tools"><label><Search/><input value={query} onChange={(event)=>{setQuery(event.target.value);setPage(1)}} placeholder="Search all products by name or brand"/></label><select value={category} onChange={(event)=>{setCategory(event.target.value);setPage(1)}}><option value="all">All categories</option>{categories.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select><select value={featuredFilter} onChange={(event)=>{const next=event.target.value as typeof featuredFilter;setFeaturedFilter(next);setPage(1);try{localStorage.setItem(FEATURED_FILTER_KEY,next)}catch{}}} aria-label="Filter by featured"><option value="all">All products (featured & not)</option><option value="featured">Featured only</option><option value="plain">Not featured</option></select><select value={prescriptionFilter} onChange={(event)=>{const next=event.target.value as typeof prescriptionFilter;setPrescriptionFilter(next);setPage(1);try{localStorage.setItem(PRESCRIPTION_FILTER_KEY,next)}catch{}}} aria-label="Filter by prescription requirement"><option value="all">All products (Rx & OTC)</option><option value="required">Prescription required only</option><option value="otc">No prescription needed (OTC)</option></select><span>{filtered.length} products · {featuredCount} of {FEATURED_LIMIT} featured · {prescriptionCount} prescription</span></div>
     <div className="compact-table"><div className="compact-table-head product-row"><span>Image</span><span>Product</span><span>Category</span><span>Price</span><span title="Featured on the homepage">Star</span><span>Status</span><span>Action</span></div>
       {visibleProducts.map((group)=>{
         const options=[group.lead,...group.children];
