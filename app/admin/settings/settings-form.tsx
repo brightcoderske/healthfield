@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable react/no-unescaped-entities, @next/next/no-img-element -- local blob previews are not image-optimizer inputs */
 
-import { ArrowLeft, Banknote, BadgeCheck, Check, Loader, Save, Settings, Share2, ShieldCheck, Store, Truck } from "lucide-react";
+import { ArrowLeft, Banknote, BadgeCheck, Bell, Check, Loader, Save, Settings, Share2, ShieldCheck, Store, Truck } from "lucide-react";
 import { ChangeEvent, FormEvent, ReactNode, useState } from "react";
 
 type SettingsValue = {
@@ -13,10 +13,12 @@ type SettingsValue = {
   requireTeamTwoFactor:boolean;
   onlineMpesaEnabled:boolean;onlineManualEnabled:boolean;onlineCodEnabled:boolean;posCashEnabled:boolean;posMpesaEnabled:boolean;posManualEnabled:boolean;taxNumber?:string|null;vatEnabled?:boolean;vatRate?:string|number|null;
   mpesaTillNumber:string|null;mpesaAccountName:string|null;
+  notifyNewOrder?:boolean;notifyOrderStatusChange?:boolean;notifyCustomerReceivedOrder?:boolean;notifyNewPrescription?:boolean;notifyNewConsultation?:boolean;notifyNewCustomer?:boolean;notifyTillPayment?:boolean;
+  smsPrescriptionUpdatesEnabled?:boolean;smsConsultationUpdatesEnabled?:boolean;
 } | null;
 
 /** Section identities. The accent colour is per section, so the page reads as parts. */
-type SectionKey = "contact" | "social" | "delivery" | "payments" | "security" | "licence";
+type SectionKey = "contact" | "social" | "delivery" | "payments" | "notifications" | "security" | "licence";
 
 /**
  * One settings section: its own form, its own save, its own state.
@@ -186,6 +188,29 @@ export function SettingsForm({ initial, paymentRuntime }: { initial: SettingsVal
           <label><input name="posCashEnabled" type="checkbox" defaultChecked={initial?.posCashEnabled??true}/><span><strong>Cash</strong><small>Available only at the counter.</small></span></label>
           <label><input name="posMpesaEnabled" type="checkbox" defaultChecked={initial?.posMpesaEnabled??true}/><span><strong>M-Pesa push</strong><small>Send an STK prompt from the teller screen.</small></span></label>
           <label><input name="posManualEnabled" type="checkbox" defaultChecked={initial?.posManualEnabled??true}/><span><strong>Manual till</strong><small>Check the customer's till receipt automatically.</small></span></label>
+        </div>
+      </Section>
+
+      <Section
+        id="notifications" tone="#2f6fa6" icon={<Bell />}
+        title="Notifications"
+        description="Which internal emails land in the admin inbox, and which SMS go out to customers."
+        onSave={(form) => putSettings(withBooleans(form, ["notifyNewOrder","notifyOrderStatusChange","notifyCustomerReceivedOrder","notifyNewPrescription","notifyNewConsultation","notifyNewCustomer","notifyTillPayment","smsPrescriptionUpdatesEnabled","smsConsultationUpdatesEnabled"]))}
+      >
+        <h3>Admin email alerts</h3>
+        <div className="payment-toggle-grid">
+          <label><input name="notifyNewOrder" type="checkbox" defaultChecked={initial?.notifyNewOrder??true}/><span><strong>New order placed</strong><small>One email per order, online or walk-in.</small></span></label>
+          <label><input name="notifyOrderStatusChange" type="checkbox" defaultChecked={initial?.notifyOrderStatusChange??true}/><span><strong>Order status changed</strong><small>Sent whenever staff move an order to a new status.</small></span></label>
+          <label><input name="notifyCustomerReceivedOrder" type="checkbox" defaultChecked={initial?.notifyCustomerReceivedOrder??true}/><span><strong>Customer confirmed delivery received</strong><small>Sent when a customer marks their delivery as received.</small></span></label>
+          <label><input name="notifyNewPrescription" type="checkbox" defaultChecked={initial?.notifyNewPrescription??true}/><span><strong>New prescription for review</strong><small>Sent when a customer uploads a prescription.</small></span></label>
+          <label><input name="notifyNewConsultation" type="checkbox" defaultChecked={initial?.notifyNewConsultation??true}/><span><strong>New consultation request</strong><small>Sent when a customer requests a consultation.</small></span></label>
+          <label><input name="notifyNewCustomer" type="checkbox" defaultChecked={initial?.notifyNewCustomer??true}/><span><strong>New verified customer</strong><small>Sent when a new customer verifies their email.</small></span></label>
+          <label><input name="notifyTillPayment" type="checkbox" defaultChecked={initial?.notifyTillPayment??false}/><span><strong>Till payment received</strong><small>One email per Till receipt Safaricom delivers — the busiest alert by far. Off by default so it can't bury the others.</small></span></label>
+        </div>
+        <h3>Customer SMS</h3>
+        <div className="payment-toggle-grid">
+          <label><input name="smsPrescriptionUpdatesEnabled" type="checkbox" defaultChecked={initial?.smsPrescriptionUpdatesEnabled??false}/><span><strong>Prescription updates</strong><small>Received, approved, needs clarification, or declined. Billed per message.</small></span></label>
+          <label><input name="smsConsultationUpdatesEnabled" type="checkbox" defaultChecked={initial?.smsConsultationUpdatesEnabled??false}/><span><strong>Consultation received</strong><small>Confirms a consultation request reached the pharmacy. Billed per message.</small></span></label>
         </div>
       </Section>
 

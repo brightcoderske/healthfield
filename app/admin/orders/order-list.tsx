@@ -8,7 +8,9 @@ import styles from "./order-list.module.css";
 type Order = { id: number; orderNumber: string; customerName: string; phone: string; status: string; createdAt: string; paymentStatus: string; paymentMethod: string; paymentChannel: "ONLINE" | "POS" | null; amountPaid: string; fulfilmentMethod: OrderFulfilmentMethod; total: string; deliveryArea: string | null; deliveryDistanceKm: string | null; deliveryDurationMinutes: number | null };
 type OrderKind = "ALL" | "DELIVERY" | "PICKUP" | "POS";
 
-const removable = new Set(["NEW", "CONFIRMED", "UNDER_REVIEW", "CANCELLED"]);
+// Matches the API: anything short of physically leaving the pharmacy (dispatched or
+// completed) can still be deleted, mirroring what handleOrders' DELETE actually allows.
+const removable = new Set(["NEW", "AWAITING_PAYMENT", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "READY_FOR_PICKUP", "CANCELLED"]);
 const allStatuses = ["NEW", "AWAITING_PAYMENT", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"] as const;
 const kinds: Array<{ value: OrderKind; label: string }> = [{ value: "ALL", label: "All orders" }, { value: "DELIVERY", label: "Delivery" }, { value: "PICKUP", label: "Pickup" }, { value: "POS", label: "POS sales" }];
 const paymentName = (method: string) => method === "MPESA_EXPRESS" ? "M-Pesa Express" : method === "MANUAL_MPESA" ? "Manual M-Pesa" : "Cash";

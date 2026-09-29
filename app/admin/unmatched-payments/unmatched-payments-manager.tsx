@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, PlugZap, RefreshCw, Search, WalletCards } from "lucide-react";
+import { AlertTriangle, CheckCircle2, PlugZap, RefreshCw, Search, Trash2, WalletCards } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
@@ -40,10 +40,47 @@ export function UnmatchedPaymentsManager({ initialPayments, exceptions, till }: 
   const [working, setWorking] = useState<number | null>(null);
   const [recovering, setRecovering] = useState(false);
   const [notice, setNotice] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [deleting, setDeleting] = useState(false);
   const shown = useMemo(() => {
     const term = query.trim().toLowerCase();
     return term ? payments.filter((payment) => `${payment.receiptNumber} ${payment.phone || ""} ${payment.accountReference || ""} ${payment.amount} ${payment.candidates.map((candidate) => `${candidate.orderNumber} ${candidate.customerName}`).join(" ")}`.toLowerCase().includes(term)) : payments;
   }, [payments, query]);
+  const allShownSelected = shown.length > 0 && shown.every((payment) => selected.has(payment.id));
+
+  function toggleSelected(id: number) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleSelectAllShown() {
+    setSelected((current) => {
+      if (allShownSelected) {
+        const next = new Set(current);
+        for (const payment of shown) next.delete(payment.id);
+        return next;
+      }
+      return new Set([...current, ...shown.map((payment) => payment.id)]);
+    });
+  }
+  async function deleteSelected() {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} unmatched payment${ids.length === 1 ? "" : "s"}? This permanently removes the Till receipt${ids.length === 1 ? "" : "s"} — it does not touch any order or payment they were never matched to.`)) return;
+    setDeleting(true);
+    setNotice("");
+    const response = await fetch("/api/payments/incoming", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }).catch(() => null);
+    const data = await response?.json().catch(() => ({}));
+    if (response?.ok) {
+      setPayments((rows) => rows.filter((row) => !selected.has(row.id)));
+      setSelected(new Set());
+      setNotice(`${data.deletedCount ?? ids.length} unmatched payment${(data.deletedCount ?? ids.length) === 1 ? "" : "s"} deleted.`);
+    } else setNotice(data?.error || "Those payments could not be deleted.");
+    setDeleting(false);
+  }
 
   async function match(payment: UnmatchedPayment) {
     const orderReference = (references[payment.id] || "").trim().toUpperCase();
@@ -54,6 +91,7 @@ export function UnmatchedPaymentsManager({ initialPayments, exceptions, till }: 
     const data = await response?.json().catch(() => ({}));
     if (response?.ok) {
       setPayments((rows) => rows.filter((row) => row.id !== payment.id));
+      setSelected((current) => { const next = new Set(current); next.delete(payment.id); return next; });
       setNotice(data.message || `${payment.receiptNumber} matched to ${orderReference}.`);
     } else setNotice(data?.error || "The payment could not be matched.");
     setWorking(null);
@@ -88,7 +126,7 @@ export function UnmatchedPaymentsManager({ initialPayments, exceptions, till }: 
 
   return <main className="compact-admin-page unmatched-payments-page">
     <header><div><Link href="/admin">← Dashboard</Link><h1>Unmatched M-Pesa payments</h1><p>Resolve Till receipts that Safaricom delivered but could not be attached safely to one order.</p></div><span className="unmatched-total"><WalletCards/><b>{payments.length}</b> awaiting match</span></header>
-    <div className="compact-table-tools"><label><Search/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search receipt, phone, reference or amount"/></label><button className="pull-recovery-button" type="button" disabled={recovering} onClick={recoverMissedPayments}><RefreshCw className={recovering ? "spin" : undefined}/>{recovering ? "Checking Safaricom…" : "Fetch missed Till payments"}</button><span>{shown.length} payments</span></div>
+    <div className="compact-table-tools"><label><Search/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search receipt, phone, reference or amount"/></label><button className="pull-recovery-button" type="button" disabled={recovering} onClick={recoverMissedPayments}><RefreshCw className={recovering ? "spin" : undefined}/>{recovering ? "Checking Safaricom…" : "Fetch missed Till payments"}</button>{selected.size ? <button type="button" className="unmatched-delete-button" disabled={deleting} onClick={deleteSelected}><Trash2/>{deleting ? "Deleting…" : `Delete ${selected.size} selected`}</button> : null}<span>{shown.length} payments</span></div>
     {notice ? <p className="form-message unmatched-notice" role="status">{notice}</p> : null}
     {till ? <section className="till-delivery"><header><PlugZap/><div><h2>Till payment delivery</h2><p>How a Safaricom payment reaches this portal without anyone pasting an SMS.</p></div></header>
       <ul>
@@ -99,8 +137,8 @@ export function UnmatchedPaymentsManager({ initialPayments, exceptions, till }: 
       </ul>
       <button type="button" className="pull-recovery-button" disabled={registering || !till.mpesaConfigured} onClick={registerTillCallbacks}><PlugZap/>{registering ? "Registering with Safaricom…" : registeredAt ? "Register Till callbacks again" : "Register Till callbacks with Safaricom"}</button>
     </section> : null}
-    {shown.length ? <div className="unmatched-table-scroller"><table className="unmatched-payments-table"><thead><tr><th>Receipt</th><th>Payer</th><th>Phone</th><th>M-Pesa reference</th><th>Received</th><th>Amount</th><th>Order match</th></tr></thead><tbody>{shown.map((payment) => <tr key={payment.id}>
-      <td><strong>{payment.receiptNumber}</strong></td><td>{payment.payerName || "Not supplied"}</td><td>{payment.phone || "Not supplied"}</td><td>{payment.accountReference || "No reference"}</td><td>{new Date(payment.createdAt).toLocaleString("en-KE")}</td><td className="payment-amount">KES {Number(payment.amount).toLocaleString()}</td>
+    {shown.length ? <div className="unmatched-table-scroller"><table className="unmatched-payments-table"><thead><tr><th><input type="checkbox" checked={allShownSelected} onChange={toggleSelectAllShown} aria-label="Select all shown payments"/></th><th>Receipt</th><th>Payer</th><th>Phone</th><th>M-Pesa reference</th><th>Received</th><th>Amount</th><th>Order match</th></tr></thead><tbody>{shown.map((payment) => <tr key={payment.id}>
+      <td><input type="checkbox" checked={selected.has(payment.id)} onChange={() => toggleSelected(payment.id)} aria-label={`Select payment ${payment.receiptNumber}`}/></td><td><strong>{payment.receiptNumber}</strong></td><td>{payment.payerName || "Not supplied"}</td><td>{payment.phone || "Not supplied"}</td><td>{payment.accountReference || "No reference"}</td><td>{new Date(payment.createdAt).toLocaleString("en-KE")}</td><td className="payment-amount">KES {Number(payment.amount).toLocaleString()}</td>
       <td className="unmatched-order-match">
         {payment.suggestion ? <p className="payment-suggestion"><CheckCircle2/><span>Likely: <Link href={`/admin/orders/${payment.suggestion.orderId}`}>{payment.suggestion.orderNumber}</Link> · {payment.suggestion.customerName}</span></p> : payment.candidates.length ? <p className="payment-suggestion uncertain"><AlertTriangle/><span>{payment.sameAmountReceiptCount > 1 ? `${payment.sameAmountReceiptCount} unmatched receipts have this amount — verify the receipt` : `${payment.candidates.length} orders have this amount — choose the correct one`}</span></p> : null}
         <div><label><span className={!payment.candidates.length ? "unmatched-inline-note" : undefined}>{payment.candidates.length ? "Choose matching Healthfield order" : "No safe automatic match"}</span>{payment.candidates.length ? <select value={references[payment.id] || ""} onChange={(event) => setReferences((current) => ({ ...current, [payment.id]: event.target.value }))}><option value="">Choose order</option>{payment.candidates.map((candidate) => <option key={candidate.orderId} value={candidate.orderNumber}>{candidate.orderNumber} · {candidate.customerName}</option>)}</select> : <input aria-label="Healthfield order reference" value={references[payment.id] || ""} onChange={(event) => setReferences((current) => ({ ...current, [payment.id]: event.target.value }))} placeholder="POS-… or HF-…"/>}</label><button type="button" disabled={working === payment.id || !(references[payment.id] || "").trim()} onClick={() => match(payment)}>{working === payment.id ? "Matching…" : "Match"}</button></div>

@@ -18,6 +18,8 @@ export const smsPurposes = [
   "ORDER_OUT_FOR_DELIVERY",
   "PAYMENT_CONFIRMED",
   "CASH_ON_DELIVERY_DUE",
+  "PRESCRIPTION_UPDATE",
+  "CONSULTATION_UPDATE",
   "OTP",
   "MARKETING",
 ] as const;
@@ -216,6 +218,32 @@ export function orderSms(purpose: SmsPurpose, context: OrderSmsContext): string 
 export function otpSms(code: string, minutes: number, pharmacyName = "Healthfield") {
   const brand = toGsm7(pharmacyName).trim() || "Healthfield";
   return toGsm7(`${code} is your ${brand} verification code. It expires in ${minutes} minutes. We will never ask you for this code.`);
+}
+
+/** What happened to a prescription request — received, or the pharmacist's decision. */
+export type PrescriptionSmsEvent = "RECEIVED" | "APPROVED" | "CLARIFICATION_NEEDED" | "DECLINED";
+
+export function prescriptionSms(event: PrescriptionSmsEvent, context: { customerName?: string | null; pharmacyName?: string; pharmacyPhone?: string | null }): string {
+  const brand = context.pharmacyName?.trim() || "Healthfield";
+  const hello = greeting(context.customerName);
+  const help = helpline(context.pharmacyPhone);
+  switch (event) {
+    case "RECEIVED":
+      return toGsm7(`${hello}${brand} received your prescription and it is now under pharmacist review.${help}`);
+    case "APPROVED":
+      return toGsm7(`${hello}your prescription has been approved. Sign in to review pricing and pay.${help}`);
+    case "CLARIFICATION_NEEDED":
+      return toGsm7(`${hello}the pharmacist needs more information about your prescription. Please check your account.${help}`);
+    case "DECLINED":
+      return toGsm7(`${hello}your prescription request could not be approved. Please check your account for details.${help}`);
+  }
+}
+
+export function consultationReceivedSms(context: { customerName?: string | null; pharmacyName?: string; pharmacyPhone?: string | null }): string {
+  const brand = context.pharmacyName?.trim() || "Healthfield";
+  const hello = greeting(context.customerName);
+  const help = helpline(context.pharmacyPhone);
+  return toGsm7(`${hello}${brand} received your consultation request. A healthcare professional will review it and reply through your account.${help}`);
 }
 
 /**

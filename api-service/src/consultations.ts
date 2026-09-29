@@ -12,12 +12,15 @@ import {
   consultationActions, consultationStatusAfterCustomerReply, type ConsultationAction, type ConsultationStatus,
 } from "../../lib/consultation-workflow";
 import { healthfieldOrderNumber } from "../../lib/order-number";
+import { consultationReceivedSms } from "../../lib/sms-templates";
 import { requireSession } from "./auth";
 import { getDb } from "./db";
 import { sendEmail } from "./email";
 import { json, safeFilename } from "./http";
 import { storefrontOrigin } from "./mutations";
+import { notificationSettings, pharmacyIdentity } from "./notification-settings";
 import { storageRoot, validatePrescriptionUpload } from "./prescription-files";
+import { sendSms } from "./sms";
 import { sessionHasPermission } from "./staff-permissions";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -104,7 +107,7 @@ export async function handleConsultations(request: Request, consultationId?: num
         actorId: auth.session.userId, action: "CONSULTATION_CREATED", entityType: "consultation",
         entityId: String(row.insertId), metadata: { reference, callbackRequested: parsed.data.callbackRequested },
       });
-      return { id: row.insertId, reference };
+      return { id: row.insertId, reference, phone: customer?.phone ?? null };
     });
 
     void sendEmail({
@@ -114,12 +117,17 @@ export async function handleConsultations(request: Request, consultationId?: num
       action: { label: "Open consultation", url: `${storefrontOrigin()}/account/consultations/${created.id}` },
       channel: "orders",
     });
-    if (process.env.NOTIFICATION_EMAIL) void sendEmail({
+    const notifications = await notificationSettings();
+    if (process.env.NOTIFICATION_EMAIL && notifications.notifyNewConsultation) void sendEmail({
       to: process.env.NOTIFICATION_EMAIL,
       subject: parsed.data.callbackRequested ? "New consultation request (callback requested)" : "New consultation request",
       message: `A new consultation request is waiting for review. Reference: ${created.reference}.`,
       channel: "orders",
     });
+    if (notifications.smsConsultationUpdatesEnabled && created.phone) {
+      const identity = await pharmacyIdentity();
+      void sendSms({ to: created.phone, purpose: "CONSULTATION_UPDATE", message: consultationReceivedSms({ customerName: auth.session.firstName, ...identity }) }).catch((error) => console.error("Consultation received SMS failed", { consultationId: created.id, error }));
+    }
     return json({ ok: true, id: created.id, reference: created.reference }, { status: 201 });
   } catch (error) {
     return errorResponse(error, "Consultation creation failed");

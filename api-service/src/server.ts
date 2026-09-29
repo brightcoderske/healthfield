@@ -16,7 +16,7 @@ import { handleDailyReportSend, runDailyReportIfDue } from "./daily-report";
 import { handlePosExpenses, handlePosHeldSales, handlePosReports, handlePosSessions, handlePosStockReceipts, posWorkspaceState } from "./pos";
 import { handleVatRemittances } from "./vat";
 import { handlePosSale } from "./pos-sale";
-import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bRegistration, handleC2bVerification, handleIncomingPaymentMatch, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, reconcilePendingStkPayments, recoverMissedMpesaPayments } from "./payment-handlers";
+import { finalizeExpiredPaymentCancellations, handleC2bConfirmation, handleC2bRegistration, handleC2bVerification, handleIncomingPaymentMatch, handleIncomingPaymentsDelete, handleManualPayment, handlePaymentCancel, handlePaymentReconcile, handlePaymentRetry, handlePaymentReview, handlePaymentStatus, handlePosIncomingPaymentConfirm, handlePullTransactionsNotification, handlePullTransactionsRecovery, handleStkNotification, handleTransactionStatusResult, handleTransactionStatusTimeout, reconcilePendingStkPayments, recoverMissedMpesaPayments } from "./payment-handlers";
 import {
   handleAuth, handleBlogs, handleCampaigns, handleChats, handleCustomerOrderReceived, handleInventory, handleOffers, handleOrders, handlePrescriptionCheckout, handlePrescriptionSelection, handlePrescriptions, handlePromotionalBanners, handlePromotionalImage, handleStaffPermissions, handleTaxonomy,
   handleProductImage, handleProducts, handleProductsBulk, handleProductVariants, handleReviews, handleSettings, handleStaff, handleStores, handleWalkInSales, serveProductImage,
@@ -147,6 +147,7 @@ async function route(request: Request, ip: string): Promise<Response> {
   if (url.pathname === "/v1/vat/remittances") return responseOf(handleVatRemittances(request));
   const incomingPaymentMatch = url.pathname.match(/^\/v1\/payments\/incoming\/(\d+)\/match$/);
   if (incomingPaymentMatch) return responseOf(handleIncomingPaymentMatch(request, Number(incomingPaymentMatch[1])));
+  if (url.pathname === "/v1/payments/incoming") return responseOf(handleIncomingPaymentsDelete(request));
   const posIncomingPaymentConfirmation = url.pathname.match(/^\/v1\/payments\/incoming\/(\d+)\/confirm-pos$/);
   if (posIncomingPaymentConfirmation) return responseOf(handlePosIncomingPaymentConfirm(request, Number(posIncomingPaymentConfirmation[1])));
   const paymentReviewMatch = url.pathname.match(/^\/v1\/payments\/(\d+)\/review$/);

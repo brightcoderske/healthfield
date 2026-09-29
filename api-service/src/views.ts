@@ -2105,6 +2105,11 @@ export async function handleView(request: Request, path: string) {
         taxNumber: siteSettings.taxNumber, vatEnabled: siteSettings.vatEnabled, vatRate: siteSettings.vatRate,
         posMpesaEnabled: siteSettings.posMpesaEnabled, posManualEnabled: siteSettings.posManualEnabled,
         mpesaTillNumber: siteSettings.mpesaTillNumber, mpesaAccountName: siteSettings.mpesaAccountName,
+        notifyNewOrder: siteSettings.notifyNewOrder, notifyOrderStatusChange: siteSettings.notifyOrderStatusChange,
+        notifyCustomerReceivedOrder: siteSettings.notifyCustomerReceivedOrder, notifyNewPrescription: siteSettings.notifyNewPrescription,
+        notifyNewConsultation: siteSettings.notifyNewConsultation, notifyNewCustomer: siteSettings.notifyNewCustomer,
+        notifyTillPayment: siteSettings.notifyTillPayment, smsPrescriptionUpdatesEnabled: siteSettings.smsPrescriptionUpdatesEnabled,
+        smsConsultationUpdatesEnabled: siteSettings.smsConsultationUpdatesEnabled,
       }).from(siteSettings).limit(1);
       return json({ settings: settings ?? null, paymentRuntime: paymentConfigurationSummary() });
     }

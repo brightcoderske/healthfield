@@ -93,6 +93,7 @@ export default async function Home({
     offers?: string;
     category?: string;
     condition?: string;
+    q?: string;
   }>;
 }) {
   const homeData = backendPublicJson<HomeData>("/v1/views/home", 30).catch(
@@ -232,6 +233,7 @@ export default async function Home({
         session ? { firstName: session.firstName, role: session.role } : null
       }
       offersOnly={offersOnly}
+      initialQuery={params.q ?? ""}
       initialCart={initialCart}
       initialWishlist={initialWishlist}
       guides={guides}

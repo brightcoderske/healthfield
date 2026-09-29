@@ -2835,18 +2835,23 @@ to{transform:rotate(360deg);}
 .till-delivery > button{margin-top:12px;}
 .unmatched-payments-table,
 .payment-exceptions table{width:100%;border-collapse:collapse;table-layout:fixed;}
-.unmatched-payments-table{min-width:1030px;}
+.unmatched-payments-table{min-width:1060px;}
 .unmatched-payments-table th,
 .payment-exceptions th{padding:9px 10px;color:#716a75;background:#f3eff4;text-align:left;font-size:8px;font-weight:850;letter-spacing:0.05em;text-transform:uppercase;}
 .unmatched-payments-table td,
 .payment-exceptions td{padding:10px;border-top:1px solid #eee9f0;color:#4d4650;font-size:9px;line-height:1.35;vertical-align:middle;overflow-wrap:anywhere;}
-.unmatched-payments-table th:nth-child(1){width:105px;}
-.unmatched-payments-table th:nth-child(2){width:145px;}
-.unmatched-payments-table th:nth-child(3){width:112px;}
-.unmatched-payments-table th:nth-child(4){width:140px;}
-.unmatched-payments-table th:nth-child(5){width:145px;}
-.unmatched-payments-table th:nth-child(6){width:105px;}
-.unmatched-payments-table th:nth-child(7){width:280px;}
+.unmatched-payments-table th:nth-child(1){width:30px;}
+.unmatched-payments-table th:nth-child(2){width:105px;}
+.unmatched-payments-table th:nth-child(3){width:145px;}
+.unmatched-payments-table th:nth-child(4){width:112px;}
+.unmatched-payments-table th:nth-child(5){width:140px;}
+.unmatched-payments-table th:nth-child(6){width:145px;}
+.unmatched-payments-table th:nth-child(7){width:105px;}
+.unmatched-payments-table th:nth-child(8){width:280px;}
+.unmatched-payments-table td:nth-child(1){text-align:center;}
+.unmatched-delete-button{min-height:34px;padding:0 11px;border:0;border-radius:7px;color:#fff;background:#8a2036;display:inline-flex;align-items:center;gap:6px;font-size:9px;font-weight:800;white-space:nowrap;}
+.unmatched-delete-button svg{width:14px;height:14px;}
+.unmatched-delete-button:disabled{opacity:.58;}
 .unmatched-payments-table tbody tr:hover,
 .payment-exceptions tbody tr:hover{background:#fdfafd;}
 .payment-amount{color:#62206e!important;font-weight:850;white-space:nowrap;}

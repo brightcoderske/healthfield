@@ -181,6 +181,7 @@ export function Storefront({
   contact,
   viewer,
   offersOnly,
+  initialQuery = "",
   initialCart,
   initialWishlist,
   guides = [],
@@ -210,6 +211,9 @@ export function Storefront({
   };
   viewer: { firstName: string; role: string } | null;
   offersOnly: boolean;
+  /** What was typed the last time this page was left — carried in the URL so the
+   * back button returns to the search that was running, not a blank box. */
+  initialQuery?: string;
   initialCart: Record<number, number>;
   initialWishlist: number[];
   guides?: Guide[];
@@ -217,7 +221,7 @@ export function Storefront({
   promotions?: Promotion[];
   layoutSeed?: number;
 }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [cart, setCart] = useState<Record<number, number>>(initialCart);
   const [wishlist] = useState<number[]>(initialWishlist);
   const [selectedCategory, setSelectedCategory] = useState<number | null>(
@@ -636,6 +640,18 @@ export function Storefront({
     closeMobileMenu();
     scheduleSearchResultsScroll();
   }
+  // Kept in the address bar — not pushed through the router, which would re-fetch this
+  // force-dynamic page on every keystroke — purely so the entry the Back button lands on
+  // already carries the search that was running, instead of a blank one.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const trimmed = query.trim();
+    if (trimmed) params.set("q", trimmed);
+    else params.delete("q");
+    const search = params.toString();
+    const url = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
+    window.history.replaceState(window.history.state, "", url);
+  }, [query]);
   useEffect(() => {
     if (!openMenu) return;
     const dismiss = (event: Event) => {

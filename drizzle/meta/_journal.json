@@ -351,6 +351,13 @@
       "when": 1789259200000,
       "tag": "0049_featured_active_only",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "5",
+      "when": 1789345600000,
+      "tag": "0050_notification_preferences",
+      "breakpoints": true
     }
   ]
 }

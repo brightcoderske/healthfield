@@ -12,13 +12,14 @@ import {
 import { DEFAULT_STAFF_PERMISSIONS, STAFF_PERMISSION_VALUES, normalizeStaffPermissions } from "../../lib/staff-permissions";
 import { healthfieldOrderNumber } from "../../lib/order-number";
 import { allowedOrderStatuses, canTransitionOrderStatus, isStockFinalizedOrderStatus, orderDetailsAreEditable, orderStatuses, orderTransitionChangesAllocation } from "../../lib/order-status-transitions";
+import { notificationSettings, pharmacyIdentity } from "./notification-settings";
 import { canApplyPrescriptionAction, prescriptionReviewActions, type PrescriptionReviewAction, type PrescriptionStatus } from "../../lib/prescription-workflow";
 import { DispensingError, dispenseRules, resolveDispenseSelection, type DispenseRule } from "../../lib/prescription-dispensing";
 import { createPasswordResetToken, createSessionToken, createUploadToken, hasStoredTimestamp, requireSession, requestSession, revokeSession, revokeUserSessions, verifyPasswordResetToken } from "./auth";
 import { getDb } from "./db";
 import { repriceDeliveryForBranch, resolveDeliveryQuote } from "./delivery";
 import { sendSms, smsConfiguration } from "./sms";
-import { marketingSms } from "../../lib/sms-templates";
+import { marketingSms, prescriptionSms } from "../../lib/sms-templates";
 import { MAX_VAT_RATE, parseVatRate, vatOnNet } from "../../lib/vat";
 import { featuredEvictions } from "../../lib/featured-products";
 import { extractContentReferences, isPersonalised, renderContentBlocks, renderMergeFields, type MergeRecipient } from "../../lib/campaign-merge";
@@ -293,7 +294,7 @@ export async function handleAuth(request: Request, action: string) {
       if (result.affectedRows === 1) await tx.update(orders).set({ customerId: user.id }).where(and(isNull(orders.customerId), sql`lower(trim(${orders.email})) = ${user.email.trim().toLowerCase()}`));
       return result.affectedRows === 1;
     });
-    if (activated && process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New verified Healthfield customer", message: `${user.firstName} ${user.lastName} activated a customer account.\nEmail: ${user.email}\nPhone: ${user.phone || "Not provided"}`, channel: "security" }).catch(console.error);
+    if (activated && process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewCustomer) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New verified Healthfield customer", message: `${user.firstName} ${user.lastName} activated a customer account.\nEmail: ${user.email}\nPhone: ${user.phone || "Not provided"}`, channel: "security" }).catch(console.error);
     return json({ ok: true, alreadyActivated: !activated, message: activated ? "Your email has been verified and your account is ready." : "Your email is already verified. You can continue to login." });
   }
   if (action === "resend-verification" && request.method === "POST") {
@@ -369,7 +370,10 @@ export async function handleOrders(request: Request, id?: number) {
     if (!order) return json({ error: "Order not found." }, { status: 404 });
     const [linkedPrescription]=await db.select({id:prescriptions.id}).from(prescriptions).where(eq(prescriptions.orderId,id)).limit(1);
     if(linkedPrescription)return json({error:`This is a frozen prescription proposal. Delete prescription #${linkedPrescription.id} from the prescription modal so both records are handled safely.`},{status:409});
-    if (!["NEW", "AWAITING_PAYMENT", "CONFIRMED", "UNDER_REVIEW", "CANCELLED"].includes(order.status)) return json({ error: "Only unfulfilled or cancelled orders can be deleted. Completed and dispatched orders are retained for audit records." }, { status: 409 });
+    if (order.status === "OUT_FOR_DELIVERY" || order.status === "COMPLETED") return json({ error: "Orders already out for delivery or completed are retained for audit records." }, { status: 409 });
+    // Deleting before dispatch never orphans a rider or a customer who already has the
+    // goods; deleting after does, which is why those two statuses above stay protected.
+    const finalStatus = isStockFinalizedOrderStatus(order.status);
     await db.transaction(async tx => {
       const items = await tx.select({ id: orderItems.id, productId: orderItems.productId }).from(orderItems).where(eq(orderItems.orderId, id));
       if (items.length) {
@@ -378,7 +382,12 @@ export async function handleOrders(request: Request, id?: number) {
           const item = items.find((row) => row.id === fulfilment.orderItemId);
           if (!item?.productId || fulfilment.quantityReserved <= 0) continue;
           const [stock] = await tx.select().from(branchInventory).where(and(eq(branchInventory.branchId, fulfilment.branchId), eq(branchInventory.productId, item.productId))).limit(1).for("update");
-          if (stock) await tx.update(branchInventory).set({ quantityReserved: Math.max(0, stock.quantityReserved - fulfilment.quantityReserved), updatedBy: auth.session.userId }).where(eq(branchInventory.id, stock.id));
+          if (!stock) continue;
+          // A finalized fulfilment (ready for dispatch/pickup) already moved its quantity
+          // out of "reserved" and off "available" — so undoing it credits available stock
+          // back, not reserved, or the deleted order's units would vanish from the shelf.
+          if (finalStatus) await tx.update(branchInventory).set({ quantityAvailable: stock.quantityAvailable + fulfilment.quantityReserved, updatedBy: auth.session.userId }).where(eq(branchInventory.id, stock.id));
+          else await tx.update(branchInventory).set({ quantityReserved: Math.max(0, stock.quantityReserved - fulfilment.quantityReserved), updatedBy: auth.session.userId }).where(eq(branchInventory.id, stock.id));
         }
         await tx.delete(orderItemFulfilments).where(inArray(orderItemFulfilments.orderItemId, items.map(item => item.id)));
       }
@@ -493,7 +502,7 @@ export async function handleOrders(request: Request, id?: number) {
       const update = orderStatusEmailContent({ name: notificationName, orderId: id, orderNumber: order.orderNumber, status, fulfilmentMethod: order.fulfilmentMethod, storefrontOrigin: storefrontOrigin() });
       void sendEmail({ to: notificationEmail, ...update, channel: "orders" });
     }
-    if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.`, channel:"orders" });
+    if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyOrderStatusChange) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.`, channel:"orders" });
     return json({ok:true,status,delivery:repricing});
   }
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
@@ -629,7 +638,7 @@ Amount due on delivery: KES ${payable.toLocaleString()}
 
 Please have the exact amount ready for the rider.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"CASH ON DELIVERY"}), channel:"orders" });
   if (orderEmail && parsed.data.paymentMethod === "MANUAL_MPESA" && paymentStatus !== "PAID") void sendEmail({ to: orderEmail, subject: `Payment proof received for ${orderNumber}`, message: `Hello ${parsed.data.fullName},\n\nWe received your payment proof for order ${orderNumber}. Total: KES ${payable.toLocaleString()}. We will confirm it before processing the order.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"PAYMENT REVIEW"}), channel:"orders" });
-  if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${payable.toLocaleString()}.`, channel:"orders" });
+  if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewOrder) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${payable.toLocaleString()}.`, channel:"orders" });
   return json({ ok: true, id: result.orderId, orderNumber, total: payable, vat, paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
 }
 
@@ -650,7 +659,7 @@ export async function handleCustomerOrderReceived(request: Request, id: number) 
     await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_RECEIVED_BY_CUSTOMER", entityType: "order", entityId: String(order.id), metadata: { orderNumber: order.orderNumber, fromStatus: "OUT_FOR_DELIVERY", toStatus: "COMPLETED" } });
   });
   queuePaidOrderNotification(order.id, "ORDER_COMPLETED");
-  if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Customer received ${order.orderNumber}`, message: `${order.customerName} confirmed that delivery order ${order.orderNumber} was received. The order is now completed.`, channel: "orders" });
+  if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyCustomerReceivedOrder) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Customer received ${order.orderNumber}`, message: `${order.customerName} confirmed that delivery order ${order.orderNumber} was received. The order is now completed.`, channel: "orders" });
   return json({ ok: true, status: "COMPLETED", message: "Thank you. The pharmacy has been notified that you received the order." });
 }
 
@@ -1920,6 +1929,11 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
         if(action==="REQUEST_CLARIFICATION")void sendEmail({to:result.customer.email,subject:"Action required for your prescription",message:`Hello ${result.customer.firstName},\n\nA pharmacist needs more information before completing your prescription request.\n\n${parsed.data.pharmacistNotes}`,action:{label:"Review prescription request",url:`${storefrontOrigin()}/account/prescriptions/${downloadId}`},channel:"orders"});
         if(action==="APPROVE")void sendEmail({to:result.customer.email,subject:"Your prescription is approved and ready",message:`Hello ${result.customer.firstName},\n\nYour prescription has been approved. The confirmed medicines total KES ${Number(result.orderTotal).toLocaleString()}. Review the proposed order, choose delivery or pickup and proceed to payment.`,action:{label:"Review and pay",url:`${storefrontOrigin()}/account/prescriptions/${downloadId}`},channel:"orders"});
         if(action==="DECLINE")void sendEmail({to:result.customer.email,subject:"Prescription review update",message:`Hello ${result.customer.firstName},\n\nThis prescription request could not be approved.\n\n${parsed.data.pharmacistNotes}`,action:{label:"View prescription request",url:`${storefrontOrigin()}/account/prescriptions/${downloadId}`},channel:"orders"});
+        if((await notificationSettings()).smsPrescriptionUpdatesEnabled&&result.customer.phone){
+          const event=action==="REQUEST_CLARIFICATION"?"CLARIFICATION_NEEDED":action==="APPROVE"?"APPROVED":"DECLINED";
+          const identity=await pharmacyIdentity();
+          void sendSms({to:result.customer.phone,purpose:"PRESCRIPTION_UPDATE",message:prescriptionSms(event,{customerName:result.customer.firstName,...identity})}).catch((error)=>console.error("Prescription review SMS failed",{prescriptionId:downloadId,action,error}));
+        }
         return json({ok:true,...result});
       }catch(error){if(error instanceof PrescriptionWorkflowError)return json({error:error.message},{status:error.status});console.error("Prescription review failed",{prescriptionId:downloadId,action,error});return json({error:"The prescription review could not be saved."},{status:500});}
     }
@@ -1954,7 +1968,7 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   const storedPath = path.join(directory, storedName);
   await writeFile(storedPath, bytes, { flag: "wx" });
   try {
-    const [sender] = await db.select({ firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.id, auth.session.userId)).limit(1);
+    const [sender] = await db.select({ firstName: users.firstName, lastName: users.lastName, phone: users.phone }).from(users).where(eq(users.id, auth.session.userId)).limit(1);
     const senderName = `${sender?.firstName || auth.session.firstName} ${sender?.lastName || ""}`.trim().slice(0, 200);
     const displayName = `Prescription - ${senderName} - ${new Date().toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}${extension}`;
     const created = await db.transaction(async (tx) => {
@@ -1964,7 +1978,12 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
       return requestRow;
     });
     void sendEmail({ to: auth.session.email, subject: "Prescription under pharmacist review", message: `Hello ${auth.session.firstName},\n\nWe received your prescription and placed it under pharmacist review.${linkedProducts.length ? ` ${linkedProducts.length} prescription ${linkedProducts.length === 1 ? "medicine was" : "medicines were"} linked from your cart; prices will be confirmed by the pharmacist.` : " The pharmacist will identify the medicines, availability, quantities and prices."}`, action: { label: "Track prescription", url: `${storefrontOrigin()}/account/prescriptions/${created.insertId}` }, channel: "orders" });
-    if (process.env.NOTIFICATION_EMAIL) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New prescription under review", message: `A new prescription request is ready for pharmacist review. Reference: ${created.insertId}.`, channel: "orders" });
+    const receivedNotifications = await notificationSettings();
+    if (process.env.NOTIFICATION_EMAIL && receivedNotifications.notifyNewPrescription) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New prescription under review", message: `A new prescription request is ready for pharmacist review. Reference: ${created.insertId}.`, channel: "orders" });
+    if (receivedNotifications.smsPrescriptionUpdatesEnabled && sender?.phone) {
+      const identity = await pharmacyIdentity();
+      void sendSms({ to: sender.phone, purpose: "PRESCRIPTION_UPDATE", message: prescriptionSms("RECEIVED", { customerName: auth.session.firstName, ...identity }) }).catch((error) => console.error("Prescription received SMS failed", { prescriptionId: created.insertId, error }));
+    }
     return json({ ok: true, id: created.insertId, linkedProductIds: linkedProducts.map((product) => product.id) }, { status: 201 });
   } catch (error) {
     await unlink(storedPath).catch(() => undefined);
@@ -2090,7 +2109,7 @@ export async function handleInventory(request: Request, id: number) {
 export async function handleSettings(request: Request) {
   const db = getDb();
   if (request.method === "GET") {
-    const [settings] = await db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone, whatsapp: siteSettings.whatsapp, supportEmail: siteSettings.supportEmail, address: siteSettings.address, openingHours: siteSettings.openingHours, deliveryMessage: siteSettings.deliveryMessage, freeDeliveryThreshold: siteSettings.freeDeliveryThreshold,licenceTitle:siteSettings.licenceTitle,licenceNumber:siteSettings.licenceNumber,licenceImageUrl:siteSettings.licenceImageUrl,onlineMpesaEnabled:siteSettings.onlineMpesaEnabled,onlineManualEnabled:siteSettings.onlineManualEnabled,posCashEnabled:siteSettings.posCashEnabled,posMpesaEnabled:siteSettings.posMpesaEnabled,posManualEnabled:siteSettings.posManualEnabled,mpesaTillNumber:siteSettings.mpesaTillNumber,mpesaAccountName:siteSettings.mpesaAccountName }).from(siteSettings).limit(1);
+    const [settings] = await db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone, whatsapp: siteSettings.whatsapp, supportEmail: siteSettings.supportEmail, address: siteSettings.address, openingHours: siteSettings.openingHours, deliveryMessage: siteSettings.deliveryMessage, freeDeliveryThreshold: siteSettings.freeDeliveryThreshold,licenceTitle:siteSettings.licenceTitle,licenceNumber:siteSettings.licenceNumber,licenceImageUrl:siteSettings.licenceImageUrl,onlineMpesaEnabled:siteSettings.onlineMpesaEnabled,onlineManualEnabled:siteSettings.onlineManualEnabled,posCashEnabled:siteSettings.posCashEnabled,posMpesaEnabled:siteSettings.posMpesaEnabled,posManualEnabled:siteSettings.posManualEnabled,mpesaTillNumber:siteSettings.mpesaTillNumber,mpesaAccountName:siteSettings.mpesaAccountName,notifyNewOrder:siteSettings.notifyNewOrder,notifyOrderStatusChange:siteSettings.notifyOrderStatusChange,notifyCustomerReceivedOrder:siteSettings.notifyCustomerReceivedOrder,notifyNewPrescription:siteSettings.notifyNewPrescription,notifyNewConsultation:siteSettings.notifyNewConsultation,notifyNewCustomer:siteSettings.notifyNewCustomer,notifyTillPayment:siteSettings.notifyTillPayment,smsPrescriptionUpdatesEnabled:siteSettings.smsPrescriptionUpdatesEnabled,smsConsultationUpdatesEnabled:siteSettings.smsConsultationUpdatesEnabled }).from(siteSettings).limit(1);
     return json({ settings: settings ?? null });
   }
   const auth = await requireSession(request, [...admins]);
@@ -2100,6 +2119,7 @@ export async function handleSettings(request: Request) {
     address: z.string().trim().max(1000), openingHours: z.string().trim().max(255), deliveryMessage: z.string().trim().min(2).max(255), freeDeliveryThreshold: z.coerce.number().nonnegative().optional(),
     facebookUrl: z.string().trim().url().or(z.literal("")), instagramUrl: z.string().trim().url().or(z.literal("")), xUrl: z.string().trim().url().or(z.literal("")), tiktokUrl: z.string().trim().url().or(z.literal("")), licenceTitle:z.string().trim().max(190),licenceNumber:z.string().trim().max(120),licenceImageUrl:z.string().trim().max(500), requireTeamTwoFactor: z.boolean(),
     onlineMpesaEnabled:z.boolean(),onlineManualEnabled:z.boolean(),onlineCodEnabled:z.boolean(),posCashEnabled:z.boolean(),posMpesaEnabled:z.boolean(),posManualEnabled:z.boolean(),mpesaTillNumber:z.string().trim().max(30),mpesaAccountName:z.string().trim().max(150),
+    notifyNewOrder:z.boolean(),notifyOrderStatusChange:z.boolean(),notifyCustomerReceivedOrder:z.boolean(),notifyNewPrescription:z.boolean(),notifyNewConsultation:z.boolean(),notifyNewCustomer:z.boolean(),notifyTillPayment:z.boolean(),smsPrescriptionUpdatesEnabled:z.boolean(),smsConsultationUpdatesEnabled:z.boolean(),
     // Disclosure only: shelf prices already include VAT, so this changes the receipt
     // and nothing a customer is charged. 0 keeps the line off the receipt.
     taxNumber:z.string().trim().max(60),vatEnabled:z.boolean(),vatRate:z.coerce.number().min(0).max(MAX_VAT_RATE),

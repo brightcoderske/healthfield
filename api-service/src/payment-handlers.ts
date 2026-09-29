@@ -7,6 +7,7 @@ import { requireTeamPermission } from "./staff-permissions";
 import { getDb } from "./db";
 import { json } from "./http";
 import { buildC2bCallbackUrls, classifyStkQueryResult, forbiddenCallbackWord, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, registerC2bUrls, selectIncomingPaymentCandidate, selectPaymentForIncoming, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, validDateOrNull, type IncomingMpesaPayment } from "./mpesa";
+import { notificationSettings } from "./notification-settings";
 import { queuePaidOrderNotification } from "./order-notifications";
 import { consumePosBatches } from "./pos-inventory";
 
@@ -648,9 +649,9 @@ async function ingestIncomingPayment(incoming: IncomingMpesaPayment, payload: Re
   if (isNewIncoming) {
     try {
       await db.insert(activityLogs).values({ actorId: null, action: "MPESA_TILL_PAYMENT_RECEIVED", entityType: "mpesa_incoming_payment", entityId: String(incomingId), metadata: { receiptNumber: incoming.receiptNumber, amount: incoming.amount, accountReference: incoming.accountReference, source } });
-      const recipients = process.env.NOTIFICATION_EMAIL
+      const recipients = (await notificationSettings()).notifyTillPayment ? (process.env.NOTIFICATION_EMAIL
         ? [process.env.NOTIFICATION_EMAIL]
-        : (await db.select({ email: users.email }).from(users).where(and(inArray(users.role, ["ADMIN", "SUPER_ADMIN"]), eq(users.isActive, true)))).map((row) => row.email);
+        : (await db.select({ email: users.email }).from(users).where(and(inArray(users.role, ["ADMIN", "SUPER_ADMIN"]), eq(users.isActive, true)))).map((row) => row.email)) : [];
       const reference = incoming.accountReference || "No reference supplied";
       const payer = incoming.payerName || "Name not supplied";
       if (recipients.length) void sendEmail({
@@ -795,6 +796,23 @@ export async function handleIncomingPaymentMatch(request: Request, incomingId: n
   if (!payment || payment.method === "CASH") return json({ error: "That order has no compatible M-Pesa payment attempt." }, { status: 409 });
   const result = await markPaymentPaid(payment.id, { receiptNumber: incoming.receiptNumber, amount: Number(incoming.amount), phone: incoming.phone, providerPayload: incoming.providerPayload || undefined, actorId: auth.session.userId, incomingPaymentId: incoming.id });
   return json({ ok: true, orderId: order.id, orderNumber: order.orderNumber, inventoryFinalized: result.inventoryFinalized, message: result.inventoryFinalized ? "Payment matched and the sale was completed." : "Payment matched. The order is paid and requires fulfilment review because its stock had been released." });
+}
+
+export async function handleIncomingPaymentsDelete(request: Request) {
+  const auth = await requireSession(request, [...admins]);
+  if ("response" in auth) return auth.response;
+  if (request.method !== "DELETE") return json({ error: "Method not allowed." }, { status: 405 });
+  const input = await request.json().catch(() => null) as { ids?: unknown } | null;
+  const ids = Array.isArray(input?.ids) ? input.ids.filter((value): value is number => Number.isInteger(value)) : [];
+  if (!ids.length) return json({ error: "Choose at least one payment to delete." }, { status: 400 });
+  const db = getDb();
+  // Still unmatched at the moment of delete: an already-matched receipt is now real
+  // payment history tied to an order and is never a candidate for this button.
+  const rows = await db.select({ id: mpesaIncomingPayments.id, receiptNumber: mpesaIncomingPayments.receiptNumber }).from(mpesaIncomingPayments).where(and(inArray(mpesaIncomingPayments.id, ids), isNull(mpesaIncomingPayments.matchedTransactionId)));
+  if (!rows.length) return json({ error: "Those payments were not found, or have since been matched to an order." }, { status: 409 });
+  await db.delete(mpesaIncomingPayments).where(inArray(mpesaIncomingPayments.id, rows.map((row) => row.id)));
+  await db.insert(activityLogs).values({ actorId: auth.session.userId, action: "INCOMING_PAYMENTS_DELETED", entityType: "mpesa_incoming_payment", entityId: null, metadata: { count: rows.length, receiptNumbers: rows.map((row) => row.receiptNumber) } });
+  return json({ ok: true, deletedCount: rows.length });
 }
 
 export async function handlePosIncomingPaymentConfirm(request: Request, incomingId: number) {

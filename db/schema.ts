@@ -541,6 +541,20 @@ export const siteSettings = mysqlTable("site_settings", {
   deliveryDetourFactor: decimal("delivery_detour_factor", { precision: 4, scale: 2 }).default("1.30").notNull(),
   deliveryUseRoadDistance: boolean("delivery_use_road_distance").default(true).notNull(),
   deliveryFallbackFee: decimal("delivery_fallback_fee", { precision: 12, scale: 2 }).default("250").notNull(),
+  // Which internal alerts land in the admin inbox. Till payments default off: every
+  // Till receipt raised one, and on a busy till day they buried the "new order" email
+  // that actually needed a look.
+  notifyNewOrder: boolean("notify_new_order").default(true).notNull(),
+  notifyOrderStatusChange: boolean("notify_order_status_change").default(true).notNull(),
+  notifyCustomerReceivedOrder: boolean("notify_customer_received_order").default(true).notNull(),
+  notifyNewPrescription: boolean("notify_new_prescription").default(true).notNull(),
+  notifyNewConsultation: boolean("notify_new_consultation").default(true).notNull(),
+  notifyNewCustomer: boolean("notify_new_customer").default(true).notNull(),
+  notifyTillPayment: boolean("notify_till_payment").default(false).notNull(),
+  // Customer-facing SMS for prescription and consultation updates. Off by default: SMS
+  // costs money per message, so a shop opts in rather than inheriting a new charge.
+  smsPrescriptionUpdatesEnabled: boolean("sms_prescription_updates_enabled").default(false).notNull(),
+  smsConsultationUpdatesEnabled: boolean("sms_consultation_updates_enabled").default(false).notNull(),
   updatedBy: int("updated_by").references(() => users.id),
   ...timestamps,
 });
