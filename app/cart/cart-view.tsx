@@ -163,7 +163,7 @@ export function CartView({
       <div className="cart-layout">
         <section>
           {initialPrescriptions.map((prescription, position) => (
-            <article key={`prescription-${prescription.id}`} className="cart-prescription-ready">
+            <div key={`prescription-${prescription.id}`} className="cart-prescription-ready">
               <header>
                 <strong>Prescription #{prescription.id} is ready to pay</strong>
                 <b>KES {prescription.total.toLocaleString()}</b>
@@ -217,7 +217,7 @@ export function CartView({
                   Choose only some medicines
                 </Link>
               </div>
-            </article>
+            </div>
           ))}
           {initialOffers.map((offer) => (
             <article

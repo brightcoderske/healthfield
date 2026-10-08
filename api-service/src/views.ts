@@ -1323,7 +1323,7 @@ export async function handleView(request: Request, path: string) {
     if ("response" in auth) return auth.response;
     const db = getDb();
     const waiting = await db
-      .select({ id: prescriptions.id, orderNumber: orders.orderNumber })
+      .select({ id: prescriptions.id, orderId: orders.id, orderNumber: orders.orderNumber })
       .from(prescriptions)
       .innerJoin(orders, eq(orders.id, prescriptions.orderId))
       .where(
@@ -1335,6 +1335,16 @@ export async function handleView(request: Request, path: string) {
         ),
       )
       .orderBy(desc(prescriptions.createdAt));
+    // A prescription whose payment has been started or is awaiting confirmation is no longer
+    // "ready to pay": showing it again would invite a second payment for the same order.
+    const inProgress = waiting.length
+      ? await db
+          .select({ orderId: paymentTransactions.orderId })
+          .from(paymentTransactions)
+          .where(and(inArray(paymentTransactions.orderId, waiting.map((row) => row.orderId)), inArray(paymentTransactions.status, ["INITIATED", "PENDING", "REQUIRES_REVIEW"])))
+      : [];
+    const busy = new Set(inProgress.map((row) => row.orderId));
+    waiting.splice(0, waiting.length, ...waiting.filter((row) => !busy.has(row.orderId)));
     const lines = waiting.length
       ? await db
           .select()
