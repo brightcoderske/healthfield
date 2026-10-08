@@ -109,10 +109,13 @@ function mergeProducts(primary: CatalogProduct[], secondary: CatalogProduct[]) {
 // that, so the list no longer has to be cut to six to stop it stretching the page.
 // Administrator picks still lead it; the rest follow rather than being dropped.
 const CONDITION_PREVIEW = 5;
-// How many products the landing grid renders at a time. The full catalogue stays
-// reachable through search, category pages and the sitemap; this only keeps the
-// first paint light.
-const PRODUCT_PAGE_SIZE = 50;
+// How many products the landing grid opens with, and how many each press of "Show more"
+// adds. The full catalogue stays reachable through search, category pages and the
+// sitemap; the small first screenful keeps the page from becoming a long scroll before
+// the visitor has asked for anything. Both are multiples of 5 and 2, so the rows stay
+// full on a wide screen (5 across) and on a phone (2 across).
+const PRODUCT_INITIAL_SIZE = 30;
+const PRODUCT_STEP_SIZE = 10;
 
 type HeaderMenu = "category" | "condition";
 
@@ -243,7 +246,7 @@ export function Storefront({
     key: string;
     products: CatalogProduct[];
   } | null>(null);
-  const [visibleCount, setVisibleCount] = useState(PRODUCT_PAGE_SIZE);
+  const [visibleCount, setVisibleCount] = useState(PRODUCT_INITIAL_SIZE);
   const [searchResults, setSearchResults] = useState<
     (SearchPayload & { term: string }) | null
   >(null);
@@ -279,21 +282,26 @@ export function Storefront({
     ],
   );
 
-  const orderedCategories = [...initialCategories].sort((left, right) => {
+  // Memoised on the list it is built from, so everything derived from it below can name it
+  // as a dependency: a fresh array on every render would make each of those memos stale
+  // or pointless.
+  const displayedCategories = useMemo(() => {
     const isPrescription = (category: CatalogCategory) =>
       `${category.name} ${category.slug}`
         .toLowerCase()
         .includes("prescription");
-    return Number(isPrescription(left)) - Number(isPrescription(right));
-  });
-  const displayedCategories = orderedCategories.map((category, index) => ({
-    ...category,
-    ...(`${category.name} ${category.slug}`
-      .toLowerCase()
-      .includes("prescription")
-      ? { icon: Upload, color: "green" }
-      : categoryPresentation[index % categoryPresentation.length]),
-  }));
+    return [...initialCategories]
+      .sort(
+        (left, right) =>
+          Number(isPrescription(left)) - Number(isPrescription(right)),
+      )
+      .map((category, index) => ({
+        ...category,
+        ...(isPrescription(category)
+          ? { icon: Upload, color: "green" }
+          : categoryPresentation[index % categoryPresentation.length]),
+      }));
+  }, [initialCategories]);
   const prescriptionCategory = displayedCategories.find((category) =>
     `${category.name} ${category.slug}`.toLowerCase().includes("prescription"),
   );
@@ -313,8 +321,7 @@ export function Storefront({
       ]);
     }
     return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialCategories]);
+  }, [displayedCategories]);
   const orphaned = useMemo(() => {
     const listed = new Set(initialCategories.map((category) => category.id));
     return (category: CatalogCategory) =>
@@ -530,7 +537,7 @@ export function Storefront({
     setSelectedCategory(categoryId);
     setSelectedCondition(null);
     setQuery("");
-    setVisibleCount(PRODUCT_PAGE_SIZE);
+    setVisibleCount(PRODUCT_INITIAL_SIZE);
     setOpenMenu(null);
     setOpenCategoryBranch(
       initialCategories.find((category) => category.id === categoryId)
@@ -544,7 +551,7 @@ export function Storefront({
     setSelectedCondition(conditionId);
     setSelectedCategory(null);
     setQuery("");
-    setVisibleCount(PRODUCT_PAGE_SIZE);
+    setVisibleCount(PRODUCT_INITIAL_SIZE);
     setOpenMenu(null);
     dismissHeaderMenu();
     closeMobileMenu();
@@ -646,7 +653,7 @@ export function Storefront({
     setQuery(nextQuery);
     setSelectedCategory(null);
     setSelectedCondition(null);
-    setVisibleCount(PRODUCT_PAGE_SIZE);
+    setVisibleCount(PRODUCT_INITIAL_SIZE);
     if (searchStarting) scheduleSearchResultsScroll();
   }
   function viewSearchResults() {
@@ -751,7 +758,7 @@ export function Storefront({
     );
     const showAll = () => {
       setSelectedCategory(null);
-      setVisibleCount(PRODUCT_PAGE_SIZE);
+      setVisibleCount(PRODUCT_INITIAL_SIZE);
       document
         .getElementById("categories")
         ?.scrollIntoView({ behavior: "smooth" });
@@ -1377,7 +1384,7 @@ export function Storefront({
                   aria-label="Remove condition filter"
                   onClick={() => {
                     setSelectedCondition(null);
-                    setVisibleCount(PRODUCT_PAGE_SIZE);
+                    setVisibleCount(PRODUCT_INITIAL_SIZE);
                   }}
                 >
                   ×
@@ -1408,7 +1415,7 @@ export function Storefront({
                       // the grid.
                       setSelectedCategory(selectedCategory === id ? null : id);
                       setSelectedCondition(null);
-                      setVisibleCount(PRODUCT_PAGE_SIZE);
+                      setVisibleCount(PRODUCT_INITIAL_SIZE);
                     }}
                   >
                     <Icon />
@@ -1433,7 +1440,7 @@ export function Storefront({
                               selectedCategory === child.id ? id : child.id,
                             );
                             setSelectedCondition(null);
-                            setVisibleCount(PRODUCT_PAGE_SIZE);
+                            setVisibleCount(PRODUCT_INITIAL_SIZE);
                           }}
                         >
                           {child.name}
@@ -1450,7 +1457,7 @@ export function Storefront({
                 setSelectedCategory(null);
                 setSelectedCondition(null);
                 setQuery("");
-                setVisibleCount(PRODUCT_PAGE_SIZE);
+                setVisibleCount(PRODUCT_INITIAL_SIZE);
               }}
             >
               Clear filters →
@@ -1594,7 +1601,7 @@ export function Storefront({
               className="catalogue-show-more"
               type="button"
               onClick={() =>
-                setVisibleCount((count) => count + PRODUCT_PAGE_SIZE)
+                setVisibleCount((count) => count + PRODUCT_STEP_SIZE)
               }
             >
               Show more products
