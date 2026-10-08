@@ -150,6 +150,11 @@ export const products = mysqlTable("products", {
   strength: varchar("strength", { length: 80 }),
   activeIngredient: varchar("active_ingredient", { length: 190 }),
   prescriptionRequired: boolean("prescription_required").default(false).notNull(),
+  // Sold normally but never advertised: left out of the homepage, category lists,
+  // featured and every recommendation rail, and found only by searching for it. Medicines
+  // that need a prescription are treated the same way without this being set; this is
+  // for the ones that do not but still should not be promoted (pharmacy and poisons rules).
+  searchOnly: boolean("search_only").default(false).notNull(),
   isFeatured: boolean("is_featured").default(false).notNull(),
   // When the star was put on, which is what decides who falls off the shelf when an
   // eleventh product is featured. The product's own createdAt cannot answer that.
@@ -414,6 +419,10 @@ export const orderItems = mysqlTable("order_items", {
   // offer id and title so the customer sees a single priced line.
   offerId: int("offer_id"),
   offerTitle: varchar("offer_title", { length: 180 }),
+  // Lines the customer added from their own cart to a prescription order, as opposed to
+  // the pharmacist's. They are replaced on every checkout attempt, so the cart can change
+  // between attempts without leaving stale lines on the order.
+  addedByCustomer: boolean("added_by_customer").default(false).notNull(),
   ...timestamps,
 }, (table) => [index("order_items_order_idx").on(table.orderId)]);
 
@@ -551,10 +560,10 @@ export const siteSettings = mysqlTable("site_settings", {
   notifyNewConsultation: boolean("notify_new_consultation").default(true).notNull(),
   notifyNewCustomer: boolean("notify_new_customer").default(true).notNull(),
   notifyTillPayment: boolean("notify_till_payment").default(false).notNull(),
-  // Customer-facing SMS for prescription and consultation updates. Off by default: SMS
-  // costs money per message, so a shop opts in rather than inheriting a new charge.
-  smsPrescriptionUpdatesEnabled: boolean("sms_prescription_updates_enabled").default(false).notNull(),
-  smsConsultationUpdatesEnabled: boolean("sms_consultation_updates_enabled").default(false).notNull(),
+  // Which customer-facing messages go out, per event and per channel: a map of event id
+  // to { email, sms }. Only the choices an admin has made are stored; lib/notification-
+  // events.ts supplies the default for everything else, so a new event needs no migration.
+  customerNotifications: json("customer_notifications").$type<Record<string, { email?: boolean; sms?: boolean }>>(),
   updatedBy: int("updated_by").references(() => users.id),
   ...timestamps,
 });

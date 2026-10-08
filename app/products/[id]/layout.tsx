@@ -3,10 +3,13 @@ import { richTextToPlainText } from "@/lib/rich-text-content";
 
 export default async function ProductLayout({ children, params }: { children: React.ReactNode; params: Promise<{ id: string }> }) {
   const id = Number((await params).id);
-  let data: { product: { id: number; name: string; description: string | null; shortDescription: string | null; imageUrl: string | null; sku: string; barcode: string | null; brand: string | null; price: string; discountPrice: string | null }; rating: number | null; reviewCount: number } | null = null;
+  let data: { product: { id: number; name: string; description: string | null; shortDescription: string | null; imageUrl: string | null; sku: string; barcode: string | null; brand: string | null; price: string; discountPrice: string | null; prescriptionRequired?: boolean; searchOnly?: boolean }; rating: number | null; reviewCount: number } | null = null;
   try { data = await backendJson(`/v1/views/products/${id}`); } catch {}
   if (!data) return children;
   const { product, rating, reviewCount } = data;
+  // Structured data is what search engines turn into product listings, so a medicine that
+  // must not be advertised does not get any.
+  if (product.prescriptionRequired || product.searchOnly) return children;
   const origin = (process.env.APP_URL || "https://healthfieldpharmacy.co.ke").replace(/\/$/, "");
   const price = Number(product.discountPrice ?? product.price);
   const description = product.description

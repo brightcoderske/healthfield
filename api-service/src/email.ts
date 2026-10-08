@@ -39,12 +39,22 @@ export function posReceiptEmailHtml(input: { name: string; orderNumber: string; 
   return `<!doctype html><html><body style="margin:0;background:#f6f3f7;font-family:Arial,sans-serif"><table role="presentation" width="100%"><tr><td style="padding:28px 12px"><table role="presentation" width="100%" style="max-width:620px;margin:auto;background:#fff;border-radius:14px;overflow:hidden"><tr><td style="padding:22px 28px;color:#fff;background:#70227e"><b style="font-size:12px;letter-spacing:.08em">HEALTHFIELD PHARMACY</b><h1 style="margin:8px 0 0;font-size:24px">Your receipt</h1></td></tr><tr><td style="padding:28px"><p style="color:#4c4650;line-height:1.6">Hello ${escapeHtml(input.name)},<br><br>Thank you for shopping with Healthfield Pharmacy. ${receiptNote}</p><p style="color:#4c4650">Receipt: <b>${escapeHtml(input.receiptNumber)}</b><br>Sale: <b>${escapeHtml(input.orderNumber)}</b></p><table role="presentation" width="100%">${rows}<tr><td style="padding:12px 0">Subtotal</td><td align="right">KES ${input.subtotal.toLocaleString()}</td></tr><tr><td style="padding:14px 0;border-top:2px solid #70227e;font-size:18px;font-weight:700">Total paid</td><td align="right" style="padding:14px 0;border-top:2px solid #70227e;font-size:18px;font-weight:700">KES ${input.total.toLocaleString()}</td></tr></table><p style="margin:20px 0 0;color:#4c4650">We appreciate your business.<br><b>Your Health. Our Priority.</b></p></td></tr><tr><td style="padding:16px 28px;color:#817985;background:#faf8fb;font-size:11px">Healthfield Pharmacy · healthfieldpharmacy.co.ke</td></tr></table></td></tr></table></body></html>`;
 }
 
+/** Where links in customer emails and SMS point: the storefront, not the API. */
+export function storefrontOrigin() {
+  return (process.env.APP_URL || process.env.STOREFRONT_URL || "https://healthfieldpharmacy.co.ke").replace(/\/$/, "");
+}
+
 export function orderStatusEmailContent(input: { name: string; orderId: number; orderNumber: string; status: string; fulfilmentMethod: "DELIVERY" | "PICKUP"; storefrontOrigin: string }) {
   const dispatched = input.status === "OUT_FOR_DELIVERY" && input.fulfilmentMethod === "DELIVERY";
   if (dispatched) return {
     subject: `Order ${input.orderNumber} has been dispatched`,
     message: `Hello ${input.name},\n\nYour Healthfield order ${input.orderNumber} has been dispatched and is on its way.\n\nAfter you receive it, open the order and select Mark as received. This lets the pharmacy know the delivery reached you safely.\n\nIf you need help, contact your Healthfield branch.`,
     action: { label: "Mark order as received", url: `${input.storefrontOrigin}/account/orders/${input.orderId}` },
+  };
+  if (input.status === "CANCELLED") return {
+    subject: `Order ${input.orderNumber} has been cancelled`,
+    message: `Hello ${input.name},\n\nYour Healthfield order ${input.orderNumber} has been cancelled.\n\nIf you have already paid, or you were not expecting this, please contact your Healthfield branch and we will help straight away.`,
+    action: { label: "View my orders", url: `${input.storefrontOrigin}/account#orders` },
   };
   const label = input.status === "READY_FOR_DISPATCH" ? "packaged and ready for dispatch" : input.status.replaceAll("_", " ").toLowerCase();
   return {

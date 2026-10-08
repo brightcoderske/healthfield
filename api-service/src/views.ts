@@ -66,11 +66,23 @@ import {
   requireTeamPermission,
   sessionHasPermission,
 } from "./staff-permissions";
+import { parseNotificationPreferences } from "../../lib/notification-events";
+import { parseVatRate, vatOnNet } from "../../lib/vat";
 import { searchPhrase } from "../../lib/search-rank";
 import type { StaffPermission } from "../../lib/staff-permissions";
 
 const adminRoles = ["ADMIN", "SUPER_ADMIN"] as const;
 const teamRoles = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
+/**
+ * Products the storefront may put in front of someone who has not asked for them: the
+ * homepage, category lists, featured, and every "you may also like" rail.
+ *
+ * Prescription medicines are never shown unprompted, and neither is anything the
+ * pharmacy has marked search-only (medicines it sells but may not advertise). Both are
+ * still found by searching for them by name, which is the one path that does not use
+ * this filter.
+ */
+const listable = and(eq(products.prescriptionRequired, false), eq(products.searchOnly, false));
 const productCard = {
   id: products.id,
   name: products.name,
@@ -79,6 +91,7 @@ const productCard = {
   discountPrice: products.discountPrice,
   packSize: products.packSize,
   prescriptionRequired: products.prescriptionRequired,
+  searchOnly: products.searchOnly,
   groupName: products.groupName,
   // Every card carries its variant fields, so a list can be collapsed into groups
   // wherever it is rendered without a second round trip to find out what a row belongs
@@ -263,6 +276,7 @@ const homeCatalogueColumns = {
   description: products.description,
   discountPrice: products.discountPrice,
   prescriptionRequired: products.prescriptionRequired,
+  searchOnly: products.searchOnly,
   isFeatured: products.isFeatured,
   groupName: products.groupName,
   variantOf: products.variantOf,
@@ -275,7 +289,8 @@ const homeCatalogueColumns = {
   reviewCount: sql<number>`count(case when ${productReviews.isApproved} = true then 1 end)`,
 };
 
-const HOME_CATALOGUE_DRAW = 60;
+// Room for a full featured shelf (up to FEATURED_LIMIT) with a worthwhile random draw beside it.
+const HOME_CATALOGUE_DRAW = 90;
 // How long one draw of the catalogue lasts. An unseeded rand() gave a different sixty
 // products every time the cache lapsed, so a shopper who stepped into the basket and came
 // back could find what they had been looking at simply gone. Seeding it by the clock
@@ -299,14 +314,14 @@ async function home() {
       .select(homeCatalogueColumns)
       .from(products)
       .leftJoin(productReviews, eq(productReviews.productId, products.id))
-      // Prescription-only medicine is deliberately absent from the homepage: nobody
-      // browsing casually should be shown it. It stays fully searchable — /search and
-      // /browse below are unfiltered — so someone who knows what they were prescribed
-      // still finds it by name.
+      // Prescription-only and search-only medicine is deliberately absent from the
+      // homepage: nobody browsing casually should be shown it. It stays fully
+      // searchable — /search below is unfiltered — so someone who knows what they were
+      // prescribed still finds it by name.
       .where(
         and(
           eq(products.isActive, true),
-          eq(products.prescriptionRequired, false),
+          listable,
           // Leads only. A group is one card, so drawing its siblings here would let a
           // three-colour bag take three of the sixty slots and crowd out everything else.
           // The siblings are fetched below, against whatever this draw landed on.
@@ -369,7 +384,7 @@ async function home() {
       .from(promotionalBanners)
       .innerJoin(products, eq(products.id, promotionalBanners.productId))
       .where(
-        and(eq(promotionalBanners.isActive, true), eq(products.isActive, true)),
+        and(eq(promotionalBanners.isActive, true), eq(products.isActive, true), listable),
       )
       .orderBy(
         asc(promotionalBanners.displayOrder),
@@ -388,7 +403,7 @@ async function home() {
         .where(
           and(
             eq(products.isActive, true),
-            eq(products.prescriptionRequired, false),
+            listable,
             inArray(products.variantOf, leadIds),
           ),
         )
@@ -526,6 +541,7 @@ async function productDetail(id: number) {
         and(
           eq(products.categoryId, product.categoryId),
           eq(products.isActive, true),
+          listable,
           ne(products.id, id),
         ),
       )
@@ -546,6 +562,7 @@ async function productDetail(id: number) {
                 conditionLinks.map((row) => row.conditionId),
               ),
               eq(products.isActive, true),
+              listable,
               ne(products.id, id),
             ),
           )
@@ -569,6 +586,7 @@ async function productDetail(id: number) {
               ),
               ne(products.id, id),
               eq(products.isActive, true),
+              listable,
             ),
           )
           .groupBy(products.id)
@@ -1055,7 +1073,7 @@ export async function handleView(request: Request, path: string) {
       .from(blogPostProducts)
       .innerJoin(products, eq(products.id, blogPostProducts.productId))
       .where(
-        and(eq(blogPostProducts.postId, post.id), eq(products.isActive, true)),
+        and(eq(blogPostProducts.postId, post.id), eq(products.isActive, true), listable),
       )
       .orderBy(asc(blogPostProducts.displayOrder));
     return json({
@@ -1091,6 +1109,8 @@ export async function handleView(request: Request, path: string) {
       .where(
         and(
           eq(products.isActive, true),
+          // Browsing a category is not asking for a medicine by name.
+          listable,
           categoryIds.length
             ? inArray(products.categoryId, categoryIds)
             : undefined,
@@ -1156,7 +1176,9 @@ export async function handleView(request: Request, path: string) {
       db
         .select(searchProductCard)
         .from(products)
-        .where(and(eq(products.isActive, true), anyMatch))
+        // These are suggestions rather than answers, so they obey the same rule as
+        // every other recommendation. The exact matches above do not.
+        .where(and(eq(products.isActive, true), listable, anyMatch))
         .orderBy(searchRankOrder(rawQuery, terms), desc(products.isFeatured), desc(products.createdAt))
         .limit(12),
     ]);
@@ -1248,7 +1270,7 @@ export async function handleView(request: Request, path: string) {
         db
           .select(productCard)
           .from(products)
-          .where(eq(products.isActive, true))
+          .where(and(eq(products.isActive, true), listable))
           .orderBy(desc(products.isFeatured), desc(products.createdAt))
           .limit(24),
         db
@@ -1291,6 +1313,80 @@ export async function handleView(request: Request, path: string) {
           )
           .map((row) => row.prescription_request_items),
       })),
+    });
+  }
+  if (path === "account/payable-prescriptions") {
+    // Approved prescriptions waiting to be paid for, in the shape the cart shows them: the
+    // medicines the patient has chosen to buy now (all of them unless they trimmed the
+    // list on the prescription page) and what that comes to.
+    const auth = await requireSession(request, ["CUSTOMER"]);
+    if ("response" in auth) return auth.response;
+    const db = getDb();
+    const waiting = await db
+      .select({ id: prescriptions.id, orderId: orders.id, orderNumber: orders.orderNumber })
+      .from(prescriptions)
+      .innerJoin(orders, eq(orders.id, prescriptions.orderId))
+      .where(
+        and(
+          eq(prescriptions.customerId, auth.session.userId),
+          eq(prescriptions.status, "APPROVED"),
+          eq(orders.status, "AWAITING_PAYMENT"),
+          ne(orders.paymentStatus, "PAID"),
+        ),
+      )
+      .orderBy(desc(prescriptions.createdAt));
+    // A prescription whose payment has been started or is awaiting confirmation is no longer
+    // "ready to pay": showing it again would invite a second payment for the same order.
+    const inProgress = waiting.length
+      ? await db
+          .select({ orderId: paymentTransactions.orderId })
+          .from(paymentTransactions)
+          .where(and(inArray(paymentTransactions.orderId, waiting.map((row) => row.orderId)), inArray(paymentTransactions.status, ["INITIATED", "PENDING", "REQUIRES_REVIEW"])))
+      : [];
+    const busy = new Set(inProgress.map((row) => row.orderId));
+    waiting.splice(0, waiting.length, ...waiting.filter((row) => !busy.has(row.orderId)));
+    const lines = waiting.length
+      ? await db
+          .select()
+          .from(prescriptionRequestItems)
+          .where(inArray(prescriptionRequestItems.prescriptionId, waiting.map((row) => row.id)))
+          .orderBy(prescriptionRequestItems.id)
+      : [];
+    return json({
+      prescriptions: waiting.map((row) => {
+        const proposal = lines.filter(
+          (line) =>
+            line.prescriptionId === row.id &&
+            line.availability !== "UNAVAILABLE" &&
+            Boolean(line.approvedQuantity) &&
+            Boolean(line.unitPrice),
+        );
+        const chosen = proposal
+          .filter((line) => !line.deferred)
+          .map((line) => ({
+            name: line.productName,
+            quantity: line.selectedQuantity ?? (line.approvedQuantity as number),
+            unitPrice: Number(line.unitPrice),
+            // What the customer may do with this line: a full-course line is locked at the
+            // pharmacist's quantity, a divisible one can come down to the minimum.
+            locked: line.dispenseRule === "COURSE_BOUND",
+            approvedQuantity: line.approvedQuantity as number,
+            minimumQuantity: line.dispenseRule === "DIVISIBLE" ? (line.minimumQuantity ?? 1) : null,
+            note: line.pharmacistNote,
+          }));
+        return {
+          id: row.id,
+          orderNumber: row.orderNumber,
+          // The medicines alone, before VAT and delivery. Anything the customer has added
+          // to this order on an earlier payment attempt is deliberately not in it.
+          total: chosen.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0),
+          lines: chosen,
+          // True when the patient has left something for later, so the cart can say so.
+          partial: proposal.some(
+            (line) => line.deferred || (line.selectedQuantity ?? line.approvedQuantity) !== line.approvedQuantity,
+          ),
+        };
+      }),
     });
   }
   const customerPrescriptionMatch = path.match(
@@ -1358,10 +1454,29 @@ export async function handleView(request: Request, path: string) {
         .limit(1),
     ]);
     const settings = settingsRows[0];
+    // Lines the customer added from their own cart ride on the same order as the
+    // pharmacist's. The prescription page speaks only for the pharmacist's part, so until
+    // a payment goes through it reports that part's total, and lists the extras apart.
+    let order = orderRows[0] || null;
+    let addedItems: Array<{ productName: string; quantity: number; lineTotal: number }> = [];
+    if (order) {
+      const orderLines = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
+      addedItems = orderLines
+        .filter((line) => line.addedByCustomer)
+        .map((line) => ({ productName: line.productName, quantity: line.quantity, lineTotal: Number(line.lineTotal) }));
+      if (addedItems.length && order.paymentStatus !== "PAID") {
+        const goods = orderLines.filter((line) => !line.addedByCustomer).reduce((sum, line) => sum + Number(line.lineTotal), 0);
+        const rate = settings?.vatEnabled ? parseVatRate(settings.vatRate) : 0;
+        const vat = rate ? vatOnNet(goods, rate) ?? 0 : 0;
+        order = { ...order, subtotal: goods.toFixed(2), vat: vat.toFixed(2), deliveryFee: "0.00", total: (goods + vat).toFixed(2) };
+        addedItems = [];
+      }
+    }
     return json({
       request: prescription,
       items,
-      order: orderRows[0] || null,
+      order,
+      addedItems,
       customer: customerRows[0],
       // Shelf prices are net of VAT, so the form has to add the tax to the amount it
       // asks for rather than describing it as already inside the total.
@@ -1515,7 +1630,9 @@ export async function handleView(request: Request, path: string) {
     const productRows = await getDb()
       .select({ id: products.id, updatedAt: products.updatedAt })
       .from(products)
-      .where(eq(products.isActive, true));
+      // Search engines are an audience too: what is not advertised here is not listed
+      // for them either.
+      .where(and(eq(products.isActive, true), listable));
     return json(
       { products: productRows },
       { headers: { "Cache-Control": "public, max-age=300" } },
@@ -1549,7 +1666,8 @@ export async function handleView(request: Request, path: string) {
         .from(products)
         .innerJoin(categories, eq(categories.id, products.categoryId))
         .leftJoin(productReviews, eq(productReviews.productId, products.id))
-        .where(eq(products.isActive, true))
+        // Google Shopping is advertising: nothing prescription-only or search-only goes in.
+        .where(and(eq(products.isActive, true), listable))
         .groupBy(products.id, categories.name),
       loadLiveOffers(),
     ]);
@@ -2108,10 +2226,15 @@ export async function handleView(request: Request, path: string) {
         notifyNewOrder: siteSettings.notifyNewOrder, notifyOrderStatusChange: siteSettings.notifyOrderStatusChange,
         notifyCustomerReceivedOrder: siteSettings.notifyCustomerReceivedOrder, notifyNewPrescription: siteSettings.notifyNewPrescription,
         notifyNewConsultation: siteSettings.notifyNewConsultation, notifyNewCustomer: siteSettings.notifyNewCustomer,
-        notifyTillPayment: siteSettings.notifyTillPayment, smsPrescriptionUpdatesEnabled: siteSettings.smsPrescriptionUpdatesEnabled,
-        smsConsultationUpdatesEnabled: siteSettings.smsConsultationUpdatesEnabled,
+        notifyTillPayment: siteSettings.notifyTillPayment,
+        customerNotifications: siteSettings.customerNotifications,
       }).from(siteSettings).limit(1);
-      return json({ settings: settings ?? null, paymentRuntime: paymentConfigurationSummary() });
+      return json({
+        settings: settings ? { ...settings, customerNotifications: parseNotificationPreferences(settings.customerNotifications) } : null,
+        paymentRuntime: paymentConfigurationSummary(),
+        // Lets the notifications screen say so when SMS switches would currently do nothing.
+        smsConfigured: smsConfigurationSummary().configured,
+      });
     }
     if (view === "sms") {
       const [report, balance] = await Promise.all([smsReport(200), smsBalance()]);

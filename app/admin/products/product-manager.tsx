@@ -19,6 +19,8 @@ type Product = {
   groupName?: string | null; variantOf?: number | null; variantLabel?: string | null;
   variantName?: string | null; variantOrder?: number | null;
   prescriptionRequired: boolean;
+  // Sold normally but never listed or recommended; found only by searching for it.
+  searchOnly?: boolean;
 };
 type Option = { id: number; name: string };
 const PAGE_SIZE = 25;
@@ -44,13 +46,13 @@ export function ProductManager({ initialProducts, categories, conditions, branch
   const [featuredFilter, setFeaturedFilter] = useState<"all" | "featured" | "plain">("all");
   // Prescription-required products aren't their own category — they're scattered across
   // every category — so finding them by scrolling is just as unrealistic as featured was.
-  const [prescriptionFilter, setPrescriptionFilter] = useState<"all" | "required" | "otc">("all");
+  const [prescriptionFilter, setPrescriptionFilter] = useState<"all" | "required" | "otc" | "searchOnly">("all");
   useEffect(() => {
     try {
       const savedFeatured = localStorage.getItem(FEATURED_FILTER_KEY);
       if (savedFeatured === "featured" || savedFeatured === "plain") setFeaturedFilter(savedFeatured);
       const savedPrescription = localStorage.getItem(PRESCRIPTION_FILTER_KEY);
-      if (savedPrescription === "required" || savedPrescription === "otc") setPrescriptionFilter(savedPrescription);
+      if (savedPrescription === "required" || savedPrescription === "otc" || savedPrescription === "searchOnly") setPrescriptionFilter(savedPrescription);
     } catch {}
   }, []);
   const [page, setPage] = useState(1);
@@ -103,11 +105,12 @@ export function ProductManager({ initialProducts, categories, conditions, branch
       `${item.groupName || ""} ${item.name} ${item.brand || ""}`.toLowerCase().includes(query.toLowerCase()) &&
       (category === "all" || item.categoryId === Number(category)) &&
       (featuredFilter === "all" || (featuredFilter === "featured" ? item.isFeatured : !item.isFeatured)) &&
-      (prescriptionFilter === "all" || (prescriptionFilter === "required" ? item.prescriptionRequired : !item.prescriptionRequired)),
+      (prescriptionFilter === "all" || (prescriptionFilter === "required" ? item.prescriptionRequired : prescriptionFilter === "searchOnly" ? Boolean(item.searchOnly) : !item.prescriptionRequired)),
     ),
   ), [groups, query, category, featuredFilter, prescriptionFilter]);
   const featuredCount = useMemo(() => items.filter((item) => item.isFeatured).length, [items]);
   const prescriptionCount = useMemo(() => items.filter((item) => item.prescriptionRequired).length, [items]);
+  const searchOnlyCount = useMemo(() => items.filter((item) => item.searchOnly).length, [items]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const visibleProducts = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
@@ -139,7 +142,7 @@ export function ProductManager({ initialProducts, categories, conditions, branch
       price: Number(form.get("price")), discountPrice: form.get("discountPrice") ? Number(form.get("discountPrice")) : null,
       costPrice: form.get("costPrice") ? Number(form.get("costPrice")) : null,
       imageUrl: editing === "new" ? null : editing.imageUrl, isFeatured: form.get("isFeatured") === "on",
-      isActive: asDraft ? false : form.get("isActive") === "on", prescriptionRequired: form.get("prescriptionRequired") === "on", conditionIds: form.getAll("conditionIds").map(Number),
+      isActive: asDraft ? false : form.get("isActive") === "on", prescriptionRequired: form.get("prescriptionRequired") === "on", searchOnly: form.get("searchOnly") === "on", conditionIds: form.getAll("conditionIds").map(Number),
       // Only sent when a shop is chosen and a number typed; otherwise stock is left
       // exactly as it was, which is what makes the field genuinely optional.
       // Only shops whose figure was actually typed into. Sending the untouched ones
@@ -152,6 +155,10 @@ export function ProductManager({ initialProducts, categories, conditions, branch
     const targetId = isNew ? "new" : editing.id;
     // Ticking "Featured product" on a full shelf costs another product its place, the
     // same as the star in the table does, so it is confirmed the same way.
+    if (payload.isFeatured && (payload.prescriptionRequired || payload.searchOnly)) {
+      setMessage("Prescription-only and search-only products are never advertised, so they cannot be featured. Untick Featured, or untick the search-only option.");
+      return;
+    }
     if (payload.isFeatured) {
       const [dropping] = featuredEvictions(items.filter((item) => item.isFeatured), isNew ? null : editing.id);
       const leaving = items.find((item) => item.id === dropping);
@@ -241,6 +248,10 @@ Continue?`,
       // round trip.
       if (!product.isActive) {
         setMessage(`${product.groupName || product.name} is not on sale, so it cannot be featured. Set it active first.`);
+        return;
+      }
+      if (product.prescriptionRequired || product.searchOnly) {
+        setMessage(`${product.groupName || product.name} is prescription-only or search-only, so it cannot be featured.`);
         return;
       }
       const [dropping] = featuredEvictions(items.filter((item) => item.isFeatured), product.id);
@@ -436,7 +447,7 @@ Continue?`,
         });
       }}
     /> : null}
-    <div className="compact-table-tools"><label><Search/><input value={query} onChange={(event)=>{setQuery(event.target.value);setPage(1)}} placeholder="Search all products by name or brand"/></label><select value={category} onChange={(event)=>{setCategory(event.target.value);setPage(1)}}><option value="all">All categories</option>{categories.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select><select value={featuredFilter} onChange={(event)=>{const next=event.target.value as typeof featuredFilter;setFeaturedFilter(next);setPage(1);try{localStorage.setItem(FEATURED_FILTER_KEY,next)}catch{}}} aria-label="Filter by featured"><option value="all">All products (featured & not)</option><option value="featured">Featured only</option><option value="plain">Not featured</option></select><select value={prescriptionFilter} onChange={(event)=>{const next=event.target.value as typeof prescriptionFilter;setPrescriptionFilter(next);setPage(1);try{localStorage.setItem(PRESCRIPTION_FILTER_KEY,next)}catch{}}} aria-label="Filter by prescription requirement"><option value="all">All products (Rx & OTC)</option><option value="required">Prescription required only</option><option value="otc">No prescription needed (OTC)</option></select><span>{filtered.length} products · {featuredCount} of {FEATURED_LIMIT} featured · {prescriptionCount} prescription</span></div>
+    <div className="compact-table-tools"><label><Search/><input value={query} onChange={(event)=>{setQuery(event.target.value);setPage(1)}} placeholder="Search all products by name or brand"/></label><select value={category} onChange={(event)=>{setCategory(event.target.value);setPage(1)}}><option value="all">All categories</option>{categories.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select><select value={featuredFilter} onChange={(event)=>{const next=event.target.value as typeof featuredFilter;setFeaturedFilter(next);setPage(1);try{localStorage.setItem(FEATURED_FILTER_KEY,next)}catch{}}} aria-label="Filter by featured"><option value="all">All products (featured & not)</option><option value="featured">Featured only</option><option value="plain">Not featured</option></select><select value={prescriptionFilter} onChange={(event)=>{const next=event.target.value as typeof prescriptionFilter;setPrescriptionFilter(next);setPage(1);try{localStorage.setItem(PRESCRIPTION_FILTER_KEY,next)}catch{}}} aria-label="Filter by prescription requirement"><option value="all">All products (Rx & OTC)</option><option value="required">Prescription required only</option><option value="otc">No prescription needed (OTC)</option><option value="searchOnly">Search-only (not advertised)</option></select><span>{filtered.length} products · {featuredCount} of {FEATURED_LIMIT} featured · {prescriptionCount} prescription · {searchOnlyCount} search-only</span></div>
     <div className="compact-table"><div className="compact-table-head product-row"><span>Image</span><span>Product</span><span>Category</span><span>Price</span><span title="Featured on the homepage">Star</span><span>Status</span><span>Action</span></div>
       {visibleProducts.map((group)=>{
         const options=[group.lead,...group.children];
@@ -458,7 +469,7 @@ Continue?`,
             </span>
             <span title={categories.find((item)=>item.id===product.categoryId)?.name || "Uncategorised"}>{isOption?"":(categories.find((item)=>item.id===product.categoryId)?.name || "Uncategorised")}</span>
             <strong>{money(product)}{saving>0&&<small>Save {saving}% · was KES {product.price.toLocaleString()}</small>}</strong>
-            <span className="featured-cell">{isOption?null:<button type="button" className={`row-star${product.isFeatured?" is-on":""}`} disabled={savingId===product.id||(!product.isFeatured&&!product.isActive)} onClick={()=>toggleFeatured(product)} aria-pressed={product.isFeatured} title={!product.isActive&&!product.isFeatured?`${product.name} is not on sale, so it cannot be featured`:product.isFeatured?`${product.name} is featured on the homepage`:`Feature ${product.name} on the homepage`} aria-label={product.isFeatured?`Remove ${product.name} from featured`:`Feature ${product.name}`}><Star/></button>}</span>
+            <span className="featured-cell">{isOption?null:<button type="button" className={`row-star${product.isFeatured?" is-on":""}`} disabled={savingId===product.id||(!product.isFeatured&&(!product.isActive||product.prescriptionRequired||Boolean(product.searchOnly)))} onClick={()=>toggleFeatured(product)} aria-pressed={product.isFeatured} title={!product.isActive&&!product.isFeatured?`${product.name} is not on sale, so it cannot be featured`:(product.prescriptionRequired||product.searchOnly)&&!product.isFeatured?`${product.name} is hidden from listings, so it cannot be featured`:product.isFeatured?`${product.name} is featured on the homepage`:`Feature ${product.name} on the homepage`} aria-label={product.isFeatured?`Remove ${product.name} from featured`:`Feature ${product.name}`}><Star/></button>}</span>
             <span className={product.isActive?"status-active":"status-inactive"}>{savingId===product.id?"Saving…":product.isActive?"Active":"Inactive"}</span>
             <button className="row-delete" aria-label={`Delete ${product.name}`} disabled={savingId===product.id} onClick={()=>deleteProduct(product)}><Trash2/></button>
           </div>;
@@ -481,7 +492,7 @@ Continue?`,
             </span>
             <span title={categories.find((item)=>item.id===group.lead.categoryId)?.name || "Uncategorised"}>{categories.find((item)=>item.id===group.lead.categoryId)?.name || "Uncategorised"}</span>
             <strong>{low===high?`KES ${low.toLocaleString()}`:`KES ${low.toLocaleString()} – ${high.toLocaleString()}`}</strong>
-            <span className="featured-cell"><button type="button" className={`row-star${group.lead.isFeatured?" is-on":""}`} disabled={savingId===group.lead.id||(!group.lead.isFeatured&&!live)} onClick={()=>toggleFeatured(group.lead)} aria-pressed={group.lead.isFeatured} title={group.lead.isFeatured?`${group.lead.groupName||group.lead.name} is featured on the homepage`:`Feature ${group.lead.groupName||group.lead.name} on the homepage`} aria-label={group.lead.isFeatured?`Remove ${group.lead.groupName||group.lead.name} from featured`:`Feature ${group.lead.groupName||group.lead.name}`}><Star/></button></span>
+            <span className="featured-cell"><button type="button" className={`row-star${group.lead.isFeatured?" is-on":""}`} disabled={savingId===group.lead.id||(!group.lead.isFeatured&&(!live||group.lead.prescriptionRequired||Boolean(group.lead.searchOnly)))} onClick={()=>toggleFeatured(group.lead)} aria-pressed={group.lead.isFeatured} title={group.lead.isFeatured?`${group.lead.groupName||group.lead.name} is featured on the homepage`:`Feature ${group.lead.groupName||group.lead.name} on the homepage`} aria-label={group.lead.isFeatured?`Remove ${group.lead.groupName||group.lead.name} from featured`:`Feature ${group.lead.groupName||group.lead.name}`}><Star/></button></span>
             <span className={live?"status-active":"status-inactive"}>{live===options.length?"Active":live?`${live} of ${options.length} on sale`:"Inactive"}</span>
             {/* Deleting the product would delete whichever option happens to be the row
                 that carries its history. Options are removed in the product's own
@@ -597,7 +608,7 @@ Continue?`,
             </div>
           </details>
         ) : null}
-        <div className="product-flags full"><label className="check-label"><input type="checkbox" name="prescriptionRequired" defaultChecked={activeEdit?.prescriptionRequired}/> Prescription required</label><label className="check-label"><input type="checkbox" name="isActive" defaultChecked={activeEdit?.isActive??true}/> Active</label><label className="check-label"><input type="checkbox" name="isFeatured" defaultChecked={activeEdit?.isFeatured}/> Featured product</label></div>
+        <div className="product-flags full"><label className="check-label"><input type="checkbox" name="prescriptionRequired" defaultChecked={activeEdit?.prescriptionRequired}/> Prescription required</label><label className="check-label" title="Sold normally, but left out of the homepage, category lists, featured and every recommendation. Customers only find it by searching for it."><input type="checkbox" name="searchOnly" defaultChecked={activeEdit?.searchOnly}/> Search-only (do not advertise)</label><label className="check-label"><input type="checkbox" name="isActive" defaultChecked={activeEdit?.isActive??true}/> Active</label><label className="check-label"><input type="checkbox" name="isFeatured" defaultChecked={activeEdit?.isFeatured}/> Featured product</label></div>
       </div>{message&&<div className="auth-error">{message}</div>}<footer>{draft.savedAt?<span className="editor-draft-status">Kept on this device</span>:null}<button type="button" onClick={()=>setEditing(null)}>Cancel</button><button type="submit" className="draft-button" disabled={savingId!==null} onClick={()=>setAsDraft(true)}>Save as draft</button><button type="submit" disabled={savingId!==null} onClick={()=>setAsDraft(false)}>{savingId!==null?"Saving product…":"Save product"}</button></footer></form>{scannerOpen?<ProductCodeScanner onClose={()=>setScannerOpen(false)} onCode={(code)=>{setBarcode(code);setScannerOpen(false)}}/>:null}</div>}
   </main>;
 }

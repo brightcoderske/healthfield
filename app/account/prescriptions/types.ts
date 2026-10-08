@@ -38,6 +38,9 @@ export type CustomerPrescriptionData = {
   };
   items: CustomerPrescriptionItem[];
   order: CustomerPrescriptionOrder | null;
+  /** Lines the customer added from their own cart; only listed once the order is paid. */
+  addedItems?: Array<{ productName: string; quantity: number; lineTotal: number }>;
+  vat?: { enabled: boolean; rate: number };
   customer: { firstName: string; lastName: string; email: string; phone: string | null };
   payment: { onlineMpesaEnabled: boolean; onlineManualEnabled: boolean; tillNumber: string | null; accountName: string | null };
 };

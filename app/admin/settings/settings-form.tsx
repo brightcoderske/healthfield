@@ -3,6 +3,7 @@
 
 import { ArrowLeft, Banknote, BadgeCheck, Bell, Check, Loader, Save, Settings, Share2, ShieldCheck, Store, Truck } from "lucide-react";
 import { ChangeEvent, FormEvent, ReactNode, useState } from "react";
+import { customerNotificationEvents, resolveNotificationPreferences, type CustomerNotificationEventId, type CustomerNotificationPreferences, type NotificationChannel } from "@/lib/notification-events";
 
 type SettingsValue = {
   pharmacyName: string; phone: string | null; whatsapp: string | null;
@@ -14,8 +15,13 @@ type SettingsValue = {
   onlineMpesaEnabled:boolean;onlineManualEnabled:boolean;onlineCodEnabled:boolean;posCashEnabled:boolean;posMpesaEnabled:boolean;posManualEnabled:boolean;taxNumber?:string|null;vatEnabled?:boolean;vatRate?:string|number|null;
   mpesaTillNumber:string|null;mpesaAccountName:string|null;
   notifyNewOrder?:boolean;notifyOrderStatusChange?:boolean;notifyCustomerReceivedOrder?:boolean;notifyNewPrescription?:boolean;notifyNewConsultation?:boolean;notifyNewCustomer?:boolean;notifyTillPayment?:boolean;
-  smsPrescriptionUpdatesEnabled?:boolean;smsConsultationUpdatesEnabled?:boolean;
+  customerNotifications?:CustomerNotificationPreferences;
 } | null;
+
+const notificationGroups = [...new Set(customerNotificationEvents.map((event) => event.group))].map((group) => ({
+  group,
+  events: customerNotificationEvents.filter((event) => event.group === group),
+}));
 
 /** Section identities. The accent colour is per section, so the page reads as parts. */
 type SectionKey = "contact" | "social" | "delivery" | "payments" | "notifications" | "security" | "licence";
@@ -102,11 +108,16 @@ function withBooleans(form: FormData, names: string[]) {
   return payload;
 }
 
-export function SettingsForm({ initial, paymentRuntime }: { initial: SettingsValue; paymentRuntime: { mpesaConfigured: boolean; stkQueryConfigured?:boolean; c2bCallbacksConfigured?:boolean; transactionStatusConfigured?:boolean; pullTransactionsConfigured?:boolean } }) {
+export function SettingsForm({ initial, paymentRuntime, smsConfigured }: { initial: SettingsValue; smsConfigured: boolean; paymentRuntime: { mpesaConfigured: boolean; stkQueryConfigured?:boolean; c2bCallbacksConfigured?:boolean; transactionStatusConfigured?:boolean; pullTransactionsConfigured?:boolean } }) {
   const [licenceFile,setLicenceFile]=useState<File|null>(null);
   const [licencePreview,setLicencePreview]=useState(initial?.licenceImageUrl??"");
   const [licenceNote,setLicenceNote]=useState("");
   const [requireTeamTwoFactor,setRequireTeamTwoFactor]=useState(initial?.requireTeamTwoFactor??false);
+  // Every customer message with its two switches resolved against the defaults, so a
+  // message the admin has never touched still shows what it will actually do.
+  const [customerChoices,setCustomerChoices]=useState(()=>Object.fromEntries(resolveNotificationPreferences(initial?.customerNotifications).map((event)=>[event.id,{email:event.email,sms:event.sms}])) as Record<CustomerNotificationEventId,{email:boolean;sms:boolean}>);
+  const setChannel=(id:CustomerNotificationEventId,channel:NotificationChannel,value:boolean)=>setCustomerChoices((current)=>({...current,[id]:{...current[id],[channel]:value}}));
+  const setAllChannel=(channel:NotificationChannel,value:boolean)=>setCustomerChoices((current)=>Object.fromEntries(customerNotificationEvents.map((event)=>[event.id,{...current[event.id],[channel]:value}])) as typeof current);
 
   return (
     <main className="settings-page sectioned-settings">
@@ -194,8 +205,8 @@ export function SettingsForm({ initial, paymentRuntime }: { initial: SettingsVal
       <Section
         id="notifications" tone="#2f6fa6" icon={<Bell />}
         title="Notifications"
-        description="Which internal emails land in the admin inbox, and which SMS go out to customers."
-        onSave={(form) => putSettings(withBooleans(form, ["notifyNewOrder","notifyOrderStatusChange","notifyCustomerReceivedOrder","notifyNewPrescription","notifyNewConsultation","notifyNewCustomer","notifyTillPayment","smsPrescriptionUpdatesEnabled","smsConsultationUpdatesEnabled"]))}
+        description="Which internal emails land in the admin inbox, and which emails and SMS go out to customers."
+        onSave={(form) => putSettings({ ...withBooleans(form, ["notifyNewOrder","notifyOrderStatusChange","notifyCustomerReceivedOrder","notifyNewPrescription","notifyNewConsultation","notifyNewCustomer","notifyTillPayment"]), customerNotifications: customerChoices })}
       >
         <h3>Admin email alerts</h3>
         <div className="payment-toggle-grid">
@@ -207,11 +218,39 @@ export function SettingsForm({ initial, paymentRuntime }: { initial: SettingsVal
           <label><input name="notifyNewCustomer" type="checkbox" defaultChecked={initial?.notifyNewCustomer??true}/><span><strong>New verified customer</strong><small>Sent when a new customer verifies their email.</small></span></label>
           <label><input name="notifyTillPayment" type="checkbox" defaultChecked={initial?.notifyTillPayment??false}/><span><strong>Till payment received</strong><small>One email per Till receipt Safaricom delivers — the busiest alert by far. Off by default so it can't bury the others.</small></span></label>
         </div>
-        <h3>Customer SMS</h3>
-        <div className="payment-toggle-grid">
-          <label><input name="smsPrescriptionUpdatesEnabled" type="checkbox" defaultChecked={initial?.smsPrescriptionUpdatesEnabled??false}/><span><strong>Prescription updates</strong><small>Received, approved, needs clarification, or declined. Billed per message.</small></span></label>
-          <label><input name="smsConsultationUpdatesEnabled" type="checkbox" defaultChecked={initial?.smsConsultationUpdatesEnabled??false}/><span><strong>Consultation received</strong><small>Confirms a consultation request reached the pharmacy. Billed per message.</small></span></label>
+        <h3>Customer messages</h3>
+        <p className="notification-note">
+          Choose, message by message, whether the customer gets an email, an SMS, or both. SMS is billed per message.
+          Security emails (account verification, password reset, login codes) always go out and are not listed.
+        </p>
+        {!smsConfigured ? <p className="notification-warning">SMS is not set up on the server yet, so the SMS boxes below will not send anything until it is.</p> : null}
+        <div className="notification-bulk">
+          {(["email", "sms"] as const).map((channel) => (
+            <span key={channel}>
+              <b>{channel === "email" ? "Email" : "SMS"}</b>
+              <button type="button" onClick={() => setAllChannel(channel, true)}>All on</button>
+              <button type="button" onClick={() => setAllChannel(channel, false)}>All off</button>
+            </span>
+          ))}
         </div>
+        {notificationGroups.map(({ group, events }) => (
+          <table className="notification-matrix" key={group}>
+            <caption>{group}</caption>
+            <thead><tr><th scope="col">Message</th><th scope="col">Email</th><th scope="col">SMS</th></tr></thead>
+            <tbody>
+              {events.map((event) => (
+                <tr key={event.id}>
+                  <th scope="row"><strong>{event.label}</strong><small>{event.hint}</small></th>
+                  {(["email", "sms"] as const).map((channel) => (
+                    <td key={channel}>
+                      <input type="checkbox" aria-label={`${event.label} by ${channel === "email" ? "email" : "SMS"}`} checked={customerChoices[event.id][channel]} onChange={(change) => setChannel(event.id, channel, change.target.checked)} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ))}
       </Section>
 
       <Section

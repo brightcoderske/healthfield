@@ -12,6 +12,8 @@ import {
 import { DEFAULT_STAFF_PERMISSIONS, STAFF_PERMISSION_VALUES, normalizeStaffPermissions } from "../../lib/staff-permissions";
 import { healthfieldOrderNumber } from "../../lib/order-number";
 import { allowedOrderStatuses, canTransitionOrderStatus, isStockFinalizedOrderStatus, orderDetailsAreEditable, orderStatuses, orderTransitionChangesAllocation } from "../../lib/order-status-transitions";
+import { queueCustomerNotification, notifyCustomer } from "./customer-notify";
+import { parseNotificationPreferences, type CustomerNotificationEventId } from "../../lib/notification-events";
 import { notificationSettings, pharmacyIdentity } from "./notification-settings";
 import { canApplyPrescriptionAction, prescriptionReviewActions, type PrescriptionReviewAction, type PrescriptionStatus } from "../../lib/prescription-workflow";
 import { DispensingError, dispenseRules, resolveDispenseSelection, type DispenseRule } from "../../lib/prescription-dispensing";
@@ -19,18 +21,18 @@ import { createPasswordResetToken, createSessionToken, createUploadToken, hasSto
 import { getDb } from "./db";
 import { repriceDeliveryForBranch, resolveDeliveryQuote } from "./delivery";
 import { sendSms, smsConfiguration } from "./sms";
-import { marketingSms, prescriptionSms } from "../../lib/sms-templates";
+import { marketingSms, prescriptionSms, welcomeSms, type PrescriptionSmsEvent } from "../../lib/sms-templates";
 import { MAX_VAT_RATE, parseVatRate, vatOnNet } from "../../lib/vat";
 import { featuredEvictions } from "../../lib/featured-products";
 import { extractContentReferences, isPersonalised, renderContentBlocks, renderMergeFields, type MergeRecipient } from "../../lib/campaign-merge";
 import { campaignContentResolver, loadCampaignContent } from "./campaign-content";
 import { apportionBundle, isBundle, loadLiveOffers, offerPriceMap, offerTotal } from "./offers";
-import { campaignBodyHtml, campaignEmailHtml, orderEmailHtml, orderStatusEmailContent, sendEmail, stripHtml } from "./email";
+import { campaignBodyHtml, campaignEmailHtml, orderEmailHtml, sendEmail, storefrontOrigin, stripHtml } from "./email";
 import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, emailVerificationTiming } from "./email-verification";
 import { json, publicImageUrl, safeFilename } from "./http";
 import { storageRoot, validatePrescriptionUpload } from "./prescription-files";
 import { extractMpesaReceipt, initiateStkPush, mpesaConfiguration } from "./mpesa";
-import { queueOrderSms, queuePaidOrderNotification } from "./order-notifications";
+import { queueOrderSms, queueOrderStatusNotification, queuePaidOrderNotification } from "./order-notifications";
 import { reconcileManualPaymentFromIncoming, replayStoredStkCallback, requestKnownTransactionStatus } from "./payment-handlers";
 import { canGrantTeamRole, canManageTeamAccount } from "./staff-access-policy";
 import { secureHashEqual, twoFactorChallengeLifetimeMs, twoFactorCodeHash, twoFactorMaximumAttempts, twoFactorMaximumResends, twoFactorResendCooldownMs, twoFactorTiming } from "./two-factor";
@@ -50,10 +52,52 @@ async function onlineVatFor(net: number) {
   return { rate, amount, payable: Math.round((net + amount) * 100) / 100 };
 }
 
+type BundleOrderLine = { productId: number; productName: string; quantity: number; unitPrice: number; total: number; offerId: number; offerTitle: string };
+
+/**
+ * Bundles: one order line per component so stock still moves per product, priced by
+ * splitting the bundle total. The customer sees a single line named after the offer, and
+ * pays exactly the bundle price. Shared by every checkout that can carry a bundle.
+ */
+function bundleOrderLines(liveOffers: Awaited<ReturnType<typeof loadLiveOffers>>, requestedOffers: Array<{ offerId: number }>): { lines: BundleOrderLine[] } | { error: string } {
+  const lines: BundleOrderLine[] = [];
+  for (const requested of requestedOffers) {
+    const offer = liveOffers.find((entry) => entry.id === requested.offerId);
+    if (!offer || !isBundle(offer)) return { error: "That offer has ended or is no longer available." };
+    const weights = offer.items.map((item) => Math.round(item.normalPrice * item.quantity * 100));
+    const shares = apportionBundle(Math.round(offerTotal(offer) * 100), weights);
+    offer.items.forEach((item, index) => {
+      const lineTotal = shares[index] / 100;
+      lines.push({
+        productId: item.productId, productName: item.name, quantity: item.quantity,
+        unitPrice: Number((lineTotal / item.quantity).toFixed(2)), total: lineTotal,
+        offerId: offer.id, offerTitle: offer.title,
+      });
+    });
+  }
+  return { lines };
+}
+
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
-export function storefrontOrigin() {
-  return (process.env.APP_URL || process.env.STOREFRONT_URL || "https://healthfieldpharmacy.co.ke").replace(/\/$/, "");
+export { storefrontOrigin };
+
+/**
+ * One message about a prescription, down whichever channels Settings has on for `event`.
+ * The email and the SMS are composed together here so every prescription update goes
+ * through the same two switches instead of each call site remembering to check them.
+ */
+async function notifyPrescriptionCustomer(
+  event: CustomerNotificationEventId,
+  smsEvent: PrescriptionSmsEvent,
+  customer: { email: string | null | undefined; firstName: string; phone: string | null | undefined },
+  email: { subject: string; message: string; action: { label: string; url: string } },
+) {
+  const identity = await pharmacyIdentity();
+  await notifyCustomer(event, {
+    email: { to: customer.email, ...email, channel: "orders" },
+    sms: { to: customer.phone, message: prescriptionSms(smsEvent, { customerName: customer.firstName, ...identity }), purpose: "PRESCRIPTION_UPDATE" },
+  });
 }
 
 const tokenHash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -295,6 +339,13 @@ export async function handleAuth(request: Request, action: string) {
       return result.affectedRows === 1;
     });
     if (activated && process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewCustomer) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New verified Healthfield customer", message: `${user.firstName} ${user.lastName} activated a customer account.\nEmail: ${user.email}\nPhone: ${user.phone || "Not provided"}`, channel: "security" }).catch(console.error);
+    if (activated) {
+      const identity = await pharmacyIdentity();
+      queueCustomerNotification("ACCOUNT_WELCOME", {
+        email: { to: user.email, subject: `Welcome to ${identity.pharmacyName || "Healthfield Pharmacy"}`, message: `Hello ${user.firstName},\n\nYour account is verified and ready. You can now order medicines, upload prescriptions, request a consultation and track everything from your account.`, action: { label: "Start shopping", url: storefrontOrigin() }, channel: "general" },
+        sms: { to: user.phone, message: welcomeSms({ customerName: user.firstName, ...identity }), purpose: "ACCOUNT_WELCOME" },
+      });
+    }
     return json({ ok: true, alreadyActivated: !activated, message: activated ? "Your email has been verified and your account is ready." : "Your email is already verified. You can continue to login." });
   }
   if (action === "resend-verification" && request.method === "POST") {
@@ -368,9 +419,22 @@ export async function handleOrders(request: Request, id?: number) {
     const db = getDb();
     const [order] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, status: orders.status }).from(orders).where(eq(orders.id, id)).limit(1);
     if (!order) return json({ error: "Order not found." }, { status: 404 });
-    const [linkedPrescription]=await db.select({id:prescriptions.id}).from(prescriptions).where(eq(prescriptions.orderId,id)).limit(1);
-    if(linkedPrescription)return json({error:`This is a frozen prescription proposal. Delete prescription #${linkedPrescription.id} from the prescription modal so both records are handled safely.`},{status:409});
     if (order.status === "OUT_FOR_DELIVERY" || order.status === "COMPLETED") return json({ error: "Orders already out for delivery or completed are retained for audit records." }, { status: 409 });
+    // An approved prescription is paid for through an order of its own, so deleting that
+    // order has a consequence for the prescription. Rather than refusing outright, the
+    // admin is asked what should happen to it and the request is repeated with the answer:
+    // ?prescription=delete removes it with the order, ?prescription=keep sends it back to
+    // the pharmacist for a fresh proposal.
+    const linkedPrescriptions = await db.select({ id: prescriptions.id, status: prescriptions.status, originalFilename: prescriptions.originalFilename, storageKey: prescriptions.storageKey }).from(prescriptions).where(eq(prescriptions.orderId, id));
+    const prescriptionChoice = new URL(request.url).searchParams.get("prescription");
+    if (linkedPrescriptions.length && prescriptionChoice !== "delete" && prescriptionChoice !== "keep") {
+      const [linked] = linkedPrescriptions;
+      return json({
+        error: `${order.orderNumber} is the payment order for prescription #${linked.id}. Choose what should happen to the prescription before deleting the order.`,
+        code: "LINKED_PRESCRIPTION",
+        prescription: { id: linked.id, status: linked.status, filename: linked.originalFilename },
+      }, { status: 409 });
+    }
     // Deleting before dispatch never orphans a rider or a customer who already has the
     // goods; deleting after does, which is why those two statuses above stay protected.
     const finalStatus = isStockFinalizedOrderStatus(order.status);
@@ -397,12 +461,31 @@ export async function handleOrders(request: Request, id?: number) {
         await tx.update(mpesaStkCallbacks).set({ processedTransactionId: null }).where(inArray(mpesaStkCallbacks.processedTransactionId, payments.map((payment) => payment.id)));
         await tx.delete(paymentTransactions).where(eq(paymentTransactions.orderId, id));
       }
-      await tx.update(prescriptions).set({ orderId: null }).where(eq(prescriptions.orderId, id));
+      for (const linked of linkedPrescriptions) {
+        if (prescriptionChoice === "delete") {
+          // Its medicine lines go with it (they cascade); the file on disk is removed after.
+          await tx.update(prescriptions).set({ orderId: null }).where(eq(prescriptions.id, linked.id));
+          await tx.delete(prescriptions).where(eq(prescriptions.id, linked.id));
+          await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_DELETED", entityType: "prescription", entityId: String(linked.id), metadata: { originalFilename: linked.originalFilename, deletedOrderNumber: order.orderNumber } });
+        } else {
+          // Kept: it loses the order it was priced into, so an approved one goes back under
+          // review for the pharmacist to send a new proposal. Anything not yet approved had
+          // no usable proposal to lose and is left exactly as it was.
+          await tx.update(prescriptions).set(linked.status === "APPROVED"
+            ? { orderId: null, status: "UNDER_REVIEW", reviewVersion: sql`${prescriptions.reviewVersion} + 1` }
+            : { orderId: null }).where(eq(prescriptions.id, linked.id));
+          await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_KEPT_AFTER_ORDER_DELETED", entityType: "prescription", entityId: String(linked.id), metadata: { deletedOrderNumber: order.orderNumber, previousStatus: linked.status } });
+        }
+      }
       await tx.delete(orderItems).where(eq(orderItems.orderId, id));
       await tx.delete(orders).where(eq(orders.id, id));
-      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_DELETED", entityType: "order", entityId: String(id), metadata: { orderNumber: order.orderNumber } });
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_DELETED", entityType: "order", entityId: String(id), metadata: { orderNumber: order.orderNumber, prescriptionIds: linkedPrescriptions.map((linked) => linked.id), prescriptionChoice } });
     });
-    return json({ ok: true, message: `Order ${order.orderNumber} was deleted.` });
+    if (prescriptionChoice === "delete") {
+      for (const linked of linkedPrescriptions) await unlink(path.join(storageRoot(), "prescriptions", path.basename(linked.storageKey))).catch((error) => console.warn("Deleted prescription file was already unavailable", { prescriptionId: linked.id, error }));
+    }
+    const prescriptionNote = !linkedPrescriptions.length ? "" : prescriptionChoice === "delete" ? ` Prescription #${linkedPrescriptions.map((linked) => linked.id).join(", #")} was deleted with it.` : ` Prescription #${linkedPrescriptions.map((linked) => linked.id).join(", #")} was kept.`;
+    return json({ ok: true, message: `Order ${order.orderNumber} was deleted.${prescriptionNote}` });
   }
   if (request.method === "PATCH" && id) {
     const auth = await requireTeamPermission(request, "ORDERS_PROCESS");
@@ -493,15 +576,9 @@ export async function handleOrders(request: Request, id?: number) {
       }
     }
     if(order.status===status)return json({ok:true,status,delivery:repricing});
-    const notificationEmail=details.email===undefined?order.email:details.email,notificationName=details.customerName||order.customerName;
-    if (status === "READY_FOR_PICKUP") queueOrderSms(id, "ORDER_READY_FOR_PICKUP");
-    if (status === "OUT_FOR_DELIVERY") queueOrderSms(id, "ORDER_OUT_FOR_DELIVERY");
-    if (status === "COMPLETED") {
-      queuePaidOrderNotification(id, "ORDER_COMPLETED");
-    } else if (notificationEmail) {
-      const update = orderStatusEmailContent({ name: notificationName, orderId: id, orderNumber: order.orderNumber, status, fulfilmentMethod: order.fulfilmentMethod, storefrontOrigin: storefrontOrigin() });
-      void sendEmail({ to: notificationEmail, ...update, channel: "orders" });
-    }
+    // Each step has its own email and SMS switch in Settings; cancelling is a step like
+    // any other, so a cancelled order reaches the customer on both channels.
+    queueOrderStatusNotification(id, status);
     if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyOrderStatusChange) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.`, channel:"orders" });
     return json({ok:true,status,delivery:repricing});
   }
@@ -547,24 +624,9 @@ export async function handleOrders(request: Request, id?: number) {
   const offerPrices = offerPriceMap(liveOffers);
   const lines = parsed.data.items.map((item) => { const product = catalog.find((entry) => entry.id === item.productId)!; const price = offerPrices.get(product.id) ?? Number(product.discountPrice ?? product.price); return { ...item, product, price, total: price * item.quantity }; });
 
-  // Bundles: one order line per component so stock still moves per product, priced
-  // by splitting the bundle total. The customer sees a single line named after the
-  // offer, and pays exactly the bundle price.
-  const bundleLines: Array<{ productId: number; productName: string; quantity: number; unitPrice: number; total: number; offerId: number; offerTitle: string }> = [];
-  for (const requested of parsed.data.offerItems ?? []) {
-    const offer = liveOffers.find((entry) => entry.id === requested.offerId);
-    if (!offer || !isBundle(offer)) return json({ error: "That offer has ended or is no longer available.", code: "OFFER_UNAVAILABLE" }, { status: 409 });
-    const weights = offer.items.map((item) => Math.round(item.normalPrice * item.quantity * 100));
-    const shares = apportionBundle(Math.round(offerTotal(offer) * 100), weights);
-    offer.items.forEach((item, index) => {
-      const lineTotal = shares[index] / 100;
-      bundleLines.push({
-        productId: item.productId, productName: item.name, quantity: item.quantity,
-        unitPrice: Number((lineTotal / item.quantity).toFixed(2)), total: lineTotal,
-        offerId: offer.id, offerTitle: offer.title,
-      });
-    });
-  }
+  const bundles = bundleOrderLines(liveOffers, parsed.data.offerItems ?? []);
+  if ("error" in bundles) return json({ error: bundles.error, code: "OFFER_UNAVAILABLE" }, { status: 409 });
+  const bundleLines = bundles.lines;
   if (!lines.length && !bundleLines.length) return json({ error: "Your basket is empty." }, { status: 400 });
   const subtotal = lines.reduce((sum, line) => sum + line.total, 0) + bundleLines.reduce((sum, line) => sum + line.total, 0);
   // The fee is recalculated here rather than trusted from the client, for the same
@@ -628,16 +690,20 @@ export async function handleOrders(request: Request, id?: number) {
       void requestKnownTransactionStatus(result.paymentId).catch((error) => console.warn("Transaction Status request could not be started", { transactionId: result.paymentId, error }));
     }
   }
-  if (orderEmail && parsed.data.paymentMethod === "CASH_ON_DELIVERY") void sendEmail({ to: orderEmail, subject: `Invoice for ${orderNumber} — pay on delivery`, message: `Hello ${parsed.data.fullName},
-
-Your order ${orderNumber} is confirmed for cash on delivery.
-
-Medicines: KES ${subtotal.toLocaleString()}
-Delivery: KES ${deliveryFee.toLocaleString()}
-Amount due on delivery: KES ${payable.toLocaleString()}
-
-Please have the exact amount ready for the rider.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"CASH ON DELIVERY"}), channel:"orders" });
-  if (orderEmail && parsed.data.paymentMethod === "MANUAL_MPESA" && paymentStatus !== "PAID") void sendEmail({ to: orderEmail, subject: `Payment proof received for ${orderNumber}`, message: `Hello ${parsed.data.fullName},\n\nWe received your payment proof for order ${orderNumber}. Total: KES ${payable.toLocaleString()}. We will confirm it before processing the order.`, html:orderEmailHtml({name:parsed.data.fullName,orderNumber,items:lines.map(line=>({productName:line.product.name,quantity:line.quantity,lineTotal:line.total.toString()})),subtotal,deliveryFee,total:subtotal+deliveryFee,status:"PAYMENT REVIEW"}), channel:"orders" });
+  // "Order received" email. Which wording depends on how it is being paid: cash on
+  // delivery is an invoice, a typed-in M-Pesa message is awaiting review, and anything else
+  // is a plain acknowledgement (the payment confirmation follows separately once matched).
+  if (orderEmail) {
+    const emailItems = lines.map(line => ({ productName: line.product.name, quantity: line.quantity, lineTotal: line.total.toString() }));
+    const received = parsed.data.paymentMethod === "CASH_ON_DELIVERY"
+      ? { subject: `Invoice for ${orderNumber} — pay on delivery`, status: "CASH ON DELIVERY", message: `Hello ${parsed.data.fullName},\n\nYour order ${orderNumber} is confirmed for cash on delivery.\n\nMedicines: KES ${subtotal.toLocaleString()}\nDelivery: KES ${deliveryFee.toLocaleString()}\nAmount due on delivery: KES ${payable.toLocaleString()}\n\nPlease have the exact amount ready for the rider.` }
+      : parsed.data.paymentMethod === "MANUAL_MPESA" && paymentStatus !== "PAID"
+        ? { subject: `Payment proof received for ${orderNumber}`, status: "PAYMENT REVIEW", message: `Hello ${parsed.data.fullName},\n\nWe received your payment proof for order ${orderNumber}. Total: KES ${payable.toLocaleString()}. We will confirm it before processing the order.` }
+        : { subject: `We received your order ${orderNumber}`, status: "ORDER RECEIVED", message: `Hello ${parsed.data.fullName},\n\nThank you for your order ${orderNumber}. Total: KES ${payable.toLocaleString()}. ${paymentStatus === "PAID" ? "Your payment is confirmed and we are preparing your order." : "We will confirm your payment and keep you updated as it is processed."}` };
+    queueCustomerNotification("ORDER_PLACED", {
+      email: { to: orderEmail, subject: received.subject, message: received.message, html: orderEmailHtml({ name: parsed.data.fullName, orderNumber, items: emailItems, subtotal, deliveryFee, total: subtotal + deliveryFee, status: received.status }), channel: "orders" },
+    });
+  }
   if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewOrder) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${payable.toLocaleString()}.`, channel:"orders" });
   return json({ ok: true, id: result.orderId, orderNumber, total: payable, vat, paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
 }
@@ -852,7 +918,7 @@ const productSchema = z.object({
   description: optionalText(10000),
   usageInformation: optionalText(10000), warnings: optionalText(10000), storageInformation: optionalText(10000),
   price: z.coerce.number().nonnegative(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), packSize: optionalText(100),
-  prescriptionRequired: z.coerce.boolean().default(false), isFeatured: z.coerce.boolean().default(false), conditionIds: z.array(z.coerce.number().int().positive()).optional().default([]),
+  prescriptionRequired: z.coerce.boolean().default(false), searchOnly: z.coerce.boolean().default(false), isFeatured: z.coerce.boolean().default(false), conditionIds: z.array(z.coerce.number().int().positive()).optional().default([]),
   // A new product saved from the draft button must land switched off, exactly as the
   // same button does when the product already exists.
   isActive: z.boolean().optional().default(true),
@@ -866,8 +932,15 @@ class FeaturedInactiveError extends Error {
   }
 }
 
+/** Featured is advertising, which prescription-only and search-only products never are. */
+class FeaturedHiddenError extends Error {
+  constructor(public productName: string) {
+    super(`${productName} is prescription-only or search-only, so it cannot be featured.`);
+  }
+}
+
 /**
- * Keeps the featured shelf at ten.
+ * Keeps the featured shelf at its limit (lib/featured-products).
  *
  * Featuring is a fixed number of slots, not a flag anyone can set on as many products
  * as they like — an open-ended list made "featured first" meaningless on the storefront.
@@ -891,11 +964,12 @@ async function applyFeatured(
   // do nothing except hold one of the ten places against a product that could have used
   // it. Checked here, inside the transaction, so it holds however the star was pressed.
   const [target] = await tx
-    .select({ isActive: products.isActive, name: products.name })
+    .select({ isActive: products.isActive, name: products.name, prescriptionRequired: products.prescriptionRequired, searchOnly: products.searchOnly })
     .from(products)
     .where(eq(products.id, productId))
     .limit(1);
   if (!target?.isActive) throw new FeaturedInactiveError(target?.name || "That product");
+  if (target.prescriptionRequired || target.searchOnly) throw new FeaturedHiddenError(target.name);
   const shelf = await tx
     .select({ id: products.id, name: products.name, featuredAt: products.featuredAt })
     .from(products)
@@ -932,6 +1006,7 @@ const SHARED_PRODUCT_FIELDS = [
   "warnings",
   "storageInformation",
   "prescriptionRequired",
+  "searchOnly",
 ] as const;
 
 /** The product a row belongs to: its lead's id, and every row of it, lead first. */
@@ -1193,6 +1268,7 @@ export async function handleProductVariants(request: Request, id: number) {
         warnings: lead.warnings,
         storageInformation: lead.storageInformation,
         prescriptionRequired: lead.prescriptionRequired,
+        searchOnly: lead.searchOnly,
         // A new option shows the product's picture until it is given its own. A colour
         // usually wants its own photograph, but an empty frame on the storefront while
         // nobody has uploaded one yet is worse than showing the product it belongs to.
@@ -1270,7 +1346,7 @@ export async function handleProducts(request: Request, id?: number) {
     let evicted: Array<{ id: number; name: string }> = [];
     try {
     const created = await db.transaction(async (tx) => {
-      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: generatedSku, barcode: values.barcode || null, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, usageInformation: values.usageInformation || null, warnings: values.warnings || null, storageInformation: values.storageInformation || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), costPrice: values.costPrice == null ? null : values.costPrice.toFixed(2), costPriceEstimated: values.costPrice == null, packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: false, isActive: values.isActive });
+      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: generatedSku, barcode: values.barcode || null, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, usageInformation: values.usageInformation || null, warnings: values.warnings || null, storageInformation: values.storageInformation || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), costPrice: values.costPrice == null ? null : values.costPrice.toFixed(2), costPriceEstimated: values.costPrice == null, packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, searchOnly: values.searchOnly, isFeatured: false, isActive: values.isActive });
       // Featuring is applied through the shelf rule rather than written straight in,
       // so a new product starred on creation evicts the oldest just like any other.
       evicted = await applyFeatured(tx, record.insertId, values.isFeatured || undefined);
@@ -1282,7 +1358,7 @@ export async function handleProducts(request: Request, id?: number) {
     });
     return json({ ok: true, id: created.insertId, sku: generatedSku, unfeatured: evicted }, { status: 201 });
     } catch (error) {
-      if (error instanceof FeaturedInactiveError) return json({ error: error.message }, { status: 400 });
+      if (error instanceof FeaturedInactiveError || error instanceof FeaturedHiddenError) return json({ error: error.message }, { status: 400 });
       throw error;
     }
   }
@@ -1315,7 +1391,7 @@ export async function handleProducts(request: Request, id?: number) {
     }
   }
   if (request.method === "PATCH") {
-    const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), barcode: z.string().trim().max(100).nullable().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(10000).nullable().optional(), usageInformation: z.string().trim().max(10000).nullable().optional(), warnings: z.string().trim().max(10000).nullable().optional(), storageInformation: z.string().trim().max(10000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), prescriptionRequired: z.boolean().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional(), stock: productStockSchema }).safeParse(await body(request));
+    const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), barcode: z.string().trim().max(100).nullable().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(10000).nullable().optional(), usageInformation: z.string().trim().max(10000).nullable().optional(), warnings: z.string().trim().max(10000).nullable().optional(), storageInformation: z.string().trim().max(10000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), prescriptionRequired: z.boolean().optional(), searchOnly: z.boolean().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional(), stock: productStockSchema }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Invalid product update." }, { status: 400 });
     if (auth.session.role !== "SUPER_ADMIN") parsed.data.costPrice = undefined;
     if (parsed.data.price !== undefined && parsed.data.discountPrice !== null && parsed.data.discountPrice !== undefined && parsed.data.discountPrice > parsed.data.price) return json({ error: "The selling price cannot be higher than the regular price." }, { status: 400 });
@@ -1360,17 +1436,17 @@ export async function handleProducts(request: Request, id?: number) {
     try {
     await db.transaction(async (tx) => {
       if (hasColumns) await tx.update(products).set(columns).where(eq(products.id, id));
-      // Featured is not written with the rest of the fields: it is a shelf of ten, and
-      // putting a product on it can take another one off. Taking a product off sale also
-      // takes its star, so a switched-off product never holds a place on the shelf.
-      evicted = await applyFeatured(
-        tx,
-        id,
-        parsed.data.isActive === false ? false : isFeatured,
-      );
-      await applyProductStock(tx, id, auth.session.userId, stock);
       const groupIds = group.hasOptions ? group.rows.map((row) => row.id) : [id];
+      // Written before the shelf is touched, so featuring is judged against the product
+      // as this save leaves it rather than as it was.
       if (Object.keys(shared).length) await tx.update(products).set(shared).where(inArray(products.id, groupIds));
+      // Featured is not written with the rest of the fields: it is a shelf with a fixed
+      // number of places, and putting a product on it can take another one off. Taking a
+      // product off sale, or hiding it from listings, also takes its star, so a product
+      // that cannot be shown never holds a place on the shelf.
+      const losesStar = parsed.data.isActive === false || parsed.data.prescriptionRequired === true || parsed.data.searchOnly === true;
+      evicted = await applyFeatured(tx, id, losesStar ? false : isFeatured);
+      await applyProductStock(tx, id, auth.session.userId, stock);
       if (renameTo) {
         // The label-free title on every option, and each option's full name rebuilt from it.
         for (const row of group.rows) {
@@ -1390,7 +1466,7 @@ export async function handleProducts(request: Request, id?: number) {
       }
     });
     } catch (error) {
-      if (error instanceof FeaturedInactiveError) return json({ error: error.message }, { status: 400 });
+      if (error instanceof FeaturedInactiveError || error instanceof FeaturedHiddenError) return json({ error: error.message }, { status: 400 });
       throw error;
     }
     // A product with options changed across all of its rows, so the table is sent them all.
@@ -1926,14 +2002,10 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
           const savedItems=await tx.select().from(prescriptionRequestItems).where(eq(prescriptionRequestItems.prescriptionId,downloadId)).orderBy(prescriptionRequestItems.id);
           return{customer,status:nextStatus,reviewVersion,orderId,orderNumber,orderTotal,items:savedItems};
         });
-        if(action==="REQUEST_CLARIFICATION")void sendEmail({to:result.customer.email,subject:"Action required for your prescription",message:`Hello ${result.customer.firstName},\n\nA pharmacist needs more information before completing your prescription request.\n\n${parsed.data.pharmacistNotes}`,action:{label:"Review prescription request",url:`${storefrontOrigin()}/account/prescriptions/${downloadId}`},channel:"orders"});
-        if(action==="APPROVE")void sendEmail({to:result.customer.email,subject:"Your prescription is approved and ready",message:`Hello ${result.customer.firstName},\n\nYour prescription has been approved. The confirmed medicines total KES ${Number(result.orderTotal).toLocaleString()}. Review the proposed order, choose delivery or pickup and proceed to payment.`,action:{label:"Review and pay",url:`${storefrontOrigin()}/account/prescriptions/${downloadId}`},channel:"orders"});
-        if(action==="DECLINE")void sendEmail({to:result.customer.email,subject:"Prescription review update",message:`Hello ${result.customer.firstName},\n\nThis prescription request could not be approved.\n\n${parsed.data.pharmacistNotes}`,action:{label:"View prescription request",url:`${storefrontOrigin()}/account/prescriptions/${downloadId}`},channel:"orders"});
-        if((await notificationSettings()).smsPrescriptionUpdatesEnabled&&result.customer.phone){
-          const event=action==="REQUEST_CLARIFICATION"?"CLARIFICATION_NEEDED":action==="APPROVE"?"APPROVED":"DECLINED";
-          const identity=await pharmacyIdentity();
-          void sendSms({to:result.customer.phone,purpose:"PRESCRIPTION_UPDATE",message:prescriptionSms(event,{customerName:result.customer.firstName,...identity})}).catch((error)=>console.error("Prescription review SMS failed",{prescriptionId:downloadId,action,error}));
-        }
+        const trackUrl=`${storefrontOrigin()}/account/prescriptions/${downloadId}`;
+        if(action==="REQUEST_CLARIFICATION")void notifyPrescriptionCustomer("PRESCRIPTION_CLARIFICATION","CLARIFICATION_NEEDED",result.customer,{subject:"Action required for your prescription",message:`Hello ${result.customer.firstName},\n\nA pharmacist needs more information before completing your prescription request.\n\n${parsed.data.pharmacistNotes}`,action:{label:"Review prescription request",url:trackUrl}});
+        if(action==="APPROVE")void notifyPrescriptionCustomer("PRESCRIPTION_APPROVED","APPROVED",result.customer,{subject:"Your prescription is approved and ready",message:`Hello ${result.customer.firstName},\n\nYour prescription has been approved. The confirmed medicines total KES ${Number(result.orderTotal).toLocaleString()}. Review the proposed order, choose delivery or pickup and proceed to payment.`,action:{label:"Review and pay",url:trackUrl}});
+        if(action==="DECLINE")void notifyPrescriptionCustomer("PRESCRIPTION_DECLINED","DECLINED",result.customer,{subject:"Prescription review update",message:`Hello ${result.customer.firstName},\n\nThis prescription request could not be approved.\n\n${parsed.data.pharmacistNotes}`,action:{label:"View prescription request",url:trackUrl}});
         return json({ok:true,...result});
       }catch(error){if(error instanceof PrescriptionWorkflowError)return json({error:error.message},{status:error.status});console.error("Prescription review failed",{prescriptionId:downloadId,action,error});return json({error:"The prescription review could not be saved."},{status:500});}
     }
@@ -1977,19 +2049,50 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
       await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_REQUEST_CREATED", entityType: "prescription", entityId: String(requestRow.insertId), metadata: { linkedProductIds: linkedProducts.map((product) => product.id) } });
       return requestRow;
     });
-    void sendEmail({ to: auth.session.email, subject: "Prescription under pharmacist review", message: `Hello ${auth.session.firstName},\n\nWe received your prescription and placed it under pharmacist review.${linkedProducts.length ? ` ${linkedProducts.length} prescription ${linkedProducts.length === 1 ? "medicine was" : "medicines were"} linked from your cart; prices will be confirmed by the pharmacist.` : " The pharmacist will identify the medicines, availability, quantities and prices."}`, action: { label: "Track prescription", url: `${storefrontOrigin()}/account/prescriptions/${created.insertId}` }, channel: "orders" });
-    const receivedNotifications = await notificationSettings();
-    if (process.env.NOTIFICATION_EMAIL && receivedNotifications.notifyNewPrescription) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New prescription under review", message: `A new prescription request is ready for pharmacist review. Reference: ${created.insertId}.`, channel: "orders" });
-    if (receivedNotifications.smsPrescriptionUpdatesEnabled && sender?.phone) {
-      const identity = await pharmacyIdentity();
-      void sendSms({ to: sender.phone, purpose: "PRESCRIPTION_UPDATE", message: prescriptionSms("RECEIVED", { customerName: auth.session.firstName, ...identity }) }).catch((error) => console.error("Prescription received SMS failed", { prescriptionId: created.insertId, error }));
-    }
+    void notifyPrescriptionCustomer("PRESCRIPTION_RECEIVED", "RECEIVED", { email: auth.session.email, firstName: auth.session.firstName, phone: sender?.phone }, { subject: "Prescription under pharmacist review", message: `Hello ${auth.session.firstName},\n\nWe received your prescription and placed it under pharmacist review.${linkedProducts.length ? ` ${linkedProducts.length} prescription ${linkedProducts.length === 1 ? "medicine was" : "medicines were"} linked from your cart; prices will be confirmed by the pharmacist.` : " The pharmacist will identify the medicines, availability, quantities and prices."}`, action: { label: "Track prescription", url: `${storefrontOrigin()}/account/prescriptions/${created.insertId}` } });
+    if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewPrescription) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New prescription under review", message: `A new prescription request is ready for pharmacist review. Reference: ${created.insertId}.`, channel: "orders" });
     return json({ ok: true, id: created.insertId, linkedProductIds: linkedProducts.map((product) => product.id) }, { status: 201 });
   } catch (error) {
     await unlink(storedPath).catch(() => undefined);
     console.error("Prescription request creation failed", error);
     return json({ error: "The prescription could not be saved. Please try again." }, { status: 500 });
   }
+}
+
+type CartExtraLine = { productId: number; productName: string; quantity: number; unitPrice: number; lineTotal: number; offerId: number | null; offerTitle: string | null };
+
+/**
+ * Prices a customer's own cart so it can be paid for together with a prescription.
+ *
+ * Same rules as an ordinary web order: prices and bundles are re-resolved from the live
+ * catalogue, and anything that needs a prescription is refused (it has to go through a
+ * pharmacist, not through a cart). An empty cart is fine and simply adds nothing.
+ */
+async function priceCartExtras(
+  db: ReturnType<typeof getDb>,
+  items: Array<{ productId: number; quantity: number }>,
+  offerItems: Array<{ offerId: number }>,
+): Promise<{ lines: CartExtraLine[]; subtotal: number; costs: Map<number, string> } | { error: string; code: string; status: number }> {
+  if (!items.length && !offerItems.length) return { lines: [], subtotal: 0, costs: new Map() };
+  const ids = [...new Set(items.map((item) => item.productId))];
+  const catalog = ids.length ? await db.select().from(products).where(and(inArray(products.id, ids), eq(products.isActive, true))) : [];
+  if (catalog.length !== ids.length) return { error: "One or more products in your cart are unavailable. Update your cart and try again.", code: "CART_UNAVAILABLE", status: 409 };
+  const liveOffers = await loadLiveOffers();
+  const offerPrices = offerPriceMap(liveOffers);
+  const bundles = bundleOrderLines(liveOffers, offerItems);
+  if ("error" in bundles) return { error: bundles.error, code: "OFFER_UNAVAILABLE", status: 409 };
+  const needsPrescription = catalog.some((product) => product.prescriptionRequired) || offerItems.some((requested) => liveOffers.find((offer) => offer.id === requested.offerId)?.items.some((item) => item.prescriptionRequired));
+  if (needsPrescription) return { error: "Prescription medicines in your cart have to be sent to the pharmacist first. Remove them from your cart to pay for this prescription.", code: "PRESCRIPTION_REVIEW_REQUIRED", status: 409 };
+  const lines: CartExtraLine[] = [
+    ...items.map((item) => {
+      const product = catalog.find((entry) => entry.id === item.productId)!;
+      const unitPrice = offerPrices.get(product.id) ?? Number(product.discountPrice ?? product.price);
+      return { productId: product.id, productName: product.name, quantity: item.quantity, unitPrice, lineTotal: unitPrice * item.quantity, offerId: null, offerTitle: null };
+    }),
+    ...bundles.lines.map((line) => ({ productId: line.productId, productName: line.productName, quantity: line.quantity, unitPrice: line.unitPrice, lineTotal: line.total, offerId: line.offerId, offerTitle: line.offerTitle })),
+  ];
+  const costs = await productCosts(lines.map((line) => line.productId));
+  return { lines, subtotal: lines.reduce((sum, line) => sum + line.lineTotal, 0), costs };
 }
 
 export async function handlePrescriptionCheckout(request: Request, prescriptionId: number) {
@@ -2000,10 +2103,18 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
     checkoutToken: z.string().uuid(), fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA_EXPRESS", "MANUAL_MPESA"]),
     phone: z.string().trim().min(9).max(30), billingPhone: z.string().trim().min(9).max(30).optional(), manualPaymentMessage: z.string().trim().max(2500).optional(),
     deliveryAddress: z.string().trim().max(1000).optional(), deliveryArea: z.string().trim().max(160).optional(), deliveryLatitude: z.number().min(-90).max(90).optional(), deliveryLongitude: z.number().min(-180).max(180).optional(),
+    // The customer's own cart, paid for together with the prescription. The pharmacist's
+    // lines stay exactly as approved; these are added beside them.
+    items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).max(100).optional().default([]),
+    offerItems: z.array(z.object({ offerId: z.number().int().positive() })).max(10).optional().default([]),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message || "Check the checkout details." }, { status: 400 });
   if (parsed.data.fulfilmentMethod === "DELIVERY" && !parsed.data.deliveryAddress) return json({ error: "Delivery address is required." }, { status: 400 });
   const db = getDb();
+  // Priced here from the live catalogue and offers, never from the browser. Prescription
+  // medicines cannot ride along: those only ever go through a pharmacist.
+  const extras = await priceCartExtras(db, parsed.data.items, parsed.data.offerItems);
+  if ("error" in extras) return json({ error: extras.error, code: extras.code }, { status: extras.status });
   const [settings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber }).from(siteSettings).limit(1);
   if (parsed.data.paymentMethod === "MPESA_EXPRESS" && (!settings?.onlineMpesaEnabled || !mpesaConfiguration())) return json({ error: "M-Pesa Express is currently unavailable. Choose manual M-Pesa payment." }, { status: 409 });
   if (parsed.data.paymentMethod === "MANUAL_MPESA" && (!settings?.onlineManualEnabled || !settings.mpesaTillNumber)) return json({ error: "Manual M-Pesa payment is currently unavailable." }, { status: 409 });
@@ -2016,13 +2127,15 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
     if (parsed.data.deliveryLatitude === undefined || parsed.data.deliveryLongitude === undefined) {
       return json({ error: "Pin your delivery location on the map so the delivery fee can be calculated.", code: "DELIVERY_LOCATION_REQUIRED" }, { status: 400 });
     }
-    const [proposal] = await db.select({ id: orders.id, subtotal: orders.subtotal }).from(orders).innerJoin(prescriptions, eq(prescriptions.orderId, orders.id)).where(and(eq(prescriptions.id, prescriptionId), eq(prescriptions.customerId, auth.session.userId))).limit(1);
+    const [proposal] = await db.select({ id: orders.id }).from(orders).innerJoin(prescriptions, eq(prescriptions.orderId, orders.id)).where(and(eq(prescriptions.id, prescriptionId), eq(prescriptions.customerId, auth.session.userId))).limit(1);
     if (!proposal) return json({ error: "This prescription is not ready for checkout." }, { status: 409 });
-    const proposalLines = await db.select({ productId: orderItems.productId, quantity: orderItems.quantity }).from(orderItems).where(eq(orderItems.orderId, proposal.id));
+    // Only the pharmacist's lines: anything the customer added on an earlier attempt is
+    // about to be replaced by what they are sending now.
+    const proposalLines = await db.select({ productId: orderItems.productId, quantity: orderItems.quantity, lineTotal: orderItems.lineTotal }).from(orderItems).where(and(eq(orderItems.orderId, proposal.id), eq(orderItems.addedByCustomer, false)));
     deliveryQuote = await resolveDeliveryQuote({
       point: { latitude: parsed.data.deliveryLatitude, longitude: parsed.data.deliveryLongitude },
-      lines: proposalLines.flatMap((line) => (line.productId ? [{ productId: line.productId, quantity: line.quantity }] : [])),
-      subtotal: Number(proposal.subtotal),
+      lines: [...proposalLines, ...extras.lines].flatMap((line) => (line.productId ? [{ productId: line.productId, quantity: line.quantity }] : [])),
+      subtotal: proposalLines.reduce((sum, line) => sum + Number(line.lineTotal), 0) + extras.subtotal,
     });
     if (!deliveryQuote.quote.available) return json({ error: deliveryQuote.quote.message, code: "DELIVERY_UNAVAILABLE" }, { status: 409 });
   }
@@ -2034,7 +2147,7 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
       if (!order) throw new PrescriptionWorkflowError("The proposed order could not be found.", 404);
       if (order.paymentStatus === "PAID") return { duplicate: true, order, paymentId: null };
       if (order.status !== "AWAITING_PAYMENT") throw new PrescriptionWorkflowError("This prescription order is no longer awaiting payment.");
-      const proposalLines=await tx.select({productId:orderItems.productId,productName:orderItems.productName,quantity:orderItems.quantity}).from(orderItems).where(eq(orderItems.orderId,order.id));
+      const proposalLines=await tx.select({productId:orderItems.productId,productName:orderItems.productName,quantity:orderItems.quantity,lineTotal:orderItems.lineTotal}).from(orderItems).where(and(eq(orderItems.orderId,order.id),eq(orderItems.addedByCustomer,false)));
       if(!proposalLines.length)throw new PrescriptionWorkflowError("The proposed order has no medicines. Ask the pharmacy to review it again.");
       const productIds=proposalLines.flatMap((line)=>line.productId?[line.productId]:[]);
       const stockRows=productIds.length?await tx.select({productId:branchInventory.productId,available:sql<number>`sum(greatest(${branchInventory.quantityAvailable} - ${branchInventory.quantityReserved}, 0))`}).from(branchInventory).where(inArray(branchInventory.productId,productIds)).groupBy(branchInventory.productId):[];
@@ -2047,7 +2160,11 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
         return{availabilityChanged:true as const,note,order};
       }
       const deliveryFee = deliveryQuote?.quote.fee ?? 0;
-      const total = Number(order.subtotal) + deliveryFee;
+      // The pharmacist's lines plus whatever the customer added from their cart, taxed as
+      // one basket the way any other online order is.
+      const goods = proposalLines.reduce((sum, line) => sum + Number(line.lineTotal), 0) + extras.subtotal;
+      const goodsVat = await onlineVatFor(goods);
+      const total = Math.round((goods + goodsVat.amount + deliveryFee) * 100) / 100;
       if (parsed.data.paymentMethod === "MPESA_EXPRESS" && !Number.isInteger(total)) throw new PrescriptionWorkflowError("M-Pesa Express requires a whole-shilling total. Choose manual M-Pesa.");
       if (order.checkoutToken === parsed.data.checkoutToken) {
         const [payment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
@@ -2055,13 +2172,18 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
       }
       const attempts = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt));
       if (attempts.some((payment) => ["INITIATED", "PENDING", "REQUIRES_REVIEW"].includes(payment.status))) throw new PrescriptionWorkflowError("A payment for this prescription is already awaiting confirmation.");
-      await tx.update(orders).set({ checkoutToken: parsed.data.checkoutToken, phone: parsed.data.phone, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, paymentMethod: parsed.data.paymentMethod, paymentStatus: "PENDING", paymentReference: manualReceipt, deliveryFee: deliveryFee.toFixed(2), total: total.toFixed(2), suggestedBranchId: deliveryQuote?.branch?.id ?? order.suggestedBranchId, deliveryDistanceKm: deliveryQuote ? deliveryQuote.quote.distanceKm.toFixed(2) : null, deliveryDurationMinutes: deliveryQuote?.durationMinutes ?? null, deliveryBandId: deliveryQuote?.quote.band?.id ?? null, deliveryCourier: deliveryQuote?.quote.courier ?? null }).where(eq(orders.id, order.id));
+      // Replace, not append: a customer who tried to pay, changed their cart and came back
+      // must not be charged for the lines from the first attempt as well.
+      await tx.delete(orderItems).where(and(eq(orderItems.orderId, order.id), eq(orderItems.addedByCustomer, true)));
+      if (extras.lines.length) await tx.insert(orderItems).values(extras.lines.map((line) => ({ orderId: order.id, productId: line.productId, productName: line.productName, quantity: line.quantity, unitPrice: line.unitPrice.toFixed(2), lineTotal: line.lineTotal.toFixed(2), unitCost: extras.costs.get(line.productId) ?? null, offerId: line.offerId, offerTitle: line.offerTitle, addedByCustomer: true })));
+      await tx.update(orders).set({ subtotal: goods.toFixed(2), vat: goodsVat.amount.toFixed(2), vatRate: goodsVat.rate.toFixed(2), checkoutToken: parsed.data.checkoutToken, phone: parsed.data.phone, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, paymentMethod: parsed.data.paymentMethod, paymentStatus: "PENDING", paymentReference: manualReceipt, deliveryFee: deliveryFee.toFixed(2), total: total.toFixed(2), suggestedBranchId: deliveryQuote?.branch?.id ?? order.suggestedBranchId, deliveryDistanceKm: deliveryQuote ? deliveryQuote.quote.distanceKm.toFixed(2) : null, deliveryDurationMinutes: deliveryQuote?.durationMinutes ?? null, deliveryBandId: deliveryQuote?.quote.band?.id ?? null, deliveryCourier: deliveryQuote?.quote.courier ?? null }).where(eq(orders.id, order.id));
       const [payment] = await tx.insert(paymentTransactions).values({ orderId: order.id, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: total.toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
-      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_CHECKOUT_STARTED", entityType: "order", entityId: String(order.id), metadata: { prescriptionId, paymentMethod: parsed.data.paymentMethod, total } });
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_CHECKOUT_STARTED", entityType: "order", entityId: String(order.id), metadata: { prescriptionId, paymentMethod: parsed.data.paymentMethod, total, addedItems: extras.lines.length } });
       return { duplicate: false, order: { ...order, checkoutToken: parsed.data.checkoutToken, total: total.toFixed(2) }, paymentId: payment.insertId };
     });
     if("availabilityChanged" in outcome){
-      void sendEmail({to:auth.session.email,subject:"Your prescription proposal needs a new availability check",message:`Hello ${auth.session.firstName},\n\n${outcome.note}\n\nYou have not been charged. Your normal shopping cart is unaffected.`,action:{label:"View prescription update",url:`${storefrontOrigin()}/account/prescriptions/${prescriptionId}`},channel:"orders"});
+      const [buyer]=await db.select({phone:users.phone}).from(users).where(eq(users.id,auth.session.userId)).limit(1);
+      void notifyPrescriptionCustomer("PRESCRIPTION_RECHECK","RECHECK",{email:auth.session.email,firstName:auth.session.firstName,phone:buyer?.phone},{subject:"Your prescription proposal needs a new availability check",message:`Hello ${auth.session.firstName},\n\n${outcome.note}\n\nYou have not been charged.`,action:{label:"View prescription update",url:`${storefrontOrigin()}/account/prescriptions/${prescriptionId}`}});
       return json({error:outcome.note},{status:409});
     }
     if (outcome.duplicate) return json({ ok: true, id: outcome.order.id, orderNumber: outcome.order.orderNumber, total: Number(outcome.order.total), paymentStatus: outcome.order.paymentStatus, duplicate: true });
@@ -2109,7 +2231,7 @@ export async function handleInventory(request: Request, id: number) {
 export async function handleSettings(request: Request) {
   const db = getDb();
   if (request.method === "GET") {
-    const [settings] = await db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone, whatsapp: siteSettings.whatsapp, supportEmail: siteSettings.supportEmail, address: siteSettings.address, openingHours: siteSettings.openingHours, deliveryMessage: siteSettings.deliveryMessage, freeDeliveryThreshold: siteSettings.freeDeliveryThreshold,licenceTitle:siteSettings.licenceTitle,licenceNumber:siteSettings.licenceNumber,licenceImageUrl:siteSettings.licenceImageUrl,onlineMpesaEnabled:siteSettings.onlineMpesaEnabled,onlineManualEnabled:siteSettings.onlineManualEnabled,posCashEnabled:siteSettings.posCashEnabled,posMpesaEnabled:siteSettings.posMpesaEnabled,posManualEnabled:siteSettings.posManualEnabled,mpesaTillNumber:siteSettings.mpesaTillNumber,mpesaAccountName:siteSettings.mpesaAccountName,notifyNewOrder:siteSettings.notifyNewOrder,notifyOrderStatusChange:siteSettings.notifyOrderStatusChange,notifyCustomerReceivedOrder:siteSettings.notifyCustomerReceivedOrder,notifyNewPrescription:siteSettings.notifyNewPrescription,notifyNewConsultation:siteSettings.notifyNewConsultation,notifyNewCustomer:siteSettings.notifyNewCustomer,notifyTillPayment:siteSettings.notifyTillPayment,smsPrescriptionUpdatesEnabled:siteSettings.smsPrescriptionUpdatesEnabled,smsConsultationUpdatesEnabled:siteSettings.smsConsultationUpdatesEnabled }).from(siteSettings).limit(1);
+    const [settings] = await db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone, whatsapp: siteSettings.whatsapp, supportEmail: siteSettings.supportEmail, address: siteSettings.address, openingHours: siteSettings.openingHours, deliveryMessage: siteSettings.deliveryMessage, freeDeliveryThreshold: siteSettings.freeDeliveryThreshold,licenceTitle:siteSettings.licenceTitle,licenceNumber:siteSettings.licenceNumber,licenceImageUrl:siteSettings.licenceImageUrl,onlineMpesaEnabled:siteSettings.onlineMpesaEnabled,onlineManualEnabled:siteSettings.onlineManualEnabled,posCashEnabled:siteSettings.posCashEnabled,posMpesaEnabled:siteSettings.posMpesaEnabled,posManualEnabled:siteSettings.posManualEnabled,mpesaTillNumber:siteSettings.mpesaTillNumber,mpesaAccountName:siteSettings.mpesaAccountName,notifyNewOrder:siteSettings.notifyNewOrder,notifyOrderStatusChange:siteSettings.notifyOrderStatusChange,notifyCustomerReceivedOrder:siteSettings.notifyCustomerReceivedOrder,notifyNewPrescription:siteSettings.notifyNewPrescription,notifyNewConsultation:siteSettings.notifyNewConsultation,notifyNewCustomer:siteSettings.notifyNewCustomer,notifyTillPayment:siteSettings.notifyTillPayment,customerNotifications:siteSettings.customerNotifications }).from(siteSettings).limit(1);
     return json({ settings: settings ?? null });
   }
   const auth = await requireSession(request, [...admins]);
@@ -2119,7 +2241,9 @@ export async function handleSettings(request: Request) {
     address: z.string().trim().max(1000), openingHours: z.string().trim().max(255), deliveryMessage: z.string().trim().min(2).max(255), freeDeliveryThreshold: z.coerce.number().nonnegative().optional(),
     facebookUrl: z.string().trim().url().or(z.literal("")), instagramUrl: z.string().trim().url().or(z.literal("")), xUrl: z.string().trim().url().or(z.literal("")), tiktokUrl: z.string().trim().url().or(z.literal("")), licenceTitle:z.string().trim().max(190),licenceNumber:z.string().trim().max(120),licenceImageUrl:z.string().trim().max(500), requireTeamTwoFactor: z.boolean(),
     onlineMpesaEnabled:z.boolean(),onlineManualEnabled:z.boolean(),onlineCodEnabled:z.boolean(),posCashEnabled:z.boolean(),posMpesaEnabled:z.boolean(),posManualEnabled:z.boolean(),mpesaTillNumber:z.string().trim().max(30),mpesaAccountName:z.string().trim().max(150),
-    notifyNewOrder:z.boolean(),notifyOrderStatusChange:z.boolean(),notifyCustomerReceivedOrder:z.boolean(),notifyNewPrescription:z.boolean(),notifyNewConsultation:z.boolean(),notifyNewCustomer:z.boolean(),notifyTillPayment:z.boolean(),smsPrescriptionUpdatesEnabled:z.boolean(),smsConsultationUpdatesEnabled:z.boolean(),
+    notifyNewOrder:z.boolean(),notifyOrderStatusChange:z.boolean(),notifyCustomerReceivedOrder:z.boolean(),notifyNewPrescription:z.boolean(),notifyNewConsultation:z.boolean(),notifyNewCustomer:z.boolean(),notifyTillPayment:z.boolean(),
+    // Per-event email and SMS switches for customer messages. Unknown events are dropped.
+    customerNotifications:z.record(z.string(),z.object({email:z.boolean().optional(),sms:z.boolean().optional()})).transform(parseNotificationPreferences),
     // Disclosure only: shelf prices already include VAT, so this changes the receipt
     // and nothing a customer is charged. 0 keeps the line off the receipt.
     taxNumber:z.string().trim().max(60),vatEnabled:z.boolean(),vatRate:z.coerce.number().min(0).max(MAX_VAT_RATE),

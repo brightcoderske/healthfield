@@ -4,7 +4,7 @@
 
 import { AlertTriangle, CheckCircle2, ExternalLink, FileText, PackagePlus, Plus, Search, Trash2, X, XCircle } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { prescriptionStatuses, prescriptionStatusLabels, type PrescriptionReviewAction, type PrescriptionStatus } from "@/lib/prescription-workflow";
 import { dispenseRuleHints, type DispenseRule } from "@/lib/prescription-dispensing";
 
@@ -31,6 +31,18 @@ export function PrescriptionManager({ initialItems, products, customerProfileBas
   const [items,setItems]=useState(initialItems),[query,setQuery]=useState(""),[statusFilter,setStatusFilter]=useState<StatusFilter>("ALL"),[activeId,setActiveId]=useState<number|null>(null);
   const [draft,setDraft]=useState<DraftLine[]>([]),[notes,setNotes]=useState(""),[productQuery,setProductQuery]=useState(""),[saving,setSaving]=useState(false),[message,setMessage]=useState(""),[confirming,setConfirming]=useState<PrescriptionReviewAction|"DELETE"|null>(null);
   const active=items.find((item)=>item.id===activeId)||null;
+  // /admin/prescriptions?open=12 lands straight on that prescription, which is what the
+  // "view prescription" links in other screens (a deleted order, say) point at.
+  useEffect(()=>{
+    const timer=window.setTimeout(()=>{
+      const wanted=Number(new URLSearchParams(window.location.search).get("open"));
+      const target=Number.isInteger(wanted)&&wanted>0?initialItems.find((item)=>item.id===wanted):undefined;
+      if(target)openReview(target)
+    },0);
+    return()=>window.clearTimeout(timer);
+    // Only the first render's list and address matter; later edits must not reopen it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
   const counts=useMemo(()=>Object.fromEntries(prescriptionStatuses.map((status)=>[status,items.filter((item)=>item.status===status).length])) as Record<PrescriptionStatus,number>,[items]);
   const shown=useMemo(()=>{const term=query.trim().toLowerCase();return items.filter((item)=>(statusFilter==="ALL"||item.status===statusFilter)&&(!term||[item.senderName,item.originalFilename,item.pharmacistNotes,item.orderNumber,item.id].join(" ").toLowerCase().includes(term)))},[items,query,statusFilter]);
   const availableProducts=useMemo(()=>{const used=new Set(draft.map((line)=>line.productId)),term=productQuery.trim().toLowerCase();return products.filter((product)=>!used.has(product.id)&&(!term||`${product.name} ${product.packSize||""}`.toLowerCase().includes(term))).slice(0,8)},[draft,productQuery,products]);
