@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import express, { type Request as ExpressRequest, type Response as ExpressResponse } from "express";
 import { Readable } from "node:stream";
@@ -11,7 +11,8 @@ import { handleConsultationAttachment, handleConsultationMessages, handleConsult
 import { handleSmsReportRefresh } from "./sms-routes";
 import { handleDeliveryBands, handleDeliveryPreview, handleDeliveryQuote, handleDeliverySettings } from "./delivery";
 import { handleView } from "./views";
-import { changesCatalogue, serveCachedView } from "./catalogue-cache";
+import { changesCatalogue, changesCounts, changesSessions, serveCachedView } from "./catalogue-cache";
+import { outboxStatus, startOutbox } from "./outbox-delivery";
 import { closeSharedCache, getSharedCache } from "./redis";
 import { mpesaConfiguration, setMpesaTokenStore } from "./mpesa";
 import { handleDailyReportSend, runDailyReportIfDue } from "./daily-report";
@@ -31,6 +32,8 @@ if (existsSync(envPath)) loadEnvFile(envPath);
 // request (and does nothing at all if Redis has not been configured). M-Pesa's access token
 // is kept in it so workers share one instead of each asking Safaricom for their own.
 const startupCache = getSharedCache();
+// The worker that sends queued emails and SMS; does nothing at all without Redis.
+startOutbox();
 setMpesaTokenStore({
   get: (key) => startupCache.get(key),
   set: (key, value, ttlSeconds) => startupCache.set(key, value, ttlSeconds),
@@ -92,7 +95,7 @@ async function route(request: Request, ip: string): Promise<Response> {
     // moment a deploy lands.
     const clock = await databaseClock().catch((error) => ({ error: error instanceof Error ? error.message : "Database clock unavailable." }));
     const cache = getSharedCache();
-    return json({ service: "healthfield-api", status: "ok", timestamp: new Date().toISOString(), clock, deployment: deploymentInfo(), cache: { status: cache.status, ...cache.counters } });
+    return json({ service: "healthfield-api", status: "ok", timestamp: new Date().toISOString(), clock, deployment: deploymentInfo(), cache: { status: cache.status, ...cache.counters }, outbox: await outboxStatus() });
   }
   const paymentNotificationRoute = url.pathname.match(/^\/v1\/payments\/mobile-money\/(stk\/notification|c2b\/confirmation|c2b\/verification|status\/result|status\/timeout|recovery\/notification)\/([^/]+)$/);
   if (paymentNotificationRoute) {
@@ -103,12 +106,21 @@ async function route(request: Request, ip: string): Promise<Response> {
       return json({ error: "Payment endpoint not found." }, { status: 404 });
     }
     const paymentRoute = paymentNotificationRoute[1];
-    return responseOf(paymentRoute === "stk/notification" ? handleStkNotification(request)
+    const handle = () => responseOf(paymentRoute === "stk/notification" ? handleStkNotification(request)
       : paymentRoute === "c2b/verification" ? handleC2bVerification(request)
       : paymentRoute === "c2b/confirmation" ? handleC2bConfirmation(request)
       : paymentRoute === "status/result" ? handleTransactionStatusResult(request)
       : paymentRoute === "status/timeout" ? handleTransactionStatusTimeout(request)
       : handlePullTransactionsNotification(request));
+    // Safaricom sends a callback again if it does not hear back quickly, so the same one can
+    // arrive twice at once. The database already makes handling it twice harmless; this makes
+    // the copies wait their turn, so the second finds the work done instead of racing the
+    // first. It only ever orders them: if the lock cannot be had, the handler runs regardless.
+    // Only after the secret above has been checked, so nobody unauthenticated can hold a lock.
+    const body = request.method === "POST" ? await request.clone().text().catch(() => "") : "";
+    if (!body || body.length > 64_000) return handle();
+    const digest = createHash("sha256").update(body).digest("hex").slice(0, 32);
+    return getSharedCache().withLock(`mpesa:${paymentRoute}:${digest}`, 30_000, handle);
   }
   const imageMatch = url.pathname.match(/^\/uploads\/products\/([^/]+)$/);
   if (imageMatch && request.method === "GET") return serveProductImage(imageMatch[1]);
@@ -267,7 +279,14 @@ app.all("/{*path}", async (nodeRequest, nodeResponse) => {
     // An edit to products, categories, offers, banners, blogs, settings or stores makes every
     // remembered public page out of date; this moves the version they are all keyed by,
     // before the answer goes back, so the very next page load already sees the change.
-    if (changesCatalogue(request.method, new URL(request.url).pathname, response.status)) await getSharedCache().bumpCatalogue();
+    const pathname = new URL(request.url).pathname;
+    const cache = getSharedCache();
+    if (changesCatalogue(request.method, pathname, response.status)) await cache.bump("catalogue");
+    // Anyone whose access just changed (signed out, suspended, password reset, role or
+    // permissions edited) must lose it on the very next request, so every remembered session
+    // is made stale rather than waiting for it to expire.
+    if (changesSessions(request.method, pathname, response.status)) await cache.bump("sessions");
+    if (changesCounts(request.method, pathname, response.status)) await cache.bump("counts");
     await send(nodeResponse, securityHeaders(response, origin));
   } catch (error) {
     const reference = Math.random().toString(36).slice(2, 10);

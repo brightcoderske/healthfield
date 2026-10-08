@@ -20,6 +20,10 @@ export interface CacheBackend {
   set(key: string, value: string, ttlSeconds: number): Promise<void>;
   /** Adds one to a counter, starting its expiry clock the first time it is created. */
   increment(key: string, ttlSeconds: number): Promise<number>;
+  /** Takes a lock if nobody holds it. `token` identifies the holder; the lock lapses by itself. */
+  acquire(key: string, token: string, ttlMs: number): Promise<boolean>;
+  /** Releases a lock, but only if `token` still holds it, so a late release cannot free someone else's. */
+  release(key: string, token: string): Promise<void>;
 }
 
 type Entry = { value: string; expiresAt: number };
@@ -71,6 +75,19 @@ export class MemoryBackend implements CacheBackend {
     entry.value = String(next);
     return next;
   }
+
+  async acquire(key: string, token: string, ttlMs: number) {
+    this.sweep();
+    const now = this.clock();
+    const entry = this.entries.get(key);
+    if (entry && entry.expiresAt > now) return false;
+    this.entries.set(key, { value: token, expiresAt: now + ttlMs });
+    return true;
+  }
+
+  async release(key: string, token: string) {
+    if (this.entries.get(key)?.value === token) this.entries.delete(key);
+  }
 }
 
 export type CacheStatus = "disabled" | "up" | "down";
@@ -88,7 +105,12 @@ export type SharedCacheOptions = {
   onError?: (error: unknown, operation: string) => void;
 };
 
-const CATALOGUE_VERSION_KEY = "catalogue:version";
+/**
+ * Things whose cached copies can be made stale all at once by moving a version number that
+ * is part of every key: the public pages ("catalogue"), signed-in sessions ("sessions") and
+ * the counts shown on the admin screens ("counts").
+ */
+export type VersionNamespace = "catalogue" | "sessions" | "counts";
 
 export class SharedCache {
   backend: CacheBackend | null;
@@ -101,7 +123,7 @@ export class SharedCache {
   onError: (error: unknown, operation: string) => void;
   downUntil: number;
   inFlight: Map<string, Promise<unknown>>;
-  version: { value: string; readAt: number } | null;
+  versions: Map<VersionNamespace, { value: string; readAt: number }>;
   counters: { hits: number; misses: number; errors: number };
 
   constructor(backend: CacheBackend | null, options: SharedCacheOptions = {}) {
@@ -115,7 +137,7 @@ export class SharedCache {
     this.onError = options.onError ?? (() => undefined);
     this.downUntil = 0;
     this.inFlight = new Map();
-    this.version = null;
+    this.versions = new Map();
     this.counters = { hits: 0, misses: 0, errors: 0 };
   }
 
@@ -209,24 +231,61 @@ export class SharedCache {
   }
 
   /**
-   * The current catalogue version, which every cached public page is keyed by. Changing it
-   * is how an edit makes all of them stale at once without hunting down each one. Each
-   * process trusts what it read for a second, so a page is not asked about its version on
+   * The current version of a namespace, which every cached entry in it is keyed by. Changing
+   * it is how an edit makes all of them stale at once without hunting down each one. Each
+   * process trusts what it read for a second, so an entry is not asked about its version on
    * every single request.
    */
-  async catalogueVersion(): Promise<string> {
+  async version(namespace: VersionNamespace): Promise<string> {
     const now = this.clock();
-    if (this.version && now - this.version.readAt < this.versionTrustMs) return this.version.value;
-    const result = await this.attempt("version", (backend) => backend.get(this.prefix + CATALOGUE_VERSION_KEY));
+    const known = this.versions.get(namespace);
+    if (known && now - known.readAt < this.versionTrustMs) return known.value;
+    const result = await this.attempt("version", (backend) => backend.get(`${this.prefix}${namespace}:version`));
     const value = result.ok && result.value ? result.value : "0";
-    this.version = { value, readAt: now };
+    this.versions.set(namespace, { value, readAt: now });
     return value;
   }
 
-  /** Marks everything cached about the catalogue as out of date. */
-  async bumpCatalogue(): Promise<void> {
-    const result = await this.attempt("bump", (backend) => backend.increment(this.prefix + CATALOGUE_VERSION_KEY, 60 * 60 * 24 * 30));
+  /** Marks everything cached in a namespace as out of date. */
+  async bump(namespace: VersionNamespace): Promise<void> {
+    const result = await this.attempt("bump", (backend) => backend.increment(`${this.prefix}${namespace}:version`, 60 * 60 * 24 * 30));
     // This process forgets what it knew either way, so its own next read is fresh.
-    this.version = result.ok ? { value: String(result.value), readAt: this.clock() } : null;
+    if (result.ok) this.versions.set(namespace, { value: String(result.value), readAt: this.clock() });
+    else this.versions.delete(namespace);
+  }
+
+  catalogueVersion() {
+    return this.version("catalogue");
+  }
+
+  bumpCatalogue() {
+    return this.bump("catalogue");
+  }
+
+  /**
+   * Runs `work` while holding a lock on `key`, so identical requests arriving together are
+   * handled one after another instead of racing.
+   *
+   * This only ever adds order, never a refusal: if the lock cannot be had because Redis is
+   * unavailable, or is still held after `waitMs`, the work runs anyway. Whatever correctness
+   * the work needs must come from the database, as it already does.
+   */
+  async withLock<T>(key: string, ttlMs: number, work: () => Promise<T>, waitMs = 3_000): Promise<T> {
+    const lockKey = `${this.prefix}lock:${key}`;
+    const token = `${this.clock()}-${Math.random().toString(36).slice(2)}`;
+    const giveUpAt = this.clock() + waitMs;
+    let held = false;
+    for (;;) {
+      const result = await this.attempt("lock", (backend) => backend.acquire(lockKey, token, ttlMs));
+      if (!result.ok) break;
+      if (result.value) { held = true; break; }
+      if (this.clock() >= giveUpAt) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    try {
+      return await work();
+    } finally {
+      if (held) await this.attempt("unlock", (backend) => backend.release(lockKey, token));
+    }
   }
 }

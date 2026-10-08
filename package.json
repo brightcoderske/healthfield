@@ -51,7 +51,7 @@
     "test:offers": "node --experimental-strip-types --test api-service/src/offers.test.ts",
     "test:catalogue": "node --experimental-strip-types --test lib/catalogue-breaks.test.ts",
     "test:featured": "node --experimental-strip-types --test lib/featured-products.test.ts",
-    "test:cache": "node --experimental-strip-types --test api-service/src/cache.test.ts api-service/src/catalogue-cache.test.ts api-service/src/mpesa-token-store.test.ts",
+    "test:cache": "node --experimental-strip-types --test api-service/src/cache.test.ts api-service/src/catalogue-cache.test.ts api-service/src/mpesa-token-store.test.ts api-service/src/outbox.test.ts",
     "test:variants": "node --experimental-strip-types --test lib/product-variants.test.ts",
     "test:search": "node --experimental-strip-types --test lib/search-rank.test.ts",
     "test:richtext": "node --experimental-strip-types --test lib/rich-text-safety.test.ts",

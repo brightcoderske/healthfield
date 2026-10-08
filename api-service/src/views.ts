@@ -66,6 +66,7 @@ import {
   requireTeamPermission,
   sessionHasPermission,
 } from "./staff-permissions";
+import { getSharedCache } from "./redis";
 import { parseNotificationPreferences } from "../../lib/notification-events";
 import { parseVatRate, vatOnNet } from "../../lib/vat";
 import { searchPhrase } from "../../lib/search-rank";
@@ -983,6 +984,21 @@ async function cardDetails<
     }));
 }
 
+/**
+ * The counts behind the admin and staff badges, remembered for a few seconds.
+ *
+ * Every open admin screen asks for them every few seconds, and they are the same numbers for
+ * everyone who may see them. They are cleared the moment anything that changes them happens
+ * (an order, a prescription, a consultation, a chat or a payment), so a new order still rings
+ * the alert at once; the ten seconds only bounds how stale they can get if something slips by.
+ */
+async function cachedCounts<T>(key: string, build: () => Promise<T>): Promise<T> {
+  const cache = getSharedCache();
+  if (cache.status === "disabled") return build();
+  const version = await cache.version("counts");
+  return (await cache.remember(`counts:${version}:${key}`, 10, build)).value;
+}
+
 export async function handleView(request: Request, path: string) {
   const url = new URL(request.url);
   if (path === "walk-in-sale") return posWorkspaceState(request);
@@ -1690,6 +1706,7 @@ export async function handleView(request: Request, path: string) {
     const db = getDb();
     const view = path.slice(6);
     if (view === "navigation") {
+      return json(await cachedCounts("admin", async () => {
       const [
         [{ newOrders }],
         [{ newChats }],
@@ -1729,13 +1746,14 @@ export async function handleView(request: Request, path: string) {
             .from(consultations)
             .where(ne(consultations.status, "CLOSED")),
         ]);
-      return json({
+      return {
         newOrders: Number(newOrders),
         newChats: Number(newChats),
         unmatchedPayments: Number(unmatchedPayments),
         pendingPrescriptions: Number(pendingPrescriptions),
         pendingConsultations: Number(pendingConsultations),
-      });
+      };
+      }));
     }
     if (view === "dashboard") {
       const since = new Date(Date.now() - 92 * 24 * 60 * 60 * 1000);
@@ -2483,6 +2501,8 @@ export async function handleView(request: Request, path: string) {
       auth.session,
       "CONSULTATIONS_VIEW",
     );
+    // Keyed by which counts this person may see, since those are all that differs between them.
+    const counts = await cachedCounts(`staff:${Number(canViewOrders)}${Number(canViewPrescriptions)}${Number(canViewConsultations)}`, async () => {
     const [[{ newOrders }], [{ pendingPrescriptions }], [{ pendingConsultations }]] = await Promise.all([
       canViewOrders
         ? getDb()
@@ -2509,13 +2529,13 @@ export async function handleView(request: Request, path: string) {
             .where(ne(consultations.status, "CLOSED"))
         : Promise.resolve([{ pendingConsultations: 0 }]),
     ]);
-    return json({
+    return {
       newOrders: Number(newOrders),
       pendingPrescriptions: Number(pendingPrescriptions),
       pendingConsultations: Number(pendingConsultations),
-      branch: auth.branch,
-      permissions: auth.session.permissions,
+    };
     });
+    return json({ ...counts, branch: auth.branch, permissions: auth.session.permissions });
   }
   if (path === "staff/dashboard") {
     const auth = await requireTeamBranch(request, "DASHBOARD_VIEW");

@@ -15,6 +15,8 @@ function broken(mode: "throw" | "hang"): CacheBackend & { calls: number } {
     async get() { backend.calls += 1; if (mode === "hang") return new Promise<string | null>(() => undefined); throw new Error("connection refused"); },
     async set() { backend.calls += 1; if (mode === "hang") return new Promise<void>(() => undefined); throw new Error("connection refused"); },
     async increment() { backend.calls += 1; if (mode === "hang") return new Promise<number>(() => undefined); throw new Error("connection refused"); },
+    async acquire() { backend.calls += 1; if (mode === "hang") return new Promise<boolean>(() => undefined); throw new Error("connection refused"); },
+    async release() { backend.calls += 1; if (mode === "hang") return new Promise<void>(() => undefined); throw new Error("connection refused"); },
   };
   return backend;
 }
@@ -154,4 +156,67 @@ test("the in-memory backend does not grow without bound", async () => {
   await backend.set("fresh", "v", 10);
   for (let i = 0; i < 200; i += 1) await backend.get("fresh");
   assert.ok(backend.entries.size < 100, `still holding ${backend.entries.size} expired entries`);
+});
+
+test("versions are kept per namespace, so bumping one leaves the others alone", async () => {
+  const cache = new SharedCache(new MemoryBackend(), { versionTrustMs: 0 });
+  const before = { catalogue: await cache.version("catalogue"), sessions: await cache.version("sessions"), counts: await cache.version("counts") };
+  await cache.bump("sessions");
+  assert.equal(await cache.version("catalogue"), before.catalogue);
+  assert.equal(await cache.version("counts"), before.counts);
+  assert.notEqual(await cache.version("sessions"), before.sessions);
+});
+
+test("identical work arriving together runs one after another, never overlapping", async () => {
+  const cache = new SharedCache(new MemoryBackend());
+  let running = 0;
+  let overlapped = false;
+  const order: number[] = [];
+  const job = (n: number) => cache.withLock("callback:abc", 5_000, async () => {
+    running += 1;
+    if (running > 1) overlapped = true;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    order.push(n);
+    running -= 1;
+    return n;
+  });
+  const results = await Promise.all([job(1), job(2), job(3)]);
+  assert.deepEqual(results.sort(), [1, 2, 3], "every one still runs: a lock adds order, not refusal");
+  assert.equal(overlapped, false);
+});
+
+test("different keys do not wait for each other", async () => {
+  const cache = new SharedCache(new MemoryBackend());
+  const started = Date.now();
+  await Promise.all([cache.withLock("a", 5_000, () => new Promise((r) => setTimeout(r, 60))), cache.withLock("b", 5_000, () => new Promise((r) => setTimeout(r, 60)))]);
+  assert.ok(Date.now() - started < 110, "independent locks ran one after the other");
+});
+
+test("a lock nobody released lapses by itself, and a late release cannot free someone else's", async () => {
+  const time = clock();
+  const backend = new MemoryBackend(time.now);
+  assert.equal(await backend.acquire("k", "first", 1_000), true);
+  assert.equal(await backend.acquire("k", "second", 1_000), false);
+  time.advance(1_001);
+  assert.equal(await backend.acquire("k", "second", 1_000), true);
+  await backend.release("k", "first");
+  assert.equal(await backend.acquire("k", "third", 1_000), false, "the stale holder must not release the new lock");
+});
+
+test("work still runs when the lock cannot be had, whether Redis is down or the lock is stuck", async () => {
+  const down = new SharedCache(broken("throw"));
+  assert.equal(await down.withLock("k", 1_000, async () => "ran"), "ran");
+  const backend = new MemoryBackend();
+  await backend.acquire("hf:lock:stuck", "someone-else", 60_000);
+  const stuck = new SharedCache(backend);
+  const started = Date.now();
+  assert.equal(await stuck.withLock("stuck", 1_000, async () => "ran anyway", 100), "ran anyway");
+  assert.ok(Date.now() - started >= 90, "it should have waited its turn first");
+});
+
+test("the lock is released when the work throws", async () => {
+  const backend = new MemoryBackend();
+  const cache = new SharedCache(backend);
+  await assert.rejects(cache.withLock("k", 5_000, async () => { throw new Error("boom"); }), /boom/);
+  assert.equal(await backend.acquire("hf:lock:k", "next", 1_000), true);
 });

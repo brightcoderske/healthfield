@@ -4,6 +4,7 @@ import { and, eq, gt, isNull, lt } from "drizzle-orm";
 import { authSessions, staffPermissions, users } from "../../db/schema";
 import { normalizeStaffPermissions, type StaffPermission } from "../../lib/staff-permissions";
 import { getDb } from "./db";
+import { getSharedCache } from "./redis";
 
 export type Role = "CUSTOMER" | "STAFF" | "ADMIN" | "SUPER_ADMIN";
 export type Session = { userId: number; email: string; firstName: string; role: Role; forcePasswordChange: boolean; homeBranchId: number | null; permissions: StaffPermission[] };
@@ -16,6 +17,10 @@ function secret() {
 }
 
 const sessionTokenPrefix = "hfs_";
+/** Longest a signed-in session is trusted without asking the database again. */
+const SESSION_CACHE_SECONDS = 30;
+/** Switches only this feature off (it is the security-sensitive one) without touching the rest of Redis. */
+const sessionCacheEnabled = () => process.env.REDIS_SESSION_CACHE !== "false";
 const sessionTokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 // MySQL hosts running with explicit_defaults_for_timestamp=OFF turn a nullable
 // TIMESTAMP into NOT NULL DEFAULT '0000-00-00 00:00:00', which the driver reads
@@ -76,8 +81,28 @@ export async function requestSession(request: Request, allowUploadToken = false)
   if (!header?.startsWith("Bearer ")) return null;
   const token = header.slice(7);
   if (token.startsWith(sessionTokenPrefix)) {
+    // A session is looked up on every signed-in request, which is a join across three tables.
+    // A valid one is remembered for thirty seconds, keyed by a hash of the token (never the
+    // token itself) and by a version that is moved whenever anyone's access could have
+    // changed (see changesSessions), so signing out, suspending an account or editing
+    // permissions takes effect on the next request rather than thirty seconds later. Only
+    // sessions that passed every check are kept; a refusal is always worked out afresh.
+    const cache = getSharedCache();
+    const remember = sessionCacheEnabled() && cache.status !== "disabled";
+    const cacheKey = remember ? `session:${await cache.version("sessions")}:${sessionTokenHash(token)}` : "";
+    if (remember) {
+      const hit = await cache.get(cacheKey);
+      if (hit) {
+        try {
+          const kept = JSON.parse(hit) as { session: Session; expiresAtMs: number };
+          // Never outlives the session's own expiry, whatever the cache says.
+          if (kept.session && typeof kept.expiresAtMs === "number" && Date.now() < kept.expiresAtMs) return kept.session;
+        } catch { /* an unreadable entry is the same as none */ }
+      }
+    }
     try {
       const [session] = await getDb().select({
+        expiresAtMs: authSessions.expiresAtMs,
         userId: users.id,
         email: users.email,
         firstName: users.firstName,
@@ -96,7 +121,19 @@ export async function requestSession(request: Request, allowUploadToken = false)
         return null;
       }
       const permissionRows = session.role === "STAFF" ? await getDb().select({ permission: staffPermissions.permission }).from(staffPermissions).where(eq(staffPermissions.userId, session.userId)) : [];
-      return { ...session, permissions: normalizeStaffPermissions(permissionRows.map((row) => row.permission)) } as Session;
+      // Only what a session is made of: the revoked/deleted columns were there for the checks above,
+      // and dates do not survive being stored as JSON, so a cached session and a fresh one must match.
+      const resolved: Session = {
+        userId: session.userId,
+        email: session.email,
+        firstName: session.firstName,
+        role: session.role,
+        forcePasswordChange: session.forcePasswordChange,
+        homeBranchId: session.homeBranchId,
+        permissions: normalizeStaffPermissions(permissionRows.map((row) => row.permission)),
+      };
+      if (remember) await cache.set(cacheKey, JSON.stringify({ session: resolved, expiresAtMs: session.expiresAtMs }), SESSION_CACHE_SECONDS);
+      return resolved;
     } catch (error) {
       console.error("[auth.session] rejected", { reason: "opaque_session_database_error", code: error && typeof error === "object" && "code" in error ? String(error.code) : undefined, name: error instanceof Error ? error.name : undefined });
       return null;

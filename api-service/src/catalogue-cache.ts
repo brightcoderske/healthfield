@@ -53,6 +53,31 @@ export function changesCatalogue(method: string, pathname: string, status: numbe
   return CATALOGUE_AREAS.test(pathname);
 }
 
+const SESSION_AREAS = /^\/v1\/(auth\/(logout|change-password|reset-password)|staff)(\/|$)/;
+
+/**
+ * Whether a finished request could have changed who is allowed to do what: signing out,
+ * changing or resetting a password, or anything done to a staff account (suspending,
+ * deleting, changing its role, branch or permissions).
+ */
+export function changesSessions(method: string, pathname: string, status: number): boolean {
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return false;
+  if (status >= 400) return false;
+  return SESSION_AREAS.test(pathname);
+}
+
+const COUNT_AREAS = /^\/v1\/(orders|prescriptions|consultations|chats|payments|walk-in-sales|pos)(\/|$)/;
+
+/**
+ * Whether a finished request could have changed a number shown on an admin badge. Includes
+ * the payment callbacks, which is how a till payment that matches no order appears.
+ */
+export function changesCounts(method: string, pathname: string, status: number): boolean {
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return false;
+  if (status >= 400) return false;
+  return COUNT_AREAS.test(pathname);
+}
+
 /** What is stored for a cached view: only what a client needs to be answered the same way. */
 export type StoredView = { status: number; contentType: string; cacheControl: string | null; body: string };
 

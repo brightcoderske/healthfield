@@ -1,8 +1,8 @@
 import type { SmsPurpose } from "../../lib/sms-templates";
 import { channelEnabled, type CustomerNotificationEventId } from "../../lib/notification-events";
-import { sendEmail } from "./email";
+import type { sendEmail } from "./email";
 import { notificationSettings } from "./notification-settings";
-import { sendSms } from "./sms";
+import { sendEmailQueued, sendSmsQueued } from "./outbox-delivery";
 
 type EmailInput = Parameters<typeof sendEmail>[0];
 
@@ -16,7 +16,9 @@ type EmailInput = Parameters<typeof sendEmail>[0];
  * customers have a phone but no email, or the reverse.
  *
  * Never throws. A message failing to send must not fail the order, prescription or
- * consultation that caused it; the failure is logged and the work carries on.
+ * consultation that caused it. Each message goes through the outbox (./outbox-delivery), so
+ * one that cannot be delivered right now is retried rather than lost; with no outbox it is
+ * sent directly, as before.
  */
 export async function notifyCustomer(
   event: CustomerNotificationEventId,
@@ -29,14 +31,10 @@ export async function notifyCustomer(
     const { customer } = await notificationSettings();
     const sends: Array<Promise<unknown>> = [];
     if (message.email?.to && channelEnabled(customer, event, "email")) {
-      sends.push(sendEmail({ ...message.email, to: message.email.to }).catch((error) => console.error("Customer email failed", { event, error })));
+      sends.push(sendEmailQueued({ ...message.email, to: message.email.to }));
     }
     if (message.sms?.to && message.sms.message && channelEnabled(customer, event, "sms")) {
-      sends.push(
-        sendSms({ to: message.sms.to, message: message.sms.message, purpose: message.sms.purpose, orderId: message.sms.orderId })
-          .then((outcome) => { if (outcome.failed) console.warn("Customer SMS was not delivered", { event, detail: outcome.results[0]?.detail }); })
-          .catch((error) => console.error("Customer SMS failed", { event, error })),
-      );
+      sends.push(sendSmsQueued({ to: message.sms.to, message: message.sms.message, purpose: message.sms.purpose, orderId: message.sms.orderId }));
     }
     await Promise.all(sends);
   } catch (error) {

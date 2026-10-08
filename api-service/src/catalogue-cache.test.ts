@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MemoryBackend, SharedCache } from "./cache.ts";
-import { changesCatalogue, publicViewTtlSeconds, serveCachedView, viewCacheKey } from "./catalogue-cache.ts";
+import { changesCatalogue, changesCounts, changesSessions, publicViewTtlSeconds, serveCachedView, viewCacheKey } from "./catalogue-cache.ts";
 
 test("only the public pages are cached; anything tied to a person never is", () => {
   for (const view of ["home", "browse", "search", "products/12", "blogs", "blogs/a-slug", "locations", "conditions", "sitemap", "merchant"]) {
@@ -93,7 +93,7 @@ test("after a catalogue change the next request sees fresh data, not the old pag
 });
 
 test("with Redis down, pages are simply built each time and the site stays up", async () => {
-  const dead = { async get() { throw new Error("down"); }, async set() { throw new Error("down"); }, async increment(): Promise<number> { throw new Error("down"); } };
+  const dead = { async get() { throw new Error("down"); }, async set() { throw new Error("down"); }, async increment(): Promise<number> { throw new Error("down"); }, async acquire(): Promise<boolean> { throw new Error("down"); }, async release() { throw new Error("down"); } };
   const cache = new SharedCache(dead);
   let builds = 0;
   const response = await serveCachedView(cache, "home", "", async () => { builds += 1; return jsonResponse({ ok: true }); });
@@ -107,4 +107,23 @@ test("with no Redis configured the view is passed straight through untouched", a
   const response = await serveCachedView(cache, "home", "", async () => jsonResponse({ ok: true }));
   assert.equal(response.headers.get("x-cache"), null);
   assert.deepEqual(await response.json(), { ok: true });
+});
+
+test("anything that can change who may do what makes remembered sessions stale", () => {
+  for (const [method, path] of [["POST", "/v1/auth/logout"], ["POST", "/v1/auth/change-password"], ["POST", "/v1/auth/reset-password"], ["PATCH", "/v1/staff/7"], ["DELETE", "/v1/staff/7"], ["POST", "/v1/staff"], ["PUT", "/v1/staff/7/permissions"], ["PATCH", "/v1/staff/7/permissions"]]) {
+    assert.equal(changesSessions(method, path, 200), true, `${method} ${path} must invalidate sessions`);
+  }
+  assert.equal(changesSessions("POST", "/v1/auth/login", 200), false, "signing in changes nobody's access");
+  assert.equal(changesSessions("GET", "/v1/staff", 200), false);
+  assert.equal(changesSessions("PATCH", "/v1/staff/7", 403), false, "a refused change changed nothing");
+  assert.equal(changesSessions("POST", "/v1/orders", 201), false);
+});
+
+test("anything that can change a badge count makes remembered counts stale", () => {
+  for (const [method, path] of [["POST", "/v1/orders"], ["PATCH", "/v1/orders/4"], ["POST", "/v1/prescriptions"], ["PATCH", "/v1/prescriptions/2"], ["POST", "/v1/consultations"], ["POST", "/v1/consultations/3/messages"], ["POST", "/v1/chats"], ["POST", "/v1/payments/mobile-money/c2b/confirmation/SECRET"], ["POST", "/v1/payments/incoming/9/match"], ["POST", "/v1/walk-in-sales"], ["POST", "/v1/pos/sessions"]]) {
+    assert.equal(changesCounts(method, path, 200), true, `${method} ${path} must invalidate counts`);
+  }
+  assert.equal(changesCounts("GET", "/v1/orders", 200), false);
+  assert.equal(changesCounts("POST", "/v1/orders", 400), false);
+  assert.equal(changesCounts("PATCH", "/v1/products/5", 200), false);
 });
