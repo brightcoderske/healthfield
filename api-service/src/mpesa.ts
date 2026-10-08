@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 export type MpesaConfiguration = {
   baseUrl: string;
   consumerKey: string;
@@ -310,13 +311,47 @@ function acceptedRequest(data: JsonRecord, fallback: string) {
   return data;
 }
 
-async function accessToken(config: MpesaConfiguration) {
+/**
+ * Somewhere shared to keep the access token, so every worker (and a restarted one) reuses
+ * the one Safaricom already issued instead of each asking for its own. Optional and
+ * injected rather than imported, so this file stays free of dependencies and testable; with
+ * none given each process keeps its own, exactly as before.
+ */
+export type MpesaTokenStore = {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, ttlSeconds: number): Promise<void>;
+};
+let tokenStore: MpesaTokenStore | null = null;
+export function setMpesaTokenStore(store: MpesaTokenStore | null) {
+  tokenStore = store;
+}
+
+/** Test seam: forgets this process's own copy of the token, as a fresh worker would. */
+export function clearMpesaTokenCache() {
+  cachedToken = null;
+}
+
+export async function accessToken(config: MpesaConfiguration) {
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
+  // Keyed by who the token was issued to, so sandbox and live credentials never share one.
+  const storeKey = `mpesa:token:${createHash("sha256").update(`${config.baseUrl}|${config.consumerKey}`).digest("hex").slice(0, 24)}`;
+  if (tokenStore) {
+    try {
+      const shared = JSON.parse((await tokenStore.get(storeKey)) || "null") as { value?: string; expiresAt?: number } | null;
+      if (shared?.value && typeof shared.expiresAt === "number" && shared.expiresAt > Date.now() + 60_000) {
+        cachedToken = { value: shared.value, expiresAt: shared.expiresAt };
+        return shared.value;
+      }
+    } catch { /* an unreadable entry is the same as none */ }
+  }
   const credentials = Buffer.from(`${config.consumerKey}:${config.consumerSecret}`).toString("base64");
   const data = await mpesaJson(`${config.baseUrl}/oauth/v1/generate?grant_type=client_credentials`, { headers: { Authorization: `Basic ${credentials}` } });
   const value = String(data.access_token || "");
   if (!value) throw new Error("M-Pesa did not return an access token.");
-  cachedToken = { value, expiresAt: Date.now() + Math.max(60, Number(data.expires_in) || 3599) * 1000 };
+  const lifetimeSeconds = Math.max(60, Number(data.expires_in) || 3599);
+  cachedToken = { value, expiresAt: Date.now() + lifetimeSeconds * 1000 };
+  // Kept for a little less than its life, so nobody is handed one about to lapse.
+  if (tokenStore) await tokenStore.set(storeKey, JSON.stringify(cachedToken), Math.max(30, lifetimeSeconds - 120)).catch(() => undefined);
   return value;
 }
 

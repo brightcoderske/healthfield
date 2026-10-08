@@ -8,6 +8,7 @@ import {
 import { requireSession } from "./auth";
 import { getDb } from "./db";
 import { json } from "./http";
+import { getSharedCache } from "./redis";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 
@@ -121,6 +122,17 @@ export async function googleRoute(from: GeoPoint, to: GeoPoint): Promise<RoutedL
   const cached = routeCache.get(cacheKey);
   const now = Date.now();
   if (cached && cached.expiresAt > now) return cached.leg;
+  // Next, what another worker (or this one, before its last restart) already paid Google for.
+  const shared = await getSharedCache().get(`route:${cacheKey}`);
+  if (shared) {
+    try {
+      const leg = JSON.parse(shared) as RoutedLeg;
+      if (typeof leg?.km === "number") {
+        routeCache.set(cacheKey, { leg, expiresAt: now + ROUTE_CACHE_TTL_MS });
+        return leg;
+      }
+    } catch { /* an unreadable entry is the same as none */ }
+  }
   try {
     const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
       method: "POST",
@@ -163,6 +175,7 @@ export async function googleRoute(from: GeoPoint, to: GeoPoint): Promise<RoutedL
       }
     }
     routeCache.set(cacheKey, { leg, expiresAt: Date.now() + ROUTE_CACHE_TTL_MS });
+    await getSharedCache().set(`route:${cacheKey}`, JSON.stringify(leg), ROUTE_CACHE_TTL_MS / 1000);
     return leg;
   } catch {
     return null;
