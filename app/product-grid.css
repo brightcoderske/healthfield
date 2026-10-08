@@ -238,3 +238,14 @@
   background: #218849 !important;
 }
 .approved-product .approved-cart.is-added svg { color: #fff; }
+
+/* Desktop and laptop: a fixed, comfortable number of cards per row. The grid used to fill
+   whatever width it was given, which put seven cards across a wide laptop screen and made
+   the page look crowded. Phones keep their two columns (rules above). */
+@media(min-width:821px){ .approved-products, .approved-products.catalogue-expanded { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 14px; } }
+@media(min-width:1180px){ .approved-products, .approved-products.catalogue-expanded { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; gap: 16px; } }
+
+/* A new batch of featured products fades in rather than snapping into place. */
+.featured-rail-grid.is-rotating { animation: featured-rail-in 0.5s ease both; }
+@keyframes featured-rail-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .featured-rail-grid.is-rotating { animation: none; } }

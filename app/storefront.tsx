@@ -29,6 +29,7 @@ import { ConsultBanner } from "./consult-banner";
 import { HeroRotator } from "./hero-rotator";
 import { PrescriptionHero } from "./prescription-hero";
 import { PrescriptionQuickActions } from "./prescription-quick-actions";
+import { FeaturedRail } from "./featured-rail";
 import { ProductCard } from "./product-card";
 import { groupKey, groupVariants } from "@/lib/product-variants";
 import { rankSearchResults } from "@/lib/search-rank";
@@ -55,6 +56,7 @@ type CatalogProduct = {
   reviewCount: number;
   discountPrice: number | null;
   prescriptionRequired: boolean;
+  searchOnly?: boolean;
   // Only the homepage draw carries this; search and browse results do not.
   isFeatured?: boolean;
   // A variant's own name carries its label; the label-free name sits on the lead.
@@ -360,11 +362,11 @@ export function Storefront({
   }, [browseKey, browseResults]);
   const loadingBrowse = Boolean(browseKey) && !browsedProducts;
 
-  // Prescription medicines are kept out of the browsing catalogue but stay findable:
-  // someone who knows what they were prescribed can search for it by name, while a
-  // casual scroll of the homepage never puts prescription-only medicine in front of
-  // someone who has not been prescribed it. Any active filter counts as intent too.
-  const browsingOnly = !normalizedQuery && !selectedCategory && !selectedCondition && !offersOnly;
+  // Prescription and search-only medicines are kept out of every list, filter and rail but
+  // stay findable: someone who knows what they were prescribed, or what they are after,
+  // can search for it by name. Choosing a category or condition is not a search, so it
+  // does not bring them in.
+  const searchingByName = Boolean(normalizedQuery);
   const { products: filtered, matchedIds } = useMemo(() => {
     const pool = queryWords.length
       ? searchedProducts
@@ -372,7 +374,7 @@ export function Storefront({
     const matching = pool.filter(
         (product) =>
           productMatches(product, queryWords, initialCategories) &&
-          (!browsingOnly || !product.prescriptionRequired) &&
+          (searchingByName || !(product.prescriptionRequired || product.searchOnly)) &&
           (!selectedCategoryIds ||
             selectedCategoryIds.has(product.categoryId)) &&
           (!selectedCondition ||
@@ -400,7 +402,7 @@ export function Storefront({
       browsedProducts,
       initialCategories,
       queryWords,
-      browsingOnly,
+      searchingByName,
       selectedCategoryIds,
       selectedCondition,
       offersOnly,
@@ -409,7 +411,20 @@ export function Storefront({
   // Colours and sizes of the same product collapse into one card. Grouping happens here,
   // after filtering, so a search for "500ml" still narrows to the right rows and then
   // presents them as the product they belong to.
-  const groups = useMemo(() => groupVariants(filtered), [filtered]);
+  const allGroups = useMemo(() => groupVariants(filtered), [filtered]);
+  // The featured shelf gets its own rotating rail on the plain homepage. Its products
+  // are then left out of the grid below, so nothing appears twice on one screen; the
+  // moment the visitor searches or picks a category the rail goes and they are back in
+  // the ordinary results.
+  const featuredGroups = useMemo(
+    () => groupVariants(initialProducts.filter((product) => product.isFeatured && !product.prescriptionRequired && !product.searchOnly)),
+    [initialProducts],
+  );
+  const showFeatured = !normalizedQuery && !selectedCategory && !selectedCondition && !offersOnly && featuredGroups.length > 0;
+  const groups = useMemo(
+    () => (showFeatured ? allGroups.filter((group) => !group.variants.some((variant) => variant.isFeatured)) : allGroups),
+    [allGroups, showFeatured],
+  );
   // Alternatives worth offering, minus anything the results already cover. Compared by
   // group rather than by id: searching for the green one used to suggest the blue and
   // red ones as separate products, when the card above already offers both.
@@ -1501,6 +1516,27 @@ export function Storefront({
               })}
             </div>
           </section>
+        )}
+
+        {showFeatured && (
+          <FeaturedRail items={featuredGroups} startStep={layoutSeed % 97}>
+            {(group) => (
+              <ProductCard
+                key={group.id}
+                product={group.defaultVariant}
+                variants={group.hasChoice ? group.variants : undefined}
+                groupName={group.name}
+                optionName={group.optionName}
+                wishlistActive={group.variants.some((variant) =>
+                  wishlist.includes(variant.id),
+                )}
+                cartQuantities={cart}
+                returnTo="/#products"
+                onAddToCart={addToCart}
+                onVariantAdded={variantAdded}
+              />
+            )}
+          </FeaturedRail>
         )}
 
         <section className="approved-section" id="products">

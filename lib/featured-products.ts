@@ -8,17 +8,20 @@ import { seededRandom } from "./catalogue-breaks.ts";
  * same products led the homepage on every visit. Two rules fix that, and both live
  * here so they can be tested without a database or a browser:
  *
- *  - the shelf holds exactly ten products, and starring an eleventh pushes off the one
- *    that has been featured the longest;
- *  - the homepage is a fresh draw each visit — the ten featured lead, shuffled among
- *    themselves, and the rest of the grid is sampled from the whole catalogue.
+ *  - the shelf holds at most FEATURED_LIMIT products, and starring one more pushes off
+ *    the one that has been featured the longest;
+ *  - the storefront shows only FEATURED_VISIBLE of them at a time and rotates through
+ *    the rest, so a long shelf still gives every product its turn without crowding
+ *    the page.
  *
  * The shuffling is seeded rather than `Math.random()`, for the reason set out in
  * catalogue-breaks: the storefront is server-rendered then hydrated, and the two
  * renders have to agree on the order.
  */
 
-export const FEATURED_LIMIT = 10;
+export const FEATURED_LIMIT = 30;
+/** How many featured products the storefront shows at once; the rest wait their turn. */
+export const FEATURED_VISIBLE = 10;
 
 export type FeaturedRow = { id: number; featuredAt?: Date | string | null };
 
@@ -46,6 +49,20 @@ export function featuredEvictions(current: FeaturedRow[], incomingId: number | n
   const room = incomingId === null ? FEATURED_LIMIT : FEATURED_LIMIT - 1;
   const excess = shelf.length - room;
   return excess > 0 ? shelf.slice(0, excess).map((row) => row.id) : [];
+}
+
+/**
+ * The featured products on screen at `step`.
+ *
+ * The shelf is dealt out `visible` at a time and wraps round, so every product gets the
+ * same airtime whatever the shelf size. When the last batch is short it is topped up from
+ * the front rather than left ragged, which keeps the rail full on every step. A shelf that
+ * fits on one screen does not rotate at all.
+ */
+export function featuredWindow<T>(pool: T[], step: number, visible = FEATURED_VISIBLE) {
+  if (pool.length <= visible) return pool;
+  const start = ((step * visible) % pool.length + pool.length) % pool.length;
+  return Array.from({ length: visible }, (_, index) => pool[(start + index) % pool.length]);
 }
 
 function shuffled<T>(items: T[], random: () => number) {

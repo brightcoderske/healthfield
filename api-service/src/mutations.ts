@@ -875,7 +875,7 @@ const productSchema = z.object({
   description: optionalText(10000),
   usageInformation: optionalText(10000), warnings: optionalText(10000), storageInformation: optionalText(10000),
   price: z.coerce.number().nonnegative(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), packSize: optionalText(100),
-  prescriptionRequired: z.coerce.boolean().default(false), isFeatured: z.coerce.boolean().default(false), conditionIds: z.array(z.coerce.number().int().positive()).optional().default([]),
+  prescriptionRequired: z.coerce.boolean().default(false), searchOnly: z.coerce.boolean().default(false), isFeatured: z.coerce.boolean().default(false), conditionIds: z.array(z.coerce.number().int().positive()).optional().default([]),
   // A new product saved from the draft button must land switched off, exactly as the
   // same button does when the product already exists.
   isActive: z.boolean().optional().default(true),
@@ -889,8 +889,15 @@ class FeaturedInactiveError extends Error {
   }
 }
 
+/** Featured is advertising, which prescription-only and search-only products never are. */
+class FeaturedHiddenError extends Error {
+  constructor(public productName: string) {
+    super(`${productName} is prescription-only or search-only, so it cannot be featured.`);
+  }
+}
+
 /**
- * Keeps the featured shelf at ten.
+ * Keeps the featured shelf at its limit (lib/featured-products).
  *
  * Featuring is a fixed number of slots, not a flag anyone can set on as many products
  * as they like — an open-ended list made "featured first" meaningless on the storefront.
@@ -914,11 +921,12 @@ async function applyFeatured(
   // do nothing except hold one of the ten places against a product that could have used
   // it. Checked here, inside the transaction, so it holds however the star was pressed.
   const [target] = await tx
-    .select({ isActive: products.isActive, name: products.name })
+    .select({ isActive: products.isActive, name: products.name, prescriptionRequired: products.prescriptionRequired, searchOnly: products.searchOnly })
     .from(products)
     .where(eq(products.id, productId))
     .limit(1);
   if (!target?.isActive) throw new FeaturedInactiveError(target?.name || "That product");
+  if (target.prescriptionRequired || target.searchOnly) throw new FeaturedHiddenError(target.name);
   const shelf = await tx
     .select({ id: products.id, name: products.name, featuredAt: products.featuredAt })
     .from(products)
@@ -955,6 +963,7 @@ const SHARED_PRODUCT_FIELDS = [
   "warnings",
   "storageInformation",
   "prescriptionRequired",
+  "searchOnly",
 ] as const;
 
 /** The product a row belongs to: its lead's id, and every row of it, lead first. */
@@ -1216,6 +1225,7 @@ export async function handleProductVariants(request: Request, id: number) {
         warnings: lead.warnings,
         storageInformation: lead.storageInformation,
         prescriptionRequired: lead.prescriptionRequired,
+        searchOnly: lead.searchOnly,
         // A new option shows the product's picture until it is given its own. A colour
         // usually wants its own photograph, but an empty frame on the storefront while
         // nobody has uploaded one yet is worse than showing the product it belongs to.
@@ -1293,7 +1303,7 @@ export async function handleProducts(request: Request, id?: number) {
     let evicted: Array<{ id: number; name: string }> = [];
     try {
     const created = await db.transaction(async (tx) => {
-      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: generatedSku, barcode: values.barcode || null, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, usageInformation: values.usageInformation || null, warnings: values.warnings || null, storageInformation: values.storageInformation || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), costPrice: values.costPrice == null ? null : values.costPrice.toFixed(2), costPriceEstimated: values.costPrice == null, packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, isFeatured: false, isActive: values.isActive });
+      const [record] = await tx.insert(products).values({ categoryId: values.categoryId, name: values.name, slug: `${baseSlug}-${suffix}`, sku: generatedSku, barcode: values.barcode || null, brand: values.brand || null, shortDescription: values.shortDescription || null, description: values.description || null, usageInformation: values.usageInformation || null, warnings: values.warnings || null, storageInformation: values.storageInformation || null, imageUrl: normalizeStoredImageUrl(values.imageUrl), discountPrice: values.discountPrice?.toString() ?? null, price: values.price.toString(), costPrice: values.costPrice == null ? null : values.costPrice.toFixed(2), costPriceEstimated: values.costPrice == null, packSize: values.packSize || null, prescriptionRequired: values.prescriptionRequired, searchOnly: values.searchOnly, isFeatured: false, isActive: values.isActive });
       // Featuring is applied through the shelf rule rather than written straight in,
       // so a new product starred on creation evicts the oldest just like any other.
       evicted = await applyFeatured(tx, record.insertId, values.isFeatured || undefined);
@@ -1305,7 +1315,7 @@ export async function handleProducts(request: Request, id?: number) {
     });
     return json({ ok: true, id: created.insertId, sku: generatedSku, unfeatured: evicted }, { status: 201 });
     } catch (error) {
-      if (error instanceof FeaturedInactiveError) return json({ error: error.message }, { status: 400 });
+      if (error instanceof FeaturedInactiveError || error instanceof FeaturedHiddenError) return json({ error: error.message }, { status: 400 });
       throw error;
     }
   }
@@ -1338,7 +1348,7 @@ export async function handleProducts(request: Request, id?: number) {
     }
   }
   if (request.method === "PATCH") {
-    const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), barcode: z.string().trim().max(100).nullable().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(10000).nullable().optional(), usageInformation: z.string().trim().max(10000).nullable().optional(), warnings: z.string().trim().max(10000).nullable().optional(), storageInformation: z.string().trim().max(10000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), prescriptionRequired: z.boolean().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional(), stock: productStockSchema }).safeParse(await body(request));
+    const parsed = z.object({ name: z.string().trim().min(2).max(220).optional(), categoryId: z.coerce.number().int().positive().optional(), barcode: z.string().trim().max(100).nullable().optional(), brand: z.string().trim().max(150).nullable().optional(), shortDescription: z.string().trim().max(500).nullable().optional(), description: z.string().trim().max(10000).nullable().optional(), usageInformation: z.string().trim().max(10000).nullable().optional(), warnings: z.string().trim().max(10000).nullable().optional(), storageInformation: z.string().trim().max(10000).nullable().optional(), packSize: z.string().trim().max(100).nullable().optional(), price: z.coerce.number().nonnegative().optional(), discountPrice: z.coerce.number().nonnegative().nullable().optional(), costPrice: z.coerce.number().nonnegative().nullable().optional(), imageUrl: z.string().trim().max(500).nullable().optional(), prescriptionRequired: z.boolean().optional(), searchOnly: z.boolean().optional(), isFeatured: z.boolean().optional(), isActive: z.boolean().optional(), conditionIds: z.array(z.coerce.number().int().positive()).optional(), stock: productStockSchema }).safeParse(await body(request));
     if (!parsed.success) return json({ error: "Invalid product update." }, { status: 400 });
     if (auth.session.role !== "SUPER_ADMIN") parsed.data.costPrice = undefined;
     if (parsed.data.price !== undefined && parsed.data.discountPrice !== null && parsed.data.discountPrice !== undefined && parsed.data.discountPrice > parsed.data.price) return json({ error: "The selling price cannot be higher than the regular price." }, { status: 400 });
@@ -1383,17 +1393,17 @@ export async function handleProducts(request: Request, id?: number) {
     try {
     await db.transaction(async (tx) => {
       if (hasColumns) await tx.update(products).set(columns).where(eq(products.id, id));
-      // Featured is not written with the rest of the fields: it is a shelf of ten, and
-      // putting a product on it can take another one off. Taking a product off sale also
-      // takes its star, so a switched-off product never holds a place on the shelf.
-      evicted = await applyFeatured(
-        tx,
-        id,
-        parsed.data.isActive === false ? false : isFeatured,
-      );
-      await applyProductStock(tx, id, auth.session.userId, stock);
       const groupIds = group.hasOptions ? group.rows.map((row) => row.id) : [id];
+      // Written before the shelf is touched, so featuring is judged against the product
+      // as this save leaves it rather than as it was.
       if (Object.keys(shared).length) await tx.update(products).set(shared).where(inArray(products.id, groupIds));
+      // Featured is not written with the rest of the fields: it is a shelf with a fixed
+      // number of places, and putting a product on it can take another one off. Taking a
+      // product off sale, or hiding it from listings, also takes its star, so a product
+      // that cannot be shown never holds a place on the shelf.
+      const losesStar = parsed.data.isActive === false || parsed.data.prescriptionRequired === true || parsed.data.searchOnly === true;
+      evicted = await applyFeatured(tx, id, losesStar ? false : isFeatured);
+      await applyProductStock(tx, id, auth.session.userId, stock);
       if (renameTo) {
         // The label-free title on every option, and each option's full name rebuilt from it.
         for (const row of group.rows) {
@@ -1413,7 +1423,7 @@ export async function handleProducts(request: Request, id?: number) {
       }
     });
     } catch (error) {
-      if (error instanceof FeaturedInactiveError) return json({ error: error.message }, { status: 400 });
+      if (error instanceof FeaturedInactiveError || error instanceof FeaturedHiddenError) return json({ error: error.message }, { status: 400 });
       throw error;
     }
     // A product with options changed across all of its rows, so the table is sent them all.
