@@ -244,3 +244,17 @@ tr.is-product .bulk-name { background: #fdfcfe; }
 .bulk-name > small { flex-basis: 100%; margin-left: 23px; }
 tr.is-option .bulk-name > small { margin-left: 21px; }
 tr:not(.is-option):not(.is-product) .bulk-name > small { margin-left: 0; }
+
+/* On/off settings in the product table: prescription required, search-only and active. */
+.compact-table-row .flag-cell, .compact-table-head.product-row > span:nth-child(5), .compact-table-head.product-row > span:nth-child(6), .compact-table-head.product-row > span:nth-child(7), .compact-table-head.product-row > span:nth-child(8) { display: grid; place-items: center; text-align: center; }
+.row-switch { position: relative; width: 30px; height: 17px; display: inline-block; cursor: pointer; }
+.row-switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.row-switch i { position: absolute; inset: 0; border-radius: 999px; background: #d8d0db; transition: background 0.15s; pointer-events: none; }
+.row-switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform 0.15s; }
+.row-switch.is-on i { background: #792587; }
+.row-switch.is-on i::after { transform: translateX(13px); }
+.row-switch input:disabled { cursor: wait; }
+.row-switch:has(input:disabled) { opacity: 0.5; }
+.row-switch:has(input:focus-visible) i { outline: 3px solid rgba(138,39,140,.25); outline-offset: 2px; }
+.compact-table-row .active-cell { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.compact-table-row .active-cell em { font-style: normal; }
