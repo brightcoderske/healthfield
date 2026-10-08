@@ -1314,6 +1314,62 @@ export async function handleView(request: Request, path: string) {
       })),
     });
   }
+  if (path === "account/payable-prescriptions") {
+    // Approved prescriptions waiting to be paid for, in the shape the cart shows them: the
+    // medicines the patient has chosen to buy now (all of them unless they trimmed the
+    // list on the prescription page) and what that comes to.
+    const auth = await requireSession(request, ["CUSTOMER"]);
+    if ("response" in auth) return auth.response;
+    const db = getDb();
+    const waiting = await db
+      .select({ id: prescriptions.id, orderNumber: orders.orderNumber, subtotal: orders.subtotal })
+      .from(prescriptions)
+      .innerJoin(orders, eq(orders.id, prescriptions.orderId))
+      .where(
+        and(
+          eq(prescriptions.customerId, auth.session.userId),
+          eq(prescriptions.status, "APPROVED"),
+          eq(orders.status, "AWAITING_PAYMENT"),
+          ne(orders.paymentStatus, "PAID"),
+        ),
+      )
+      .orderBy(desc(prescriptions.createdAt));
+    const lines = waiting.length
+      ? await db
+          .select()
+          .from(prescriptionRequestItems)
+          .where(inArray(prescriptionRequestItems.prescriptionId, waiting.map((row) => row.id)))
+          .orderBy(prescriptionRequestItems.id)
+      : [];
+    return json({
+      prescriptions: waiting.map((row) => {
+        const proposal = lines.filter(
+          (line) =>
+            line.prescriptionId === row.id &&
+            line.availability !== "UNAVAILABLE" &&
+            Boolean(line.approvedQuantity) &&
+            Boolean(line.unitPrice),
+        );
+        const chosen = proposal
+          .filter((line) => !line.deferred)
+          .map((line) => ({
+            name: line.productName,
+            quantity: line.selectedQuantity ?? (line.approvedQuantity as number),
+            unitPrice: Number(line.unitPrice),
+          }));
+        return {
+          id: row.id,
+          orderNumber: row.orderNumber,
+          total: Number(row.subtotal),
+          lines: chosen,
+          // True when the patient has left something for later, so the cart can say so.
+          partial: proposal.some(
+            (line) => line.deferred || (line.selectedQuantity ?? line.approvedQuantity) !== line.approvedQuantity,
+          ),
+        };
+      }),
+    });
+  }
   const customerPrescriptionMatch = path.match(
     /^account\/prescriptions\/(\d+)$/,
   );

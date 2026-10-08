@@ -5,3 +5,11 @@
 .pager button:disabled{color:#b3aab6;cursor:not-allowed}
 .pager button:not(:disabled):hover{border-color:#70227e;color:#70227e}
 .pager span{color:#77717c;font-size:9px;font-weight:700}
+.linkedNotice{margin:0 0 14px;padding:13px 15px;border:1px solid #e3c9a0;border-radius:10px;background:#fff8eb;color:#4c3a1e;display:flex;flex-direction:column;gap:7px}
+.linkedNotice strong{font-size:12px}
+.linkedNotice p{margin:0;font-size:11px;line-height:1.5}
+.linkedNotice a{color:#70227e;font-weight:800;text-decoration:underline}
+.linkedNotice>div{display:flex;flex-wrap:wrap;gap:8px}
+.linkedNotice button{min-height:32px;padding:0 12px;border:1px solid #d5c4a6;border-radius:8px;color:#4c3a1e;background:#fff;font-size:10px;font-weight:750;cursor:pointer}
+.linkedNotice button.danger{border-color:#b53458;color:#fff;background:#b53458}
+.linkedNotice small{color:#7b6b52;font-size:10px;line-height:1.45}

@@ -249,3 +249,15 @@
 .featured-rail-grid.is-rotating { animation: featured-rail-in 0.5s ease both; }
 @keyframes featured-rail-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .featured-rail-grid.is-rotating { animation: none; } }
+
+/* An approved prescription waiting for payment, shown at the top of the cart. */
+.cart-prescription-ready { padding: 14px; border: 1px solid #cfe6d6; border-radius: 12px; background: #f3faf5; display: flex; flex-direction: column; gap: 8px; }
+.cart-prescription-ready > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.cart-prescription-ready > header strong { font-size: 14px; }
+.cart-prescription-ready > header b { color: #176b3a; font-size: 15px; }
+.cart-prescription-ready ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.cart-prescription-ready li { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+.cart-prescription-ready p { margin: 0; color: #5c5560; font-size: 11px; line-height: 1.45; }
+.cart-prescription-ready > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.cart-prescription-ready a { color: #70227e; font-size: 12px; font-weight: 700; }
+.cart-prescription-ready a.cart-prescription-pay { min-height: 38px; padding: 0 16px; border-radius: 9px; color: #fff; background: #25874c; display: inline-flex; align-items: center; text-decoration: none; }

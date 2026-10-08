@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { backendJson } from "@/lib/backend-api";
 import { CART_COOKIE, parseCart, parseCartOffers } from "@/lib/shopping-state";
-import { CartView, type CartOffer } from "./cart-view";
+import { CartView, type CartOffer, type PayablePrescription } from "./cart-view";
 export const dynamic = "force-dynamic";
 type Product = {
   id: number;
@@ -27,8 +27,15 @@ export default async function CartPage() {
   const offers = (data.offers || []).filter((offer) =>
     offerIds.includes(offer.id),
   );
+  // Approved prescriptions (and the medicines a consultation issued) waiting for payment sit
+  // in the cart too, so paying is one click away from the place everyone looks. A visitor
+  // who is not signed in simply has none.
+  const prescriptions = await backendJson<{ prescriptions: PayablePrescription[] }>(
+    "/v1/views/account/payable-prescriptions",
+  ).then((result) => result.prescriptions).catch(() => []);
   return (
     <CartView
+      initialPrescriptions={prescriptions}
       initialCatalog={data.products}
       initialCart={initialCart}
       initialOffers={offers}

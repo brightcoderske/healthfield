@@ -33,6 +33,9 @@ export function OrderList({ orders, statuses = allStatuses, filterKey = "healthf
   const [rows, setRows] = useState(orders);
   const [open, setOpen] = useState<number | null>(null);
   const [message, setMessage] = useState("");
+  // An order that is the payment order for a prescription cannot just be deleted: the admin
+  // is asked what to do with the prescription, with a link to look at it first.
+  const [linked, setLinked] = useState<{ order: Order; prescription: { id: number; status: string; filename: string } } | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [kind, setKind] = useState<OrderKind>("ALL");
   const [page, setPage] = useState(0);
@@ -85,14 +88,20 @@ export function OrderList({ orders, statuses = allStatuses, filterKey = "healthf
     localStorage.removeItem(filterKey);
   }
 
-  async function remove(order: Order) {
-    if (!confirm(`Delete ${order.orderNumber}? This permanently removes the order and its items.`)) return;
-    const response = await fetch(`/api/orders/${order.id}`, { method: "DELETE" });
+  async function remove(order: Order, prescription?: "delete" | "keep") {
+    if (!prescription && !confirm(`Delete ${order.orderNumber}? This permanently removes the order and its items.`)) return;
+    const response = await fetch(`/api/orders/${order.id}${prescription ? `?prescription=${prescription}` : ""}`, { method: "DELETE" });
     const data = await response.json().catch(() => ({}));
+    if (response.status === 409 && data.code === "LINKED_PRESCRIPTION") {
+      setOpen(null);
+      setMessage("");
+      return setLinked({ order, prescription: data.prescription });
+    }
     if (!response.ok) return setMessage(data.error || "Order could not be deleted.");
     setRows((currentRows) => currentRows.filter((value) => value.id !== order.id));
     setOpen(null);
-    setMessage(`${order.orderNumber} deleted.`);
+    setLinked(null);
+    setMessage(data.message || `${order.orderNumber} deleted.`);
   }
 
   return <>
@@ -100,6 +109,16 @@ export function OrderList({ orders, statuses = allStatuses, filterKey = "healthf
     <div className={styles.typeFilters}>{kinds.filter((entry) => entry.value === "ALL" || kindCounts[entry.value] > 0).map((entry) => <button type="button" key={entry.value} className={kind === entry.value ? styles.active : ""} onClick={() => chooseKind(entry.value)}>{entry.label}<b>{kindCounts[entry.value]}</b></button>)}</div>
     {visibleStatuses.length ? <div className={styles.filters}><button type="button" className={!selected.length ? styles.active : ""} onClick={clearFilters}>All statuses <b>{kindRows.length}</b></button>{visibleStatuses.map((status) => <label key={status}><input type="checkbox" checked={selected.includes(status)} onChange={() => toggle(status)}/><span>{status.replaceAll("_", " ")}</span><b>{counts[status]}</b></label>)}</div> : null}
     {message ? <div className="form-message">{message}</div> : null}
+    {linked ? <div className={styles.linkedNotice} role="alertdialog" aria-label="Order linked to a prescription">
+      <strong>{linked.order.orderNumber} belongs to a prescription</strong>
+      <p>This order is where the customer pays for <a href={`/admin/prescriptions?open=${linked.prescription.id}`} target="_blank" rel="noreferrer">prescription #{linked.prescription.id}</a> ({linked.prescription.status.replaceAll("_", " ").toLowerCase()}). Choose what should happen to the prescription once the order is gone.</p>
+      <div>
+        <button type="button" className={styles.danger} onClick={() => remove(linked.order, "delete")}>Delete order and prescription</button>
+        <button type="button" onClick={() => remove(linked.order, "keep")}>Delete order, keep prescription</button>
+        <button type="button" onClick={() => setLinked(null)}>Cancel</button>
+      </div>
+      <small>Keeping it sends the prescription back to the pharmacist for a fresh proposal. Deleting it removes the uploaded file and its medicine list for good.</small>
+    </div> : null}
     <div className={styles.scroller}><section className={`admin-search-table ${styles.table}`} onClick={() => setOpen(null)}><div className="admin-search-head"><span>Order &amp; customer</span><span>Status</span><span>Payment</span><span>Fulfilment</span><span>Total</span><span>Actions</span></div>{visible.length ? visible.map((order) => {
       const rowKind = orderKind(order);
       const fulfilmentLabel = rowKind === "POS" ? "POS SALE" : rowKind;

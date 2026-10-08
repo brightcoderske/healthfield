@@ -37,14 +37,25 @@ export type CartOffer = {
   }>;
 };
 
+/** An approved prescription waiting for payment, as the cart presents it. */
+export type PayablePrescription = {
+  id: number;
+  orderNumber: string;
+  total: number;
+  partial: boolean;
+  lines: Array<{ name: string; quantity: number; unitPrice: number }>;
+};
+
 export function CartView({
   initialCatalog,
   initialCart,
   initialOffers = [],
+  initialPrescriptions = [],
 }: {
   initialCatalog: Product[];
   initialCart: Record<number, number>;
   initialOffers?: CartOffer[];
+  initialPrescriptions?: PayablePrescription[];
 }) {
   const catalog = initialCatalog;
   const [cart, setCart] = useState<Record<number, number>>(initialCart);
@@ -107,10 +118,11 @@ export function CartView({
   const payableOffers = initialOffers.filter(
     (offer) => !offer.items.some((item) => item.prescriptionRequired),
   );
-  // A bundle is one basket item however many products it contains.
+  // A bundle is one basket item however many products it contains, and so is a prescription.
   const itemCount =
     Object.values(cart).reduce((sum, quantity) => sum + quantity, 0) +
-    initialOffers.length;
+    initialOffers.length +
+    initialPrescriptions.length;
   const subtotal =
     payableLines.reduce(
       (sum, line) =>
@@ -119,7 +131,8 @@ export function CartView({
           line.quantity,
       0,
     ) + payableOffers.reduce((sum, offer) => sum + Number(offer.total), 0);
-  const hasContents = lines.length > 0 || initialOffers.length > 0;
+  const hasContents =
+    lines.length > 0 || initialOffers.length > 0 || initialPrescriptions.length > 0;
   const hasPayableContents =
     payableLines.length > 0 || payableOffers.length > 0;
 
@@ -136,6 +149,35 @@ export function CartView({
       </header>
       <div className="cart-layout">
         <section>
+          {initialPrescriptions.map((prescription) => (
+            <article key={`prescription-${prescription.id}`} className="cart-prescription-ready">
+              <header>
+                <strong>Prescription #{prescription.id} is ready to pay</strong>
+                <b>KES {prescription.total.toLocaleString()}</b>
+              </header>
+              <ul>
+                {prescription.lines.map((line) => (
+                  <li key={line.name}>
+                    <span>{line.quantity} × {line.name}</span>
+                    <span>KES {(line.quantity * line.unitPrice).toLocaleString()}</span>
+                  </li>
+                ))}
+              </ul>
+              <p>
+                {prescription.partial
+                  ? "You chose to buy only some of these medicines now; the rest stay on your prescription for later."
+                  : "The pharmacist has confirmed these medicines and prices. Delivery is added at the next step."}
+              </p>
+              <div>
+                <Link className="cart-prescription-pay" href={`/account/prescriptions/${prescription.id}/checkout`}>
+                  Pay for prescription
+                </Link>
+                <Link href={`/account/prescriptions/${prescription.id}`}>
+                  Choose only some medicines
+                </Link>
+              </div>
+            </article>
+          ))}
           {initialOffers.map((offer) => (
             <article
               key={`offer-${offer.id}`}
@@ -315,13 +357,22 @@ export function CartView({
               uploaded prescription.
             </p>
           ) : null}
+          {initialPrescriptions.length ? (
+            <p className="cart-prescription-summary">
+              Prescriptions are paid for on their own, from the green card
+              {initialPrescriptions.length === 1 ? "" : "s"}, so they are not
+              part of this subtotal.
+            </p>
+          ) : null}
           <p>Delivery is calculated during checkout.</p>
-          <a
-            className={hasPayableContents ? "" : "disabled"}
-            href={hasPayableContents ? "/checkout" : "#"}
-          >
-            Proceed to checkout
-          </a>
+          {hasPayableContents || !initialPrescriptions.length ? (
+            <a
+              className={hasPayableContents ? "" : "disabled"}
+              href={hasPayableContents ? "/checkout" : "#"}
+            >
+              Proceed to checkout
+            </a>
+          ) : null}
         </aside>
       </div>
     </main>

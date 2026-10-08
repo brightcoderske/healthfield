@@ -32,7 +32,7 @@ export default async function CustomerPrescriptionPage({params}:{params:Promise<
         {canPay&&proposalItems.length>1?<DispenseSelector prescriptionId={request.id} items={proposalItems}/>:null}
         {order?<footer><span><small>{paid?"Paid total":"Proposal total"}</small><strong>KES {Number(order.total).toLocaleString()}</strong></span>{canPay?<Link href={`/account/prescriptions/${request.id}/checkout`}>Review &amp; pay</Link>:paid?<Link href={`/account/orders/${order.id}`}>View paid order</Link>:null}</footer>:null}
       </section>
-      <aside className="prescription-cart-independence"><ShoppingBag/><h2>Your normal cart stays separate</h2><p>You can ignore this saved proposal for now, keep adding any other products to your normal cart, and return here whenever you are ready.</p><div><Link href="/#products">Keep shopping</Link>{canPay?<Link href={`/account/prescriptions/${request.id}/checkout`}>Return to proposal</Link>:null}</div></aside>
+      <aside className="prescription-cart-independence"><ShoppingBag/><h2>{canPay?"Also waiting in your cart":"Your normal cart stays separate"}</h2><p>{canPay?"This prescription is in your cart, so you can pay for everything on it from there in one step. Come back here only if you want to buy some of the medicines now and leave the rest for later.":"Keep adding any other products to your normal cart and return here whenever you are ready."}</p><div><Link href="/#products">Keep shopping</Link>{canPay?<Link href="/cart">Go to cart</Link>:null}</div></aside>
     </div>
   </main>;
 }

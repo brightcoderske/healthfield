@@ -393,9 +393,22 @@ export async function handleOrders(request: Request, id?: number) {
     const db = getDb();
     const [order] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, status: orders.status }).from(orders).where(eq(orders.id, id)).limit(1);
     if (!order) return json({ error: "Order not found." }, { status: 404 });
-    const [linkedPrescription]=await db.select({id:prescriptions.id}).from(prescriptions).where(eq(prescriptions.orderId,id)).limit(1);
-    if(linkedPrescription)return json({error:`This is a frozen prescription proposal. Delete prescription #${linkedPrescription.id} from the prescription modal so both records are handled safely.`},{status:409});
     if (order.status === "OUT_FOR_DELIVERY" || order.status === "COMPLETED") return json({ error: "Orders already out for delivery or completed are retained for audit records." }, { status: 409 });
+    // An approved prescription is paid for through an order of its own, so deleting that
+    // order has a consequence for the prescription. Rather than refusing outright, the
+    // admin is asked what should happen to it and the request is repeated with the answer:
+    // ?prescription=delete removes it with the order, ?prescription=keep sends it back to
+    // the pharmacist for a fresh proposal.
+    const linkedPrescriptions = await db.select({ id: prescriptions.id, status: prescriptions.status, originalFilename: prescriptions.originalFilename, storageKey: prescriptions.storageKey }).from(prescriptions).where(eq(prescriptions.orderId, id));
+    const prescriptionChoice = new URL(request.url).searchParams.get("prescription");
+    if (linkedPrescriptions.length && prescriptionChoice !== "delete" && prescriptionChoice !== "keep") {
+      const [linked] = linkedPrescriptions;
+      return json({
+        error: `${order.orderNumber} is the payment order for prescription #${linked.id}. Choose what should happen to the prescription before deleting the order.`,
+        code: "LINKED_PRESCRIPTION",
+        prescription: { id: linked.id, status: linked.status, filename: linked.originalFilename },
+      }, { status: 409 });
+    }
     // Deleting before dispatch never orphans a rider or a customer who already has the
     // goods; deleting after does, which is why those two statuses above stay protected.
     const finalStatus = isStockFinalizedOrderStatus(order.status);
@@ -422,12 +435,31 @@ export async function handleOrders(request: Request, id?: number) {
         await tx.update(mpesaStkCallbacks).set({ processedTransactionId: null }).where(inArray(mpesaStkCallbacks.processedTransactionId, payments.map((payment) => payment.id)));
         await tx.delete(paymentTransactions).where(eq(paymentTransactions.orderId, id));
       }
-      await tx.update(prescriptions).set({ orderId: null }).where(eq(prescriptions.orderId, id));
+      for (const linked of linkedPrescriptions) {
+        if (prescriptionChoice === "delete") {
+          // Its medicine lines go with it (they cascade); the file on disk is removed after.
+          await tx.update(prescriptions).set({ orderId: null }).where(eq(prescriptions.id, linked.id));
+          await tx.delete(prescriptions).where(eq(prescriptions.id, linked.id));
+          await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_DELETED", entityType: "prescription", entityId: String(linked.id), metadata: { originalFilename: linked.originalFilename, deletedOrderNumber: order.orderNumber } });
+        } else {
+          // Kept: it loses the order it was priced into, so an approved one goes back under
+          // review for the pharmacist to send a new proposal. Anything not yet approved had
+          // no usable proposal to lose and is left exactly as it was.
+          await tx.update(prescriptions).set(linked.status === "APPROVED"
+            ? { orderId: null, status: "UNDER_REVIEW", reviewVersion: sql`${prescriptions.reviewVersion} + 1` }
+            : { orderId: null }).where(eq(prescriptions.id, linked.id));
+          await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_KEPT_AFTER_ORDER_DELETED", entityType: "prescription", entityId: String(linked.id), metadata: { deletedOrderNumber: order.orderNumber, previousStatus: linked.status } });
+        }
+      }
       await tx.delete(orderItems).where(eq(orderItems.orderId, id));
       await tx.delete(orders).where(eq(orders.id, id));
-      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_DELETED", entityType: "order", entityId: String(id), metadata: { orderNumber: order.orderNumber } });
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_DELETED", entityType: "order", entityId: String(id), metadata: { orderNumber: order.orderNumber, prescriptionIds: linkedPrescriptions.map((linked) => linked.id), prescriptionChoice } });
     });
-    return json({ ok: true, message: `Order ${order.orderNumber} was deleted.` });
+    if (prescriptionChoice === "delete") {
+      for (const linked of linkedPrescriptions) await unlink(path.join(storageRoot(), "prescriptions", path.basename(linked.storageKey))).catch((error) => console.warn("Deleted prescription file was already unavailable", { prescriptionId: linked.id, error }));
+    }
+    const prescriptionNote = !linkedPrescriptions.length ? "" : prescriptionChoice === "delete" ? ` Prescription #${linkedPrescriptions.map((linked) => linked.id).join(", #")} was deleted with it.` : ` Prescription #${linkedPrescriptions.map((linked) => linked.id).join(", #")} was kept.`;
+    return json({ ok: true, message: `Order ${order.orderNumber} was deleted.${prescriptionNote}` });
   }
   if (request.method === "PATCH" && id) {
     const auth = await requireTeamPermission(request, "ORDERS_PROCESS");
