@@ -282,21 +282,26 @@ export function Storefront({
     ],
   );
 
-  const orderedCategories = [...initialCategories].sort((left, right) => {
+  // Memoised on the list it is built from, so everything derived from it below can name it
+  // as a dependency: a fresh array on every render would make each of those memos stale
+  // or pointless.
+  const displayedCategories = useMemo(() => {
     const isPrescription = (category: CatalogCategory) =>
       `${category.name} ${category.slug}`
         .toLowerCase()
         .includes("prescription");
-    return Number(isPrescription(left)) - Number(isPrescription(right));
-  });
-  const displayedCategories = orderedCategories.map((category, index) => ({
-    ...category,
-    ...(`${category.name} ${category.slug}`
-      .toLowerCase()
-      .includes("prescription")
-      ? { icon: Upload, color: "green" }
-      : categoryPresentation[index % categoryPresentation.length]),
-  }));
+    return [...initialCategories]
+      .sort(
+        (left, right) =>
+          Number(isPrescription(left)) - Number(isPrescription(right)),
+      )
+      .map((category, index) => ({
+        ...category,
+        ...(isPrescription(category)
+          ? { icon: Upload, color: "green" }
+          : categoryPresentation[index % categoryPresentation.length]),
+      }));
+  }, [initialCategories]);
   const prescriptionCategory = displayedCategories.find((category) =>
     `${category.name} ${category.slug}`.toLowerCase().includes("prescription"),
   );
@@ -316,8 +321,7 @@ export function Storefront({
       ]);
     }
     return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialCategories]);
+  }, [displayedCategories]);
   const orphaned = useMemo(() => {
     const listed = new Set(initialCategories.map((category) => category.id));
     return (category: CatalogCategory) =>
