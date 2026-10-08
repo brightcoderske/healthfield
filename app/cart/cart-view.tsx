@@ -2,6 +2,7 @@
 
 import {
   ArrowLeft,
+  Lock,
   Minus,
   Package,
   Plus,
@@ -43,7 +44,17 @@ export type PayablePrescription = {
   orderNumber: string;
   total: number;
   partial: boolean;
-  lines: Array<{ name: string; quantity: number; unitPrice: number }>;
+  lines: Array<{
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    /** Full-course line: the pharmacist's quantity cannot be reduced. */
+    locked: boolean;
+    approvedQuantity: number;
+    /** For an adjustable line, the least that can be bought now. */
+    minimumQuantity: number | null;
+    note: string | null;
+  }>;
 };
 
 export function CartView({
@@ -131,6 +142,8 @@ export function CartView({
           line.quantity,
       0,
     ) + payableOffers.reduce((sum, offer) => sum + Number(offer.total), 0);
+  // Own items ride along with the first prescription; any others are paid on their own.
+  const mergedPrescription = initialPrescriptions[0] ?? null;
   const hasContents =
     lines.length > 0 || initialOffers.length > 0 || initialPrescriptions.length > 0;
   const hasPayableContents =
@@ -149,7 +162,7 @@ export function CartView({
       </header>
       <div className="cart-layout">
         <section>
-          {initialPrescriptions.map((prescription) => (
+          {initialPrescriptions.map((prescription, position) => (
             <article key={`prescription-${prescription.id}`} className="cart-prescription-ready">
               <header>
                 <strong>Prescription #{prescription.id} is ready to pay</strong>
@@ -158,20 +171,48 @@ export function CartView({
               <ul>
                 {prescription.lines.map((line) => (
                   <li key={line.name}>
-                    <span>{line.quantity} × {line.name}</span>
+                    <span>
+                      {line.quantity} × {line.name}
+                      <small className={line.locked ? "is-locked" : "is-adjustable"}>
+                        {line.locked ? (
+                          <>
+                            <Lock /> Locked: the pharmacist prescribed this exact amount
+                          </>
+                        ) : (
+                          <>
+                            You can reduce this to {line.minimumQuantity} or more
+                          </>
+                        )}
+                      </small>
+                      {line.note ? <small>{line.note}</small> : null}
+                    </span>
                     <span>KES {(line.quantity * line.unitPrice).toLocaleString()}</span>
                   </li>
                 ))}
               </ul>
+              {position === 0 ? (
+                <div className="cart-prescription-explain">
+                  <strong>How this works</strong>
+                  <ul>
+                    <li>The medicines above are your pharmacist&rsquo;s. They stay exactly as prescribed, apart from the amounts marked as adjustable.</li>
+                    <li>Anything else you add from the shop is yours to add or remove. It is paid for together with the prescription, in one payment and one delivery.</li>
+                    <li>Want to buy only part of the prescription today? Choose that first; the rest stays saved for later.</li>
+                  </ul>
+                </div>
+              ) : (
+                <p>This is a second prescription, so it is paid for separately from the one above.</p>
+              )}
               <p>
                 {prescription.partial
                   ? "You chose to buy only some of these medicines now; the rest stay on your prescription for later."
-                  : "The pharmacist has confirmed these medicines and prices. Delivery is added at the next step."}
+                  : "The pharmacist has confirmed these medicines and prices. Delivery and any tax are added at the next step."}
               </p>
               <div>
-                <Link className="cart-prescription-pay" href={`/account/prescriptions/${prescription.id}/checkout`}>
-                  Pay for prescription
-                </Link>
+                {position > 0 ? (
+                  <Link className="cart-prescription-pay" href={`/account/prescriptions/${prescription.id}/checkout`}>
+                    Pay for this prescription
+                  </Link>
+                ) : null}
                 <Link href={`/account/prescriptions/${prescription.id}`}>
                   Choose only some medicines
                 </Link>
@@ -347,9 +388,30 @@ export function CartView({
         </section>
         <aside>
           <h2>Cart summary</h2>
-          <span>
-            Subtotal<strong>KES {subtotal.toLocaleString()}</strong>
-          </span>
+          {mergedPrescription ? (
+            <>
+              <span>
+                Prescription #{mergedPrescription.id}
+                <strong>KES {mergedPrescription.total.toLocaleString()}</strong>
+              </span>
+              <span>
+                Your own items<strong>KES {subtotal.toLocaleString()}</strong>
+              </span>
+              <span>
+                Medicines in one payment
+                <strong>KES {(mergedPrescription.total + subtotal).toLocaleString()}</strong>
+              </span>
+              <p className="cart-prescription-summary">
+                Your own items are added to the prescription&rsquo;s payment, so you
+                pay once and get one delivery. Delivery and any tax are added at
+                the next step.
+              </p>
+            </>
+          ) : (
+            <span>
+              Subtotal<strong>KES {subtotal.toLocaleString()}</strong>
+            </span>
+          )}
           {prescriptionLines.length ||
           initialOffers.length !== payableOffers.length ? (
             <p className="cart-prescription-summary">
@@ -357,22 +419,24 @@ export function CartView({
               uploaded prescription.
             </p>
           ) : null}
-          {initialPrescriptions.length ? (
+          {initialPrescriptions.length > 1 ? (
             <p className="cart-prescription-summary">
-              Prescriptions are paid for on their own, from the green card
-              {initialPrescriptions.length === 1 ? "" : "s"}, so they are not
-              part of this subtotal.
+              Your other prescription is paid separately, from its own card.
             </p>
           ) : null}
-          <p>Delivery is calculated during checkout.</p>
-          {hasPayableContents || !initialPrescriptions.length ? (
-            <a
-              className={hasPayableContents ? "" : "disabled"}
-              href={hasPayableContents ? "/checkout" : "#"}
-            >
-              Proceed to checkout
-            </a>
-          ) : null}
+          {!mergedPrescription ? <p>Delivery is calculated during checkout.</p> : null}
+          <a
+            className={hasPayableContents || mergedPrescription ? "" : "disabled"}
+            href={
+              mergedPrescription
+                ? `/account/prescriptions/${mergedPrescription.id}/checkout`
+                : hasPayableContents
+                  ? "/checkout"
+                  : "#"
+            }
+          >
+            Proceed to checkout
+          </a>
         </aside>
       </div>
     </main>

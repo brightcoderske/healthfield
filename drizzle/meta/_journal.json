@@ -365,6 +365,13 @@
       "when": 1789432000000,
       "tag": "0051_search_only_and_customer_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "5",
+      "when": 1789518400000,
+      "tag": "0052_order_items_added_by_customer",
+      "breakpoints": true
     }
   ]
 }

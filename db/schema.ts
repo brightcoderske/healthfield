@@ -419,6 +419,10 @@ export const orderItems = mysqlTable("order_items", {
   // offer id and title so the customer sees a single priced line.
   offerId: int("offer_id"),
   offerTitle: varchar("offer_title", { length: 180 }),
+  // Lines the customer added from their own cart to a prescription order, as opposed to
+  // the pharmacist's. They are replaced on every checkout attempt, so the cart can change
+  // between attempts without leaving stale lines on the order.
+  addedByCustomer: boolean("added_by_customer").default(false).notNull(),
   ...timestamps,
 }, (table) => [index("order_items_order_idx").on(table.orderId)]);
 

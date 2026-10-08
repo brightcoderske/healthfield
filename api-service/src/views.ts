@@ -67,6 +67,7 @@ import {
   sessionHasPermission,
 } from "./staff-permissions";
 import { parseNotificationPreferences } from "../../lib/notification-events";
+import { parseVatRate, vatOnNet } from "../../lib/vat";
 import { searchPhrase } from "../../lib/search-rank";
 import type { StaffPermission } from "../../lib/staff-permissions";
 
@@ -1322,7 +1323,7 @@ export async function handleView(request: Request, path: string) {
     if ("response" in auth) return auth.response;
     const db = getDb();
     const waiting = await db
-      .select({ id: prescriptions.id, orderNumber: orders.orderNumber, subtotal: orders.subtotal })
+      .select({ id: prescriptions.id, orderNumber: orders.orderNumber })
       .from(prescriptions)
       .innerJoin(orders, eq(orders.id, prescriptions.orderId))
       .where(
@@ -1356,11 +1357,19 @@ export async function handleView(request: Request, path: string) {
             name: line.productName,
             quantity: line.selectedQuantity ?? (line.approvedQuantity as number),
             unitPrice: Number(line.unitPrice),
+            // What the customer may do with this line: a full-course line is locked at the
+            // pharmacist's quantity, a divisible one can come down to the minimum.
+            locked: line.dispenseRule === "COURSE_BOUND",
+            approvedQuantity: line.approvedQuantity as number,
+            minimumQuantity: line.dispenseRule === "DIVISIBLE" ? (line.minimumQuantity ?? 1) : null,
+            note: line.pharmacistNote,
           }));
         return {
           id: row.id,
           orderNumber: row.orderNumber,
-          total: Number(row.subtotal),
+          // The medicines alone, before VAT and delivery. Anything the customer has added
+          // to this order on an earlier payment attempt is deliberately not in it.
+          total: chosen.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0),
           lines: chosen,
           // True when the patient has left something for later, so the cart can say so.
           partial: proposal.some(
@@ -1435,10 +1444,29 @@ export async function handleView(request: Request, path: string) {
         .limit(1),
     ]);
     const settings = settingsRows[0];
+    // Lines the customer added from their own cart ride on the same order as the
+    // pharmacist's. The prescription page speaks only for the pharmacist's part, so until
+    // a payment goes through it reports that part's total, and lists the extras apart.
+    let order = orderRows[0] || null;
+    let addedItems: Array<{ productName: string; quantity: number; lineTotal: number }> = [];
+    if (order) {
+      const orderLines = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
+      addedItems = orderLines
+        .filter((line) => line.addedByCustomer)
+        .map((line) => ({ productName: line.productName, quantity: line.quantity, lineTotal: Number(line.lineTotal) }));
+      if (addedItems.length && order.paymentStatus !== "PAID") {
+        const goods = orderLines.filter((line) => !line.addedByCustomer).reduce((sum, line) => sum + Number(line.lineTotal), 0);
+        const rate = settings?.vatEnabled ? parseVatRate(settings.vatRate) : 0;
+        const vat = rate ? vatOnNet(goods, rate) ?? 0 : 0;
+        order = { ...order, subtotal: goods.toFixed(2), vat: vat.toFixed(2), deliveryFee: "0.00", total: (goods + vat).toFixed(2) };
+        addedItems = [];
+      }
+    }
     return json({
       request: prescription,
       items,
-      order: orderRows[0] || null,
+      order,
+      addedItems,
       customer: customerRows[0],
       // Shelf prices are net of VAT, so the form has to add the tax to the amount it
       // asks for rather than describing it as already inside the total.

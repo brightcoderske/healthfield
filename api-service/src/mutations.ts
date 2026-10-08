@@ -52,6 +52,32 @@ async function onlineVatFor(net: number) {
   return { rate, amount, payable: Math.round((net + amount) * 100) / 100 };
 }
 
+type BundleOrderLine = { productId: number; productName: string; quantity: number; unitPrice: number; total: number; offerId: number; offerTitle: string };
+
+/**
+ * Bundles: one order line per component so stock still moves per product, priced by
+ * splitting the bundle total. The customer sees a single line named after the offer, and
+ * pays exactly the bundle price. Shared by every checkout that can carry a bundle.
+ */
+function bundleOrderLines(liveOffers: Awaited<ReturnType<typeof loadLiveOffers>>, requestedOffers: Array<{ offerId: number }>): { lines: BundleOrderLine[] } | { error: string } {
+  const lines: BundleOrderLine[] = [];
+  for (const requested of requestedOffers) {
+    const offer = liveOffers.find((entry) => entry.id === requested.offerId);
+    if (!offer || !isBundle(offer)) return { error: "That offer has ended or is no longer available." };
+    const weights = offer.items.map((item) => Math.round(item.normalPrice * item.quantity * 100));
+    const shares = apportionBundle(Math.round(offerTotal(offer) * 100), weights);
+    offer.items.forEach((item, index) => {
+      const lineTotal = shares[index] / 100;
+      lines.push({
+        productId: item.productId, productName: item.name, quantity: item.quantity,
+        unitPrice: Number((lineTotal / item.quantity).toFixed(2)), total: lineTotal,
+        offerId: offer.id, offerTitle: offer.title,
+      });
+    });
+  }
+  return { lines };
+}
+
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
 export { storefrontOrigin };
@@ -598,24 +624,9 @@ export async function handleOrders(request: Request, id?: number) {
   const offerPrices = offerPriceMap(liveOffers);
   const lines = parsed.data.items.map((item) => { const product = catalog.find((entry) => entry.id === item.productId)!; const price = offerPrices.get(product.id) ?? Number(product.discountPrice ?? product.price); return { ...item, product, price, total: price * item.quantity }; });
 
-  // Bundles: one order line per component so stock still moves per product, priced
-  // by splitting the bundle total. The customer sees a single line named after the
-  // offer, and pays exactly the bundle price.
-  const bundleLines: Array<{ productId: number; productName: string; quantity: number; unitPrice: number; total: number; offerId: number; offerTitle: string }> = [];
-  for (const requested of parsed.data.offerItems ?? []) {
-    const offer = liveOffers.find((entry) => entry.id === requested.offerId);
-    if (!offer || !isBundle(offer)) return json({ error: "That offer has ended or is no longer available.", code: "OFFER_UNAVAILABLE" }, { status: 409 });
-    const weights = offer.items.map((item) => Math.round(item.normalPrice * item.quantity * 100));
-    const shares = apportionBundle(Math.round(offerTotal(offer) * 100), weights);
-    offer.items.forEach((item, index) => {
-      const lineTotal = shares[index] / 100;
-      bundleLines.push({
-        productId: item.productId, productName: item.name, quantity: item.quantity,
-        unitPrice: Number((lineTotal / item.quantity).toFixed(2)), total: lineTotal,
-        offerId: offer.id, offerTitle: offer.title,
-      });
-    });
-  }
+  const bundles = bundleOrderLines(liveOffers, parsed.data.offerItems ?? []);
+  if ("error" in bundles) return json({ error: bundles.error, code: "OFFER_UNAVAILABLE" }, { status: 409 });
+  const bundleLines = bundles.lines;
   if (!lines.length && !bundleLines.length) return json({ error: "Your basket is empty." }, { status: 400 });
   const subtotal = lines.reduce((sum, line) => sum + line.total, 0) + bundleLines.reduce((sum, line) => sum + line.total, 0);
   // The fee is recalculated here rather than trusted from the client, for the same
@@ -2048,6 +2059,42 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
   }
 }
 
+type CartExtraLine = { productId: number; productName: string; quantity: number; unitPrice: number; lineTotal: number; offerId: number | null; offerTitle: string | null };
+
+/**
+ * Prices a customer's own cart so it can be paid for together with a prescription.
+ *
+ * Same rules as an ordinary web order: prices and bundles are re-resolved from the live
+ * catalogue, and anything that needs a prescription is refused (it has to go through a
+ * pharmacist, not through a cart). An empty cart is fine and simply adds nothing.
+ */
+async function priceCartExtras(
+  db: ReturnType<typeof getDb>,
+  items: Array<{ productId: number; quantity: number }>,
+  offerItems: Array<{ offerId: number }>,
+): Promise<{ lines: CartExtraLine[]; subtotal: number; costs: Map<number, string> } | { error: string; code: string; status: number }> {
+  if (!items.length && !offerItems.length) return { lines: [], subtotal: 0, costs: new Map() };
+  const ids = [...new Set(items.map((item) => item.productId))];
+  const catalog = ids.length ? await db.select().from(products).where(and(inArray(products.id, ids), eq(products.isActive, true))) : [];
+  if (catalog.length !== ids.length) return { error: "One or more products in your cart are unavailable. Update your cart and try again.", code: "CART_UNAVAILABLE", status: 409 };
+  const liveOffers = await loadLiveOffers();
+  const offerPrices = offerPriceMap(liveOffers);
+  const bundles = bundleOrderLines(liveOffers, offerItems);
+  if ("error" in bundles) return { error: bundles.error, code: "OFFER_UNAVAILABLE", status: 409 };
+  const needsPrescription = catalog.some((product) => product.prescriptionRequired) || offerItems.some((requested) => liveOffers.find((offer) => offer.id === requested.offerId)?.items.some((item) => item.prescriptionRequired));
+  if (needsPrescription) return { error: "Prescription medicines in your cart have to be sent to the pharmacist first. Remove them from your cart to pay for this prescription.", code: "PRESCRIPTION_REVIEW_REQUIRED", status: 409 };
+  const lines: CartExtraLine[] = [
+    ...items.map((item) => {
+      const product = catalog.find((entry) => entry.id === item.productId)!;
+      const unitPrice = offerPrices.get(product.id) ?? Number(product.discountPrice ?? product.price);
+      return { productId: product.id, productName: product.name, quantity: item.quantity, unitPrice, lineTotal: unitPrice * item.quantity, offerId: null, offerTitle: null };
+    }),
+    ...bundles.lines.map((line) => ({ productId: line.productId, productName: line.productName, quantity: line.quantity, unitPrice: line.unitPrice, lineTotal: line.total, offerId: line.offerId, offerTitle: line.offerTitle })),
+  ];
+  const costs = await productCosts(lines.map((line) => line.productId));
+  return { lines, subtotal: lines.reduce((sum, line) => sum + line.lineTotal, 0), costs };
+}
+
 export async function handlePrescriptionCheckout(request: Request, prescriptionId: number) {
   const auth = await requireSession(request, ["CUSTOMER"], true);
   if ("response" in auth) return auth.response;
@@ -2056,10 +2103,18 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
     checkoutToken: z.string().uuid(), fulfilmentMethod: z.enum(["DELIVERY", "PICKUP"]), paymentMethod: z.enum(["MPESA_EXPRESS", "MANUAL_MPESA"]),
     phone: z.string().trim().min(9).max(30), billingPhone: z.string().trim().min(9).max(30).optional(), manualPaymentMessage: z.string().trim().max(2500).optional(),
     deliveryAddress: z.string().trim().max(1000).optional(), deliveryArea: z.string().trim().max(160).optional(), deliveryLatitude: z.number().min(-90).max(90).optional(), deliveryLongitude: z.number().min(-180).max(180).optional(),
+    // The customer's own cart, paid for together with the prescription. The pharmacist's
+    // lines stay exactly as approved; these are added beside them.
+    items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).max(100).optional().default([]),
+    offerItems: z.array(z.object({ offerId: z.number().int().positive() })).max(10).optional().default([]),
   }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message || "Check the checkout details." }, { status: 400 });
   if (parsed.data.fulfilmentMethod === "DELIVERY" && !parsed.data.deliveryAddress) return json({ error: "Delivery address is required." }, { status: 400 });
   const db = getDb();
+  // Priced here from the live catalogue and offers, never from the browser. Prescription
+  // medicines cannot ride along: those only ever go through a pharmacist.
+  const extras = await priceCartExtras(db, parsed.data.items, parsed.data.offerItems);
+  if ("error" in extras) return json({ error: extras.error, code: extras.code }, { status: extras.status });
   const [settings] = await db.select({ onlineMpesaEnabled: siteSettings.onlineMpesaEnabled, onlineManualEnabled: siteSettings.onlineManualEnabled, mpesaTillNumber: siteSettings.mpesaTillNumber }).from(siteSettings).limit(1);
   if (parsed.data.paymentMethod === "MPESA_EXPRESS" && (!settings?.onlineMpesaEnabled || !mpesaConfiguration())) return json({ error: "M-Pesa Express is currently unavailable. Choose manual M-Pesa payment." }, { status: 409 });
   if (parsed.data.paymentMethod === "MANUAL_MPESA" && (!settings?.onlineManualEnabled || !settings.mpesaTillNumber)) return json({ error: "Manual M-Pesa payment is currently unavailable." }, { status: 409 });
@@ -2072,13 +2127,15 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
     if (parsed.data.deliveryLatitude === undefined || parsed.data.deliveryLongitude === undefined) {
       return json({ error: "Pin your delivery location on the map so the delivery fee can be calculated.", code: "DELIVERY_LOCATION_REQUIRED" }, { status: 400 });
     }
-    const [proposal] = await db.select({ id: orders.id, subtotal: orders.subtotal }).from(orders).innerJoin(prescriptions, eq(prescriptions.orderId, orders.id)).where(and(eq(prescriptions.id, prescriptionId), eq(prescriptions.customerId, auth.session.userId))).limit(1);
+    const [proposal] = await db.select({ id: orders.id }).from(orders).innerJoin(prescriptions, eq(prescriptions.orderId, orders.id)).where(and(eq(prescriptions.id, prescriptionId), eq(prescriptions.customerId, auth.session.userId))).limit(1);
     if (!proposal) return json({ error: "This prescription is not ready for checkout." }, { status: 409 });
-    const proposalLines = await db.select({ productId: orderItems.productId, quantity: orderItems.quantity }).from(orderItems).where(eq(orderItems.orderId, proposal.id));
+    // Only the pharmacist's lines: anything the customer added on an earlier attempt is
+    // about to be replaced by what they are sending now.
+    const proposalLines = await db.select({ productId: orderItems.productId, quantity: orderItems.quantity, lineTotal: orderItems.lineTotal }).from(orderItems).where(and(eq(orderItems.orderId, proposal.id), eq(orderItems.addedByCustomer, false)));
     deliveryQuote = await resolveDeliveryQuote({
       point: { latitude: parsed.data.deliveryLatitude, longitude: parsed.data.deliveryLongitude },
-      lines: proposalLines.flatMap((line) => (line.productId ? [{ productId: line.productId, quantity: line.quantity }] : [])),
-      subtotal: Number(proposal.subtotal),
+      lines: [...proposalLines, ...extras.lines].flatMap((line) => (line.productId ? [{ productId: line.productId, quantity: line.quantity }] : [])),
+      subtotal: proposalLines.reduce((sum, line) => sum + Number(line.lineTotal), 0) + extras.subtotal,
     });
     if (!deliveryQuote.quote.available) return json({ error: deliveryQuote.quote.message, code: "DELIVERY_UNAVAILABLE" }, { status: 409 });
   }
@@ -2090,7 +2147,7 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
       if (!order) throw new PrescriptionWorkflowError("The proposed order could not be found.", 404);
       if (order.paymentStatus === "PAID") return { duplicate: true, order, paymentId: null };
       if (order.status !== "AWAITING_PAYMENT") throw new PrescriptionWorkflowError("This prescription order is no longer awaiting payment.");
-      const proposalLines=await tx.select({productId:orderItems.productId,productName:orderItems.productName,quantity:orderItems.quantity}).from(orderItems).where(eq(orderItems.orderId,order.id));
+      const proposalLines=await tx.select({productId:orderItems.productId,productName:orderItems.productName,quantity:orderItems.quantity,lineTotal:orderItems.lineTotal}).from(orderItems).where(and(eq(orderItems.orderId,order.id),eq(orderItems.addedByCustomer,false)));
       if(!proposalLines.length)throw new PrescriptionWorkflowError("The proposed order has no medicines. Ask the pharmacy to review it again.");
       const productIds=proposalLines.flatMap((line)=>line.productId?[line.productId]:[]);
       const stockRows=productIds.length?await tx.select({productId:branchInventory.productId,available:sql<number>`sum(greatest(${branchInventory.quantityAvailable} - ${branchInventory.quantityReserved}, 0))`}).from(branchInventory).where(inArray(branchInventory.productId,productIds)).groupBy(branchInventory.productId):[];
@@ -2103,7 +2160,11 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
         return{availabilityChanged:true as const,note,order};
       }
       const deliveryFee = deliveryQuote?.quote.fee ?? 0;
-      const total = Number(order.subtotal) + deliveryFee;
+      // The pharmacist's lines plus whatever the customer added from their cart, taxed as
+      // one basket the way any other online order is.
+      const goods = proposalLines.reduce((sum, line) => sum + Number(line.lineTotal), 0) + extras.subtotal;
+      const goodsVat = await onlineVatFor(goods);
+      const total = Math.round((goods + goodsVat.amount + deliveryFee) * 100) / 100;
       if (parsed.data.paymentMethod === "MPESA_EXPRESS" && !Number.isInteger(total)) throw new PrescriptionWorkflowError("M-Pesa Express requires a whole-shilling total. Choose manual M-Pesa.");
       if (order.checkoutToken === parsed.data.checkoutToken) {
         const [payment] = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt)).limit(1);
@@ -2111,9 +2172,13 @@ export async function handlePrescriptionCheckout(request: Request, prescriptionI
       }
       const attempts = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.orderId, order.id)).orderBy(desc(paymentTransactions.createdAt));
       if (attempts.some((payment) => ["INITIATED", "PENDING", "REQUIRES_REVIEW"].includes(payment.status))) throw new PrescriptionWorkflowError("A payment for this prescription is already awaiting confirmation.");
-      await tx.update(orders).set({ checkoutToken: parsed.data.checkoutToken, phone: parsed.data.phone, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, paymentMethod: parsed.data.paymentMethod, paymentStatus: "PENDING", paymentReference: manualReceipt, deliveryFee: deliveryFee.toFixed(2), total: total.toFixed(2), suggestedBranchId: deliveryQuote?.branch?.id ?? order.suggestedBranchId, deliveryDistanceKm: deliveryQuote ? deliveryQuote.quote.distanceKm.toFixed(2) : null, deliveryDurationMinutes: deliveryQuote?.durationMinutes ?? null, deliveryBandId: deliveryQuote?.quote.band?.id ?? null, deliveryCourier: deliveryQuote?.quote.courier ?? null }).where(eq(orders.id, order.id));
+      // Replace, not append: a customer who tried to pay, changed their cart and came back
+      // must not be charged for the lines from the first attempt as well.
+      await tx.delete(orderItems).where(and(eq(orderItems.orderId, order.id), eq(orderItems.addedByCustomer, true)));
+      if (extras.lines.length) await tx.insert(orderItems).values(extras.lines.map((line) => ({ orderId: order.id, productId: line.productId, productName: line.productName, quantity: line.quantity, unitPrice: line.unitPrice.toFixed(2), lineTotal: line.lineTotal.toFixed(2), unitCost: extras.costs.get(line.productId) ?? null, offerId: line.offerId, offerTitle: line.offerTitle, addedByCustomer: true })));
+      await tx.update(orders).set({ subtotal: goods.toFixed(2), vat: goodsVat.amount.toFixed(2), vatRate: goodsVat.rate.toFixed(2), checkoutToken: parsed.data.checkoutToken, phone: parsed.data.phone, fulfilmentMethod: parsed.data.fulfilmentMethod, deliveryAddress: parsed.data.deliveryAddress || null, deliveryArea: parsed.data.deliveryArea || null, deliveryLatitude: parsed.data.deliveryLatitude?.toString() || null, deliveryLongitude: parsed.data.deliveryLongitude?.toString() || null, paymentMethod: parsed.data.paymentMethod, paymentStatus: "PENDING", paymentReference: manualReceipt, deliveryFee: deliveryFee.toFixed(2), total: total.toFixed(2), suggestedBranchId: deliveryQuote?.branch?.id ?? order.suggestedBranchId, deliveryDistanceKm: deliveryQuote ? deliveryQuote.quote.distanceKm.toFixed(2) : null, deliveryDurationMinutes: deliveryQuote?.durationMinutes ?? null, deliveryBandId: deliveryQuote?.quote.band?.id ?? null, deliveryCourier: deliveryQuote?.quote.courier ?? null }).where(eq(orders.id, order.id));
       const [payment] = await tx.insert(paymentTransactions).values({ orderId: order.id, method: parsed.data.paymentMethod, channel: "ONLINE", status: parsed.data.paymentMethod === "MANUAL_MPESA" ? "REQUIRES_REVIEW" : "INITIATED", amount: total.toFixed(2), phone: parsed.data.billingPhone || parsed.data.phone, receiptNumber: manualReceipt, manualMessage: parsed.data.manualPaymentMessage || null });
-      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_CHECKOUT_STARTED", entityType: "order", entityId: String(order.id), metadata: { prescriptionId, paymentMethod: parsed.data.paymentMethod, total } });
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "PRESCRIPTION_CHECKOUT_STARTED", entityType: "order", entityId: String(order.id), metadata: { prescriptionId, paymentMethod: parsed.data.paymentMethod, total, addedItems: extras.lines.length } });
       return { duplicate: false, order: { ...order, checkoutToken: parsed.data.checkoutToken, total: total.toFixed(2) }, paymentId: payment.insertId };
     });
     if("availabilityChanged" in outcome){
