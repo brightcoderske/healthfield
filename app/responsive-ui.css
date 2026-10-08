@@ -35,7 +35,7 @@ button:disabled{cursor:not-allowed}
 }
 
 .compact-admin-page>.compact-table-tools,.compact-admin-page>.compact-table,.compact-admin-page>.compact-pagination{width:min(1180px,100%);margin-inline:auto}
-.compact-admin-page .product-row{grid-template-columns:40px minmax(140px,260px) minmax(90px,1fr) 88px 30px 62px 30px;gap:4px}
+.compact-admin-page .product-row{grid-template-columns:40px minmax(200px,1fr) minmax(80px,120px) 112px 36px 74px 58px 78px 30px;gap:4px}
 .compact-admin-page .compact-table-head{min-height:28px;padding:0 7px}
 .compact-admin-page .compact-table-row{min-height:48px;padding:4px 7px}
 .compact-admin-page .compact-table-row>*{min-width:0;max-width:100%;overflow:hidden}
@@ -124,8 +124,8 @@ button:disabled{cursor:not-allowed}
   .compact-admin-page .compact-table-tools label{min-width:0;flex:1 1 auto;height:32px;padding:0 6px}
   .compact-admin-page .compact-table-tools>select{width:108px;min-width:88px;flex:0 1 108px;height:32px;padding:0 5px}
   .compact-admin-page .compact-table-tools>span{max-width:56px;overflow:hidden;text-overflow:ellipsis}
-  .compact-admin-page .compact-table-head,.compact-admin-page .compact-table-row{min-width:575px!important}
-  .compact-admin-page .product-row{grid-template-columns:36px minmax(105px,1.55fr) 70px 78px 26px 54px 26px;gap:3px}
+  .compact-admin-page .compact-table-head,.compact-admin-page .compact-table-row{min-width:720px!important}
+  .compact-admin-page .product-row{grid-template-columns:36px minmax(105px,1.4fr) 62px 70px 32px 66px 52px 70px 26px;gap:3px}
   .compact-pagination{justify-content:space-between}.compact-pagination>span{text-align:center}.compact-pagination button{padding:0 7px}
   .taxonomy-page{padding-top:11px}.taxonomy-grid{gap:8px}.taxonomy-card form{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.taxonomy-table-head,.taxonomy-table article{min-width:0!important}.taxonomy-table{overflow:hidden}
   .campaign-page,.settings-page{padding:11px 8px 76px}.campaign-layout{margin-top:9px;gap:7px}.campaign-layout>form,.campaign-layout>section,.settings-page section{padding:9px}.campaign-page h1,.settings-page h1{font-size:18px}.settings-page section>div{gap:6px}.payment-toggle-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
