@@ -8,55 +8,96 @@ import { ReceiptPdf } from "../../app/admin/receipts/orders/[id]/receipt-pdf";
 import { healthfieldReceiptNumber, receiptDownloadFilename, type ReceiptBranch, type ReceiptBusiness, type ReceiptItem, type ReceiptOrder, type ReceiptPayment } from "../../app/admin/receipts/orders/[id]/thermal-receipt-data";
 import { activityLogs, branches, orderItemFulfilments, orderItems, orders, paymentTransactions, products, siteSettings, users } from "../../db/schema";
 import { getDb } from "./db";
-import { sendSms, smsConfiguration } from "./sms";
-import { orderSms, type SmsPurpose } from "../../lib/sms-templates";
+import { notifyCustomer } from "./customer-notify";
+import { notificationSettings, pharmacyIdentity } from "./notification-settings";
+import { channelEnabled, orderStatusEvent, type CustomerNotificationEventId } from "../../lib/notification-events";
+import { orderSms, orderStatusSms, orderStatusSmsPurpose, type OrderSmsContext, type SmsPurpose } from "../../lib/sms-templates";
 import { vatRateLabel } from "../../lib/vat";
-import { orderEmailHtml, posReceiptEmailHtml, sendEmail, shouldAttachOfficialReceipt, type EmailAttachment } from "./email";
+import { orderEmailHtml, orderStatusEmailContent, posReceiptEmailHtml, sendEmail, shouldAttachOfficialReceipt, storefrontOrigin, type EmailAttachment } from "./email";
 
 export type ReceiptNotificationTrigger = "PAYMENT_CONFIRMED" | "ORDER_COMPLETED";
 
+/** The order fields every customer message is composed from. */
+async function loadOrderMessageContext(orderId: number) {
+  const db = getDb();
+  const [order] = await db
+    .select({
+      orderNumber: orders.orderNumber, phone: orders.phone, email: orders.email, customerName: orders.customerName,
+      total: orders.total, paymentStatus: orders.paymentStatus, fulfilmentMethod: orders.fulfilmentMethod,
+      branchName: branches.name,
+    })
+    .from(orders)
+    .leftJoin(branches, eq(branches.id, orders.suggestedBranchId))
+    .where(eq(orders.id, orderId))
+    .limit(1);
+  if (!order) return null;
+  const identity = await pharmacyIdentity();
+  const total = Number(order.total);
+  const sms: OrderSmsContext = {
+    orderNumber: order.orderNumber,
+    customerName: order.customerName,
+    total,
+    // Only an unpaid order has anything left for the rider to collect.
+    amountDue: order.paymentStatus === "PAID" ? null : total,
+    branchName: order.branchName,
+    pharmacyName: identity.pharmacyName ?? undefined,
+    pharmacyPhone: identity.pharmacyPhone,
+  };
+  return { order, sms };
+}
+
 /**
- * Sends one order-related SMS.
+ * Tells the customer their order moved to `status`, by whichever of email and SMS the
+ * admin has switched on for that step.
  *
- * Loads only what the wording needs, and never throws: an SMS gateway being out of
- * credit must not fail an order update. Silent when SMS is unconfigured, so the whole
- * feature stays dormant until the Celcom account exists.
+ * Reads the order after the save, so contact details staff corrected in the same request
+ * are the ones used. Completion is the one step whose email is the paid receipt, so that
+ * goes through notifyPaidOrder and only the SMS is composed here.
  */
-export async function notifyOrderBySms(orderId: number, purpose: SmsPurpose) {
-  if (!smsConfiguration()) return;
+export async function notifyOrderStatusChange(orderId: number, status: string) {
+  const event = orderStatusEvent(status);
+  if (!event) return;
   try {
-    const db = getDb();
-    const [order] = await db
-      .select({
-        orderNumber: orders.orderNumber, phone: orders.phone, customerName: orders.customerName,
-        total: orders.total, paymentStatus: orders.paymentStatus, branchName: branches.name,
-      })
-      .from(orders)
-      .leftJoin(branches, eq(branches.id, orders.suggestedBranchId))
-      .where(eq(orders.id, orderId))
-      .limit(1);
-    if (!order?.phone) return;
-    const [settings] = await db.select({ pharmacyName: siteSettings.pharmacyName, phone: siteSettings.phone }).from(siteSettings).limit(1);
-    const total = Number(order.total);
-    const message = orderSms(purpose, {
-      orderNumber: order.orderNumber,
-      customerName: order.customerName,
-      total,
-      // Only an unpaid order has anything left for the rider to collect.
-      amountDue: order.paymentStatus === "PAID" ? null : total,
-      branchName: order.branchName,
-      pharmacyName: settings?.pharmacyName ?? undefined,
-      pharmacyPhone: settings?.phone ?? null,
+    const context = await loadOrderMessageContext(orderId);
+    if (!context) return;
+    const { order, sms } = context;
+    const { customerName: name, email } = order;
+    const update = status === "COMPLETED"
+      ? null
+      : orderStatusEmailContent({ name, orderId, orderNumber: order.orderNumber, status, fulfilmentMethod: order.fulfilmentMethod, storefrontOrigin: storefrontOrigin() });
+    await notifyCustomer(event, {
+      email: update && email ? { to: email, ...update, channel: "orders" } : null,
+      sms: { to: order.phone, message: orderStatusSms(status, { ...sms, customerName: name }), purpose: orderStatusSmsPurpose(status), orderId },
     });
-    const outcome = await sendSms({ to: order.phone, message, purpose });
-    if (outcome.failed) console.warn("Order SMS was not delivered", { orderId, purpose, detail: outcome.results[0]?.detail });
+    if (status === "COMPLETED") await notifyPaidOrder(orderId, "ORDER_COMPLETED");
+  } catch (error) {
+    console.error("Order status notification failed", { orderId, status, error });
+  }
+}
+
+export function queueOrderStatusNotification(orderId: number, status: string) {
+  void notifyOrderStatusChange(orderId, status);
+}
+
+/**
+ * The SMS half of "your order was received": the placed-order confirmation, its cash-on-
+ * delivery variant, or the closing confirmation for a counter sale. Which one is the
+ * caller's call, since only it knows how the order was paid.
+ */
+export async function notifyOrderBySms(orderId: number, purpose: Extract<SmsPurpose, "ORDER_RECEIVED" | "CASH_ON_DELIVERY_DUE" | "POS_SALE_COMPLETE">) {
+  try {
+    const context = await loadOrderMessageContext(orderId);
+    if (!context?.order.phone) return;
+    await notifyCustomer(purpose === "POS_SALE_COMPLETE" ? "POS_SALE" : "ORDER_PLACED", {
+      sms: { to: context.order.phone, message: orderSms(purpose, context.sms), purpose, orderId },
+    });
   } catch (error) {
     console.error("Order SMS failed", { orderId, purpose, error });
   }
 }
 
-export function queueOrderSms(orderId: number, purpose: SmsPurpose) {
-  void notifyOrderBySms(orderId, purpose).catch((error) => console.error("Queued order SMS failed", { orderId, purpose, error }));
+export function queueOrderSms(orderId: number, purpose: Parameters<typeof notifyOrderBySms>[1]) {
+  void notifyOrderBySms(orderId, purpose);
 }
 
 function receiptPhone(value: string | null) {
@@ -191,8 +232,12 @@ export async function notifyPaidOrder(orderId: number, trigger: ReceiptNotificat
   const paidPayment = payments.find((entry) => entry.status === "PAID") ?? payments[0] ?? null;
   const posSale = paidPayment?.channel === "POS";
   const officialReceipt = shouldAttachOfficialReceipt({ paymentChannel: paidPayment?.channel, orderStatus: order.status, trigger });
+  // The same function sends three different customer messages — a counter receipt, the
+  // receipt on completion, and the "payment confirmed" note — and each has its own switch.
+  const event: CustomerNotificationEventId = officialReceipt ? (posSale ? "POS_SALE" : "ORDER_COMPLETED") : "ORDER_PAYMENT_CONFIRMED";
+  const { customer: customerPreferences } = await notificationSettings();
 
-  if (order.email) {
+  if (order.email && channelEnabled(customerPreferences, event, "email")) {
     let attachment: EmailAttachment | null = null;
     let officialReceiptNumber: string | null = null;
     let pdfError: unknown = null;
@@ -251,12 +296,22 @@ export async function notifyPaidOrder(orderId: number, trigger: ReceiptNotificat
     }
   }
 
-  // SMS is no longer sent from here. It used to post to a generic gateway shape that
-  // Celcom does not accept — bearer auth and a `recipients` array — so it had never in
-  // fact delivered anything. Each moment that warrants a message now sends its own
-  // through ./sms: the counter sale, the placed order, and the ready-for-collection or
-  // out-for-delivery update. Routing it per trigger is also what keeps a POS sale from
-  // receiving both a payment confirmation and a sale confirmation for one transaction.
+  // The counter sale and the completed order send their own SMS, from the places that
+  // know about them (queueOrderSms and notifyOrderStatusChange). Only the payment note is
+  // sent from here, since this is the one place that knows when the money was matched.
+  // Routing it per trigger is also what keeps a counter sale from receiving both a
+  // payment confirmation and a sale confirmation for one transaction.
+  if (event === "ORDER_PAYMENT_CONFIRMED") {
+    const identity = await pharmacyIdentity();
+    await notifyCustomer(event, {
+      sms: {
+        to: receiptPhone(order.phone),
+        message: orderSms("PAYMENT_CONFIRMED", { orderNumber: order.orderNumber, customerName: order.customerName, total: Number(order.amountPaid), pharmacyName: identity.pharmacyName ?? undefined, pharmacyPhone: identity.pharmacyPhone }),
+        purpose: "PAYMENT_CONFIRMED",
+        orderId: order.id,
+      },
+    });
+  }
 }
 
 export function queuePaidOrderNotification(orderId: number, trigger: ReceiptNotificationTrigger = "PAYMENT_CONFIRMED") {

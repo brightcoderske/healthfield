@@ -3,13 +3,18 @@ import test from "node:test";
 import {
   gsm7Length,
   isTransactional,
+  consultationSms,
   marketingSms,
   orderSms,
+  orderStatusSms,
+  orderStatusSmsPurpose,
   otpSms,
+  prescriptionSms,
   smsRecipient,
   smsRecipients,
   smsSegments,
   toGsm7,
+  welcomeSms,
 } from "./sms-templates.ts";
 
 test("phone numbers are normalised to the 254 form the gateway expects", () => {
@@ -155,4 +160,44 @@ test("marketing and transactional messages stay distinguishable", () => {
   assert.equal(isTransactional("MARKETING"), false);
   assert.equal(isTransactional("OTP"), true);
   assert.equal(isTransactional("ORDER_RECEIVED"), true);
+});
+
+test("every order step customers are told about has a one-segment message naming the order", () => {
+  for (const status of ["AWAITING_PAYMENT", "CONFIRMED", "UNDER_REVIEW", "BEING_FULFILLED", "PARTIALLY_READY", "READY_FOR_DISPATCH", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED"]) {
+    const message = orderStatusSms(status, order);
+    assert.ok(message, `${status} has no message`);
+    assert.ok(message!.includes("HF-WEB-1042"), `${status} omits the order number`);
+    assert.equal(smsSegments(message!), 1, `${status} spills to a second segment: ${message}`);
+    assert.equal(message, toGsm7(message!), `${status} contains non-GSM-7 characters`);
+  }
+  assert.equal(orderStatusSms("NEW", order), null);
+});
+
+test("a cancelled order tells the customer so and where to turn", () => {
+  const message = orderStatusSms("CANCELLED", order)!;
+  assert.match(message, /has been cancelled/);
+  assert.match(message, /Help: 0757148900$/);
+  assert.equal(orderStatusSmsPurpose("CANCELLED"), "ORDER_CANCELLED");
+  assert.equal(orderStatusSmsPurpose("CONFIRMED"), "ORDER_UPDATE");
+});
+
+test("dispatch and pickup reuse the wording the order messages already use", () => {
+  assert.equal(orderStatusSms("OUT_FOR_DELIVERY", order), orderSms("ORDER_OUT_FOR_DELIVERY", order));
+  assert.equal(orderStatusSms("READY_FOR_PICKUP", order), orderSms("ORDER_READY_FOR_PICKUP", order));
+});
+
+test("prescription, consultation and welcome messages stay inside one segment", () => {
+  const context = { customerName: "Grace Wanjiru", pharmacyName: "Healthfield", pharmacyPhone: "0757148900" };
+  for (const event of ["RECEIVED", "APPROVED", "CLARIFICATION_NEEDED", "DECLINED", "RECHECK", "ISSUED"] as const) {
+    const message = prescriptionSms(event, context);
+    assert.equal(smsSegments(message), 1, `prescription ${event}: ${message}`);
+  }
+  for (const event of ["RECEIVED", "REPLY", "UPDATE", "CLOSED"] as const) {
+    const message = consultationSms(event, context);
+    assert.equal(smsSegments(message), 1, `consultation ${event}: ${message}`);
+  }
+  assert.match(consultationSms("RECEIVED", context), /received your consultation request/);
+  const welcome = welcomeSms(context);
+  assert.match(welcome, /^Hi Grace, welcome to Healthfield/);
+  assert.equal(smsSegments(welcome), 1);
 });

@@ -1,4 +1,5 @@
 import { siteSettings } from "../../db/schema";
+import { parseNotificationPreferences, type CustomerNotificationPreferences } from "../../lib/notification-events";
 import { getDb } from "./db";
 
 export type NotificationSettings = {
@@ -9,8 +10,8 @@ export type NotificationSettings = {
   notifyNewConsultation: boolean;
   notifyNewCustomer: boolean;
   notifyTillPayment: boolean;
-  smsPrescriptionUpdatesEnabled: boolean;
-  smsConsultationUpdatesEnabled: boolean;
+  /** Per-event email and SMS choices for customer messages; see lib/notification-events. */
+  customer: CustomerNotificationPreferences;
 };
 
 // Mirrors the site_settings column defaults, so a fresh install without a settings
@@ -23,8 +24,7 @@ const defaults: NotificationSettings = {
   notifyNewConsultation: true,
   notifyNewCustomer: true,
   notifyTillPayment: false,
-  smsPrescriptionUpdatesEnabled: false,
-  smsConsultationUpdatesEnabled: false,
+  customer: {},
 };
 
 /** The name and helpline shown inside customer-facing SMS, wherever one is composed. */
@@ -44,8 +44,9 @@ export async function notificationSettings(): Promise<NotificationSettings> {
     notifyNewConsultation: siteSettings.notifyNewConsultation,
     notifyNewCustomer: siteSettings.notifyNewCustomer,
     notifyTillPayment: siteSettings.notifyTillPayment,
-    smsPrescriptionUpdatesEnabled: siteSettings.smsPrescriptionUpdatesEnabled,
-    smsConsultationUpdatesEnabled: siteSettings.smsConsultationUpdatesEnabled,
+    customerNotifications: siteSettings.customerNotifications,
   }).from(siteSettings).limit(1);
-  return row ?? defaults;
+  if (!row) return defaults;
+  const { customerNotifications, ...flags } = row;
+  return { ...flags, customer: parseNotificationPreferences(customerNotifications) };
 }

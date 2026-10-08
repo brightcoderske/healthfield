@@ -16,6 +16,9 @@ export const smsPurposes = [
   "POS_SESSION_CLOSED",
   "ORDER_READY_FOR_PICKUP",
   "ORDER_OUT_FOR_DELIVERY",
+  "ORDER_UPDATE",
+  "ORDER_CANCELLED",
+  "ACCOUNT_WELCOME",
   "PAYMENT_CONFIRMED",
   "CASH_ON_DELIVERY_DUE",
   "PRESCRIPTION_UPDATE",
@@ -116,7 +119,8 @@ export function smsSegments(message: string) {
  * /orders page — next.config.ts redirects it to the orders section of the account page,
  * so this link must not be shortened further or changed without that redirect.
  */
-export const ORDER_TRACKING_URL = "healthfieldpharmacy.co.ke/orders";
+const STOREFRONT_HOST = "healthfieldpharmacy.co.ke";
+export const ORDER_TRACKING_URL = `${STOREFRONT_HOST}/orders`;
 
 export type OrderSmsContext = {
   orderNumber: string;
@@ -220,8 +224,62 @@ export function otpSms(code: string, minutes: number, pharmacyName = "Healthfiel
   return toGsm7(`${code} is your ${brand} verification code. It expires in ${minutes} minutes. We will never ask you for this code.`);
 }
 
-/** What happened to a prescription request — received, or the pharmacist's decision. */
-export type PrescriptionSmsEvent = "RECEIVED" | "APPROVED" | "CLARIFICATION_NEEDED" | "DECLINED";
+/**
+ * The SMS purpose to log an order status change under. Dispatch and pickup keep their
+ * own purposes because the SMS reports group on them; every other step shares one.
+ */
+export function orderStatusSmsPurpose(status: string): SmsPurpose {
+  if (status === "OUT_FOR_DELIVERY") return "ORDER_OUT_FOR_DELIVERY";
+  if (status === "READY_FOR_PICKUP") return "ORDER_READY_FOR_PICKUP";
+  if (status === "CANCELLED") return "ORDER_CANCELLED";
+  return "ORDER_UPDATE";
+}
+
+/**
+ * What to tell a customer when staff move their order to `status`, or null for a
+ * status customers are never told about.
+ *
+ * Dispatch and pickup reuse the wording in orderSms so the two never drift apart.
+ */
+export function orderStatusSms(status: string, context: OrderSmsContext): string | null {
+  const brand = context.pharmacyName?.trim() || "Healthfield";
+  const hello = greeting(context.customerName);
+  const help = helpline(context.pharmacyPhone);
+  const number = context.orderNumber;
+  switch (status) {
+    case "OUT_FOR_DELIVERY":
+      return orderSms("ORDER_OUT_FOR_DELIVERY", context);
+    case "READY_FOR_PICKUP":
+      return orderSms("ORDER_READY_FOR_PICKUP", context);
+    case "AWAITING_PAYMENT":
+      return toGsm7(`${hello}order ${number} is waiting for payment. Track it at ${ORDER_TRACKING_URL}.${help}`);
+    case "CONFIRMED":
+      return toGsm7(`${hello}${brand} has confirmed your order ${number}. We will update you as it is prepared.${help}`);
+    case "UNDER_REVIEW":
+      return toGsm7(`${hello}order ${number} is being reviewed by our pharmacist. ${brand}.${help}`);
+    case "BEING_FULFILLED":
+      return toGsm7(`${hello}${brand} is preparing your order ${number}.${help}`);
+    case "PARTIALLY_READY":
+      return toGsm7(`${hello}part of order ${number} is packed. We will update you when the rest is ready. ${brand}.${help}`);
+    case "READY_FOR_DISPATCH":
+      return toGsm7(`${hello}order ${number} is packed and ready for dispatch. ${brand}.${help}`);
+    case "COMPLETED":
+      return toGsm7(`${hello}order ${number} is complete. Thank you for shopping with ${brand}.${help}`);
+    case "CANCELLED":
+      return toGsm7(`${hello}order ${number} has been cancelled. If you have paid or have a question, please contact ${brand}.${help}`);
+    default:
+      return null;
+  }
+}
+
+/** Sent once, when a new customer has verified their account. */
+export function welcomeSms(context: { customerName?: string | null; pharmacyName?: string; pharmacyPhone?: string | null }): string {
+  const brand = context.pharmacyName?.trim() || "Healthfield";
+  return toGsm7(`${greeting(context.customerName)}welcome to ${brand}. Your account is ready - shop and track your orders at ${STOREFRONT_HOST}.${helpline(context.pharmacyPhone)}`);
+}
+
+/** What happened to a prescription request: received, decided, or re-checked. */
+export type PrescriptionSmsEvent = "RECEIVED" | "APPROVED" | "CLARIFICATION_NEEDED" | "DECLINED" | "RECHECK" | "ISSUED";
 
 export function prescriptionSms(event: PrescriptionSmsEvent, context: { customerName?: string | null; pharmacyName?: string; pharmacyPhone?: string | null }): string {
   const brand = context.pharmacyName?.trim() || "Healthfield";
@@ -236,14 +294,29 @@ export function prescriptionSms(event: PrescriptionSmsEvent, context: { customer
       return toGsm7(`${hello}the pharmacist needs more information about your prescription. Please check your account.${help}`);
     case "DECLINED":
       return toGsm7(`${hello}your prescription request could not be approved. Please check your account for details.${help}`);
+    case "RECHECK":
+      return toGsm7(`${hello}stock changed on your prescription, so the pharmacist is re-checking it. You have not been charged.${help}`);
+    case "ISSUED":
+      return toGsm7(`${hello}a prescription was issued after your consultation. The pharmacist is confirming prices and you can pay once done.${help}`);
   }
 }
 
-export function consultationReceivedSms(context: { customerName?: string | null; pharmacyName?: string; pharmacyPhone?: string | null }): string {
+export type ConsultationSmsEvent = "RECEIVED" | "REPLY" | "UPDATE" | "CLOSED";
+
+export function consultationSms(event: ConsultationSmsEvent, context: { customerName?: string | null; pharmacyName?: string; pharmacyPhone?: string | null }): string {
   const brand = context.pharmacyName?.trim() || "Healthfield";
   const hello = greeting(context.customerName);
   const help = helpline(context.pharmacyPhone);
-  return toGsm7(`${hello}${brand} received your consultation request. A healthcare professional will review it and reply through your account.${help}`);
+  switch (event) {
+    case "RECEIVED":
+      return toGsm7(`${hello}${brand} received your consultation request. A healthcare professional will review it and reply through your account.${help}`);
+    case "REPLY":
+      return toGsm7(`${hello}a healthcare professional replied to your consultation. Sign in to read it.${help}`);
+    case "UPDATE":
+      return toGsm7(`${hello}there is an update on your consultation. Sign in to read it.${help}`);
+    case "CLOSED":
+      return toGsm7(`${hello}your consultation is complete. Sign in to read the professional's closing note.${help}`);
+  }
 }
 
 /**

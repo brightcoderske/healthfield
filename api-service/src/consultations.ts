@@ -12,7 +12,7 @@ import {
   consultationActions, consultationStatusAfterCustomerReply, type ConsultationAction, type ConsultationStatus,
 } from "../../lib/consultation-workflow";
 import { healthfieldOrderNumber } from "../../lib/order-number";
-import { consultationReceivedSms } from "../../lib/sms-templates";
+import { consultationSms, prescriptionSms } from "../../lib/sms-templates";
 import { requireSession } from "./auth";
 import { getDb } from "./db";
 import { sendEmail } from "./email";
@@ -20,7 +20,7 @@ import { json, safeFilename } from "./http";
 import { storefrontOrigin } from "./mutations";
 import { notificationSettings, pharmacyIdentity } from "./notification-settings";
 import { storageRoot, validatePrescriptionUpload } from "./prescription-files";
-import { sendSms } from "./sms";
+import { notifyCustomer } from "./customer-notify";
 import { sessionHasPermission } from "./staff-permissions";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -110,24 +110,23 @@ export async function handleConsultations(request: Request, consultationId?: num
       return { id: row.insertId, reference, phone: customer?.phone ?? null };
     });
 
-    void sendEmail({
-      to: auth.session.email,
-      subject: "Your consultation request has been received",
-      message: `Hello ${auth.session.firstName},\n\nWe received your consultation request (${created.reference}). A healthcare professional will review what you have described and reply through the platform.${parsed.data.callbackRequested ? " You asked for a callback, so expect a phone call as well." : ""}\n\nThis is a request for a consultation. It is not a prescription, and no medicine is issued until a professional has reviewed your case.`,
-      action: { label: "Open consultation", url: `${storefrontOrigin()}/account/consultations/${created.id}` },
-      channel: "orders",
+    const identity = await pharmacyIdentity();
+    void notifyCustomer("CONSULTATION_RECEIVED", {
+      email: {
+        to: auth.session.email,
+        subject: "Your consultation request has been received",
+        message: `Hello ${auth.session.firstName},\n\nWe received your consultation request (${created.reference}). A healthcare professional will review what you have described and reply through the platform.${parsed.data.callbackRequested ? " You asked for a callback, so expect a phone call as well." : ""}\n\nThis is a request for a consultation. It is not a prescription, and no medicine is issued until a professional has reviewed your case.`,
+        action: { label: "Open consultation", url: `${storefrontOrigin()}/account/consultations/${created.id}` },
+        channel: "orders",
+      },
+      sms: { to: created.phone, message: consultationSms("RECEIVED", { customerName: auth.session.firstName, ...identity }), purpose: "CONSULTATION_UPDATE" },
     });
-    const notifications = await notificationSettings();
-    if (process.env.NOTIFICATION_EMAIL && notifications.notifyNewConsultation) void sendEmail({
+    if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewConsultation) void sendEmail({
       to: process.env.NOTIFICATION_EMAIL,
       subject: parsed.data.callbackRequested ? "New consultation request (callback requested)" : "New consultation request",
       message: `A new consultation request is waiting for review. Reference: ${created.reference}.`,
       channel: "orders",
     });
-    if (notifications.smsConsultationUpdatesEnabled && created.phone) {
-      const identity = await pharmacyIdentity();
-      void sendSms({ to: created.phone, purpose: "CONSULTATION_UPDATE", message: consultationReceivedSms({ customerName: auth.session.firstName, ...identity }) }).catch((error) => console.error("Consultation received SMS failed", { consultationId: created.id, error }));
-    }
     return json({ ok: true, id: created.id, reference: created.reference }, { status: 201 });
   } catch (error) {
     return errorResponse(error, "Consultation creation failed");
@@ -200,13 +199,16 @@ export async function handleConsultationMessages(request: Request, consultationI
     });
 
     if (isTeam) {
-      const [customer] = await getDb().select({ email: users.email, firstName: users.firstName }).from(users).where(eq(users.id, result.customerId)).limit(1);
-      if (customer) void sendEmail({
-        to: customer.email,
-        subject: "A healthcare professional replied to your consultation",
-        message: `Hello ${customer.firstName},\n\nThere is a new reply on your consultation ${result.reference}.`,
-        action: { label: "Open consultation", url: `${storefrontOrigin()}/account/consultations/${consultationId}` },
-        channel: "orders",
+      const [customer] = await getDb().select({ email: users.email, firstName: users.firstName, phone: users.phone }).from(users).where(eq(users.id, result.customerId)).limit(1);
+      if (customer) void notifyCustomer("CONSULTATION_REPLY", {
+        email: {
+          to: customer.email,
+          subject: "A healthcare professional replied to your consultation",
+          message: `Hello ${customer.firstName},\n\nThere is a new reply on your consultation ${result.reference}.`,
+          action: { label: "Open consultation", url: `${storefrontOrigin()}/account/consultations/${consultationId}` },
+          channel: "orders",
+        },
+        sms: { to: customer.phone, message: consultationSms("REPLY", { customerName: customer.firstName, ...(await pharmacyIdentity()) }), purpose: "CONSULTATION_UPDATE" },
       });
     }
     return json({ ok: true, id: result.messageId, status: result.status }, { status: 201 });
@@ -306,16 +308,19 @@ async function applySimpleAction(session: Session, consultationId: number, actio
       entityId: String(consultationId), metadata: { from: current.status, to: next.status, outcome: next.outcome },
     });
 
-    const [customer] = await tx.select({ email: users.email, firstName: users.firstName }).from(users).where(eq(users.id, current.customerId)).limit(1);
+    const [customer] = await tx.select({ email: users.email, firstName: users.firstName, phone: users.phone }).from(users).where(eq(users.id, current.customerId)).limit(1);
     return { ...next, reviewVersion: current.reviewVersion + 1, customer, reference: current.reference };
   });
 
-  if (result.customer && note) void sendEmail({
-    to: result.customer.email,
-    subject: result.status === "CLOSED" ? "Your consultation has been completed" : "An update on your consultation",
-    message: `Hello ${result.customer.firstName},\n\n${note}`,
-    action: { label: "Open consultation", url: `${storefrontOrigin()}/account/consultations/${consultationId}` },
-    channel: "orders",
+  if (result.customer && note) void notifyCustomer("CONSULTATION_UPDATE", {
+    email: {
+      to: result.customer.email,
+      subject: result.status === "CLOSED" ? "Your consultation has been completed" : "An update on your consultation",
+      message: `Hello ${result.customer.firstName},\n\n${note}`,
+      action: { label: "Open consultation", url: `${storefrontOrigin()}/account/consultations/${consultationId}` },
+      channel: "orders",
+    },
+    sms: { to: result.customer.phone, message: consultationSms(result.status === "CLOSED" ? "CLOSED" : "UPDATE", { customerName: result.customer.firstName, ...(await pharmacyIdentity()) }), purpose: "CONSULTATION_UPDATE" },
   });
   return json({ ok: true, status: result.status, outcome: result.outcome, reviewVersion: result.reviewVersion });
 }
@@ -339,7 +344,7 @@ async function issuePrescription(session: Session, consultationId: number, input
   const productIds = input.items.map((item) => item.productId);
   const [catalogue, customerRows, settingsRows] = await Promise.all([
     db.select({ id: products.id, name: products.name, isActive: products.isActive }).from(products).where(inArray(products.id, productIds)),
-    db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, role: users.role }).from(users).where(eq(users.id, current.customerId)).limit(1),
+    db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, email: users.email, phone: users.phone, role: users.role }).from(users).where(eq(users.id, current.customerId)).limit(1),
     db.select().from(siteSettings).limit(1),
   ]);
   if (catalogue.length !== productIds.length || catalogue.some((product) => !product.isActive))
@@ -426,12 +431,15 @@ async function issuePrescription(session: Session, consultationId: number, input
       return { prescriptionId: prescriptionRow.insertId, reviewVersion: locked.reviewVersion + 1 };
     });
 
-    void sendEmail({
-      to: customer.email,
-      subject: "Your prescription has been issued",
-      message: `Hello ${customer.firstName},\n\nFollowing your consultation ${current.reference}, a prescription has been issued by ${input.prescriberName}. Our pharmacist is now confirming availability and prices, and you will be able to review and pay once that is done.`,
-      action: { label: "Track prescription", url: `${storefrontOrigin()}/account/prescriptions/${result.prescriptionId}` },
-      channel: "orders",
+    void notifyCustomer("PRESCRIPTION_ISSUED", {
+      email: {
+        to: customer.email,
+        subject: "Your prescription has been issued",
+        message: `Hello ${customer.firstName},\n\nFollowing your consultation ${current.reference}, a prescription has been issued by ${input.prescriberName}. Our pharmacist is now confirming availability and prices, and you will be able to review and pay once that is done.`,
+        action: { label: "Track prescription", url: `${storefrontOrigin()}/account/prescriptions/${result.prescriptionId}` },
+        channel: "orders",
+      },
+      sms: { to: customer.phone, message: prescriptionSms("ISSUED", { customerName: customer.firstName, ...(await pharmacyIdentity()) }), purpose: "PRESCRIPTION_UPDATE" },
     });
     return json({ ok: true, status: "CLOSED", outcome: "PRESCRIPTION_ISSUED", prescriptionId: result.prescriptionId, reviewVersion: result.reviewVersion });
   } catch (error) {

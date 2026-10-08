@@ -66,6 +66,7 @@ import {
   requireTeamPermission,
   sessionHasPermission,
 } from "./staff-permissions";
+import { parseNotificationPreferences } from "../../lib/notification-events";
 import { searchPhrase } from "../../lib/search-rank";
 import type { StaffPermission } from "../../lib/staff-permissions";
 
@@ -2108,10 +2109,15 @@ export async function handleView(request: Request, path: string) {
         notifyNewOrder: siteSettings.notifyNewOrder, notifyOrderStatusChange: siteSettings.notifyOrderStatusChange,
         notifyCustomerReceivedOrder: siteSettings.notifyCustomerReceivedOrder, notifyNewPrescription: siteSettings.notifyNewPrescription,
         notifyNewConsultation: siteSettings.notifyNewConsultation, notifyNewCustomer: siteSettings.notifyNewCustomer,
-        notifyTillPayment: siteSettings.notifyTillPayment, smsPrescriptionUpdatesEnabled: siteSettings.smsPrescriptionUpdatesEnabled,
-        smsConsultationUpdatesEnabled: siteSettings.smsConsultationUpdatesEnabled,
+        notifyTillPayment: siteSettings.notifyTillPayment,
+        customerNotifications: siteSettings.customerNotifications,
       }).from(siteSettings).limit(1);
-      return json({ settings: settings ?? null, paymentRuntime: paymentConfigurationSummary() });
+      return json({
+        settings: settings ? { ...settings, customerNotifications: parseNotificationPreferences(settings.customerNotifications) } : null,
+        paymentRuntime: paymentConfigurationSummary(),
+        // Lets the notifications screen say so when SMS switches would currently do nothing.
+        smsConfigured: smsConfigurationSummary().configured,
+      });
     }
     if (view === "sms") {
       const [report, balance] = await Promise.all([smsReport(200), smsBalance()]);
