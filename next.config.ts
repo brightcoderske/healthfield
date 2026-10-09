@@ -12,11 +12,15 @@ const securityHeaders = [
 
 // LOW_RESOURCE_BUILD=1 (set by scripts/deploy.sh) is for building on the shared cPanel account,
 // which refuses to start more processes than its limit (spawn EAGAIN). It keeps the webpack build
-// in the main process instead of a separate worker, and runs the page-generation workers as
-// threads instead of child processes. Vercel and CI do not set it and build as before.
+// in the main process instead of a separate worker, runs the page-generation workers as threads
+// instead of child processes, and skips Next's own type check. Vercel and CI do not set it and build as before.
 const lowResourceBuild = process.env.LOW_RESOURCE_BUILD === "1";
 
 const nextConfig: NextConfig = {
+  // The type check holds the whole program in memory next to the webpack build, which together
+  // pass the account's 2 GB when the build runs in one process. It is skipped only in that mode;
+  // types are checked with `tsc --noEmit` before pushing.
+  ...(lowResourceBuild ? { typescript: { ignoreBuildErrors: true } } : {}),
   experimental: {
     ...(lowResourceBuild ? { webpackBuildWorker: false, workerThreads: true } : {}),
     cpus: 1,
