@@ -14,7 +14,8 @@
 #   NODE_VERSION        Node selector version used to find the nodevenv (default 24)
 #   NODE_VENV           full path of the nodevenv "bin/activate" to use instead of the guessed one
 #   STORAGE_ROOT        persistent uploads/prescriptions (default ~/healthfield-storage)
-#   BUILD_MEMORY_MB     heap limit for the build (default 2048)
+#   BUILD_MEMORY_MB     heap limit for the build (default 1400)
+#   BUILD_SPLIT=0       build in one process instead of two (needs about 2 GB free)
 #   INSTALL_DEPS=1      force a dependency install even if pnpm-lock.yaml is unchanged
 #
 # The order is chosen so that a failure leaves the running site as it was: the app is stopped,
@@ -37,7 +38,7 @@ fi
 ACCOUNT_HOME="${HOME:-$(cd ~ && pwd)}"
 NODE_VERSION="${NODE_VERSION:-24}"
 STORAGE_ROOT="${STORAGE_ROOT:-${ACCOUNT_HOME}/healthfield-storage}"
-BUILD_MEMORY_MB="${BUILD_MEMORY_MB:-2048}"
+BUILD_MEMORY_MB="${BUILD_MEMORY_MB:-1400}"
 
 RELEASE_STAGE="${API_ROOT}/.release.next"
 RELEASE_PREVIOUS="${API_ROOT}/.release.previous"
@@ -196,8 +197,30 @@ echo "Building the storefront (heap limit ${BUILD_MEMORY_MB} MB)..."
 rm -rf "${STOREFRONT_PREVIOUS}"
 if [[ -d "${STOREFRONT_BUILD}" ]]; then mv "${STOREFRONT_BUILD}" "${STOREFRONT_PREVIOUS}"; fi
 STOREFRONT_REPLACED=1
-NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB}" "${PNPM_COMMAND[@]}" run build
+export RAYON_NUM_THREADS=1 UV_THREADPOOL_SIZE=2
+BUILD_NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB} --v8-pool-size=1"
+if [[ "${BUILD_SPLIT:-1}" == "1" ]]; then
+  # One `next build` keeps the compiler's memory (about 1.4 GB) while it starts the worker that
+  # renders the static pages, and a hosting account with a memory cap kills that worker (SIGABRT).
+  # Run as two processes, the compiler's memory is freed before the pages are generated, and the
+  # most either needs is about 1.4 GB and 0.5 GB.
+  echo "  1/2 compiling..."
+  NODE_OPTIONS="${BUILD_NODE_OPTIONS}" "${PNPM_COMMAND[@]}" exec next build --webpack --experimental-build-mode=compile
+  # The compile step has already renamed the proxy file to the name the server uses; the
+  # generate step looks for the original name once more, so it is put back as a copy.
+  if [[ -f "${STOREFRONT_BUILD}/server/middleware.js" && ! -f "${STOREFRONT_BUILD}/server/proxy.js" ]]; then
+    cp "${STOREFRONT_BUILD}/server/middleware.js" "${STOREFRONT_BUILD}/server/proxy.js"
+    if [[ -f "${STOREFRONT_BUILD}/server/middleware.js.nft.json" ]]; then
+      cp "${STOREFRONT_BUILD}/server/middleware.js.nft.json" "${STOREFRONT_BUILD}/server/proxy.js.nft.json"
+    fi
+  fi
+  echo "  2/2 generating pages..."
+  NODE_OPTIONS="${BUILD_NODE_OPTIONS}" "${PNPM_COMMAND[@]}" exec next build --webpack --experimental-build-mode=generate
+else
+  NODE_OPTIONS="${BUILD_NODE_OPTIONS}" "${PNPM_COMMAND[@]}" run build
+fi
 test -s "${STOREFRONT_BUILD}/BUILD_ID"
+test -s "${STOREFRONT_BUILD}/server/middleware.js"
 
 # ---------------------------------------------------------------- database
 echo "Applying database migrations before the runtime swap..."

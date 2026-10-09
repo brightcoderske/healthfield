@@ -76,7 +76,7 @@ fails, the previous storefront build is put back and the API is not swapped. A f
 the site running the release it had.
 
 Options, as environment variables: `INSTALL_DEPS=1` to force an install, `BUILD_MEMORY_MB` for the storefront build's memory limit
-(default 2048), `NODE_VERSION` (default 24), `NODE_VENV`, `STORAGE_ROOT`.
+(default 1400), `BUILD_SPLIT=0` to build in one process, `NODE_VERSION` (default 24), `NODE_VENV`, `STORAGE_ROOT`.
 
 ## Rolling back
 
