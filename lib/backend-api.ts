@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { SESSION_COOKIE } from "./auth";
+import { requestUrl } from "./request-url";
 
 function apiBase() {
   const value = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL;
@@ -94,7 +95,8 @@ export async function proxyAuth(request: Request, action: "login" | "register" |
 
 export async function proxyLogout(request: Request) {
   await backendRequest("/v1/auth/logout", { method: "POST" }).catch(() => null);
-  const result = NextResponse.redirect(new URL("/#products", request.url), 303);
+  // request.url holds the address the server listens on (0.0.0.0:3000), not the one visitors used.
+  const result = NextResponse.redirect(requestUrl(request, "/#products"), 303);
   result.cookies.delete(SESSION_COOKIE);
   return result;
 }
