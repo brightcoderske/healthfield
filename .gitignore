@@ -78,7 +78,3 @@ api-service/node_modules/
 api-service/tmp/
 api-service/*.tar.gz
 api-service/.pnpm-lock.sha256
-
-# Deploy leftovers (scripts/deploy.sh)
-/.next.previous/
-/.healthfield-build.json
