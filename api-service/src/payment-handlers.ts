@@ -8,7 +8,7 @@ import { getDb } from "./db";
 import { json } from "./http";
 import { buildC2bCallbackUrls, classifyStkQueryResult, forbiddenCallbackWord, extractMpesaReceipt, initiateStkPush, mpesaConfiguration, parseC2bPayment, parsePullTransactions, parseStkCallback, parseTransactionStatusResult, pullTransactionsConfiguration, queryPulledTransactions, queryStkPush, queryTransactionStatus, registerC2bUrls, selectIncomingPaymentCandidate, selectPaymentForIncoming, stkBackgroundReconcileDelay, stkReconciliationReference, transactionStatusConfiguration, validDateOrNull, type IncomingMpesaPayment } from "./mpesa";
 import { notificationSettings } from "./notification-settings";
-import { queuePaidOrderNotification } from "./order-notifications";
+import { queueOrderSms, queuePaidOrderNotification } from "./order-notifications";
 import { consumePosBatches } from "./pos-inventory";
 
 const team = ["STAFF", "ADMIN", "SUPER_ADMIN"] as const;
@@ -127,9 +127,14 @@ export async function markPaymentPaid(transactionId: number, details: { receiptN
     const paidOrderStatus = payment.channel === "POS" ? inventoryFinalized ? "COMPLETED" : "UNDER_REVIEW" : ["NEW", "AWAITING_PAYMENT", "CANCELLED"].includes(order.status) ? "CONFIRMED" : order.status;
     await tx.update(orders).set({ paymentStatus: "PAID", paymentReference: details.receiptNumber, amountPaid: paidTotal.toFixed(2), status: paidOrderStatus }).where(eq(orders.id, order.id));
     await tx.insert(activityLogs).values({ actorId: details.actorId ?? null, action: inventoryFinalized ? "PAYMENT_CONFIRMED" : "PAYMENT_CONFIRMED_STOCK_REVIEW", entityType: "order", entityId: String(order.id), metadata: { transactionId: payment.id, method: payment.method, receiptNumber: details.receiptNumber, amount: details.amount, amountPaid: paidTotal } });
-    return { orderId: order.id, newlyPaid: true, inventoryFinalized, componentPaid: true, fullyPaid: true };
+    return { orderId: order.id, newlyPaid: true, inventoryFinalized, componentPaid: true, fullyPaid: true, posSale: payment.channel === "POS" };
   });
-  if (result.newlyPaid) queuePaidOrderNotification(result.orderId);
+  if (result.newlyPaid) {
+    queuePaidOrderNotification(result.orderId);
+    // A counter sale paid by M-Pesa or split tenders finishes here, not in pos-sale.ts, which only
+    // texts the customer for a cash-only sale. Without this the "Walk-in sale receipt" SMS switch did nothing for them.
+    if ("posSale" in result && result.posSale) queueOrderSms(result.orderId, "POS_SALE_COMPLETE");
+  }
   return result;
 }
 
