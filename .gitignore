@@ -82,3 +82,4 @@ api-service/.pnpm-lock.sha256
 # Deploy leftovers (scripts/deploy.sh)
 /.next.previous/
 /.healthfield-build.json
+/.build-cache/

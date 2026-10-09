@@ -196,6 +196,12 @@ echo "Building the storefront (heap limit ${BUILD_MEMORY_MB} MB)..."
 rm -rf "${STOREFRONT_PREVIOUS}"
 if [[ -d "${STOREFRONT_BUILD}" ]]; then mv "${STOREFRONT_BUILD}" "${STOREFRONT_PREVIOUS}"; fi
 STOREFRONT_REPLACED=1
+# Next keeps its build cache in .next/cache, which the move above takes away. Keep it in a folder of
+# its own and link it back in, so the next deploy rebuilds only what changed. FRESH_BUILD=1 clears it.
+BUILD_CACHE="${APP_ROOT}/.build-cache"
+if [[ "${FRESH_BUILD:-0}" == "1" ]]; then rm -rf "${BUILD_CACHE}"; fi
+mkdir -p "${BUILD_CACHE}" "${STOREFRONT_BUILD}"
+ln -sfn "${BUILD_CACHE}" "${STOREFRONT_BUILD}/cache"
 LOW_RESOURCE_BUILD=1 RAYON_NUM_THREADS=1 UV_THREADPOOL_SIZE=2 NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB}" "${PNPM_COMMAND[@]}" run build
 test -s "${STOREFRONT_BUILD}/BUILD_ID"
 
