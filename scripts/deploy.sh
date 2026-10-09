@@ -196,7 +196,7 @@ echo "Building the storefront (heap limit ${BUILD_MEMORY_MB} MB)..."
 rm -rf "${STOREFRONT_PREVIOUS}"
 if [[ -d "${STOREFRONT_BUILD}" ]]; then mv "${STOREFRONT_BUILD}" "${STOREFRONT_PREVIOUS}"; fi
 STOREFRONT_REPLACED=1
-NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB}" "${PNPM_COMMAND[@]}" run build
+LOW_RESOURCE_BUILD=1 RAYON_NUM_THREADS=1 UV_THREADPOOL_SIZE=2 NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB} --v8-pool-size=1" "${PNPM_COMMAND[@]}" run build
 test -s "${STOREFRONT_BUILD}/BUILD_ID"
 
 # ---------------------------------------------------------------- database
