@@ -20,7 +20,7 @@ const child = spawn(process.execPath, [resolve(root, "api-service", "dist", "ser
     MPESA_SHORTCODE: "174379",
     MPESA_PASSKEY: "local-smoke-passkey",
     MPESA_TRANSACTION_TYPE: "CustomerPayBillOnline",
-    MPESA_CALLBACK_BASE_URL: "https://api.healthfieldpharmacy.co.ke",
+    MPESA_CALLBACK_BASE_URL: "https://www.healthfieldpharmacy.co.ke",
     MPESA_CALLBACK_SECRET: paymentEndpointSecret,
     PORT: port,
   },

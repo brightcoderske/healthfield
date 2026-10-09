@@ -13,7 +13,7 @@ export async function GET(
   const api = (
     process.env.API_BASE_URL ||
     process.env.NEXT_PUBLIC_API_URL ||
-    "https://api.healthfieldpharmacy.co.ke"
+    "https://www.healthfieldpharmacy.co.ke"
   ).replace(/\/$/, "");
   // Images are public on the API, so no key is sent along with the request.
   const upstream = await fetch(`${api}/uploads/products/${filename}`, {

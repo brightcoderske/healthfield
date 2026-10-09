@@ -254,7 +254,7 @@ async function route(request: Request, ip: string): Promise<Response> {
 
 function webRequest(request: ExpressRequest) {
   const protocol = request.headers["x-forwarded-proto"] || "https";
-  const host = request.headers.host || "api.healthfieldpharmacy.co.ke";
+  const host = request.headers.host || "www.healthfieldpharmacy.co.ke";
   const init: RequestInit & { duplex?: "half" } = { method: request.method, headers: request.headers as HeadersInit };
   if (!['GET', 'HEAD'].includes(request.method || 'GET')) { init.body = Readable.toWeb(request) as ReadableStream; init.duplex = "half"; }
   return new Request(`${protocol}://${host}${request.url || "/"}`, init);

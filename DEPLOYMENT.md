@@ -56,10 +56,18 @@ live one does, and remove it when the test copy becomes the live one.
 
 ### M-Pesa
 
-STK push callbacks use `MPESA_CALLBACK_BASE_URL` on every request, so changing it moves them at
-once. The C2B and Pull URLs are registered at Safaricom and may not be re-registrable on production.
-Keep the old `api.` hostname pointing at this same app until the new URLs are confirmed at
-Safaricom, then retire it.
+Every callback address is `MPESA_CALLBACK_BASE_URL` plus `/v1/payments/mobile-money/...`, and the
+app answers `/v1` on its own hostname, so there is no separate API host. Set it to the exact host
+customers use, `https://www.healthfieldpharmacy.co.ke`: Safaricom does not follow redirects, so a
+bare-domain address that redirects to `www` would lose every callback.
+
+- STK push callbacks are sent with each request, so changing the setting moves them at once.
+- The C2B (manual till) addresses are registered at Safaricom. After changing the base address or
+  `MPESA_CALLBACK_SECRET`, press "Register Till callbacks with Safaricom" on the admin Unmatched
+  payments screen. If Safaricom refuses a second registration, delete the old URLs under Daraja's
+  self-service URL management and register again.
+- In Cloudflare, add a WAF custom rule that skips bot and challenge checks for
+  `/v1/payments/mobile-money/`, so Safaricom's servers are never challenged.
 
 ## Deploying
 

@@ -1,5 +1,5 @@
 export function apiOrigin() {
-  return (process.env.API_PUBLIC_URL || "https://api.healthfieldpharmacy.co.ke").replace(/\/$/, "");
+  return (process.env.API_PUBLIC_URL || "https://www.healthfieldpharmacy.co.ke").replace(/\/$/, "");
 }
 
 const storefrontHosts = new Set(
