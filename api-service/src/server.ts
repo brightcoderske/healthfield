@@ -295,9 +295,15 @@ app.all("/{*path}", async (nodeRequest, nodeResponse) => {
   }
 });
 
+// The API can run on its own (its own port) or inside the storefront's process, which is how
+// the single-app deployment runs it: the root server.cjs sets HEALTHFIELD_EMBEDDED, imports
+// this bundle, and hands it the requests for /v1, /health and /uploads/products.
+const embedded = process.env.HEALTHFIELD_EMBEDDED === "1";
 const port = Number(process.env.PORT || 3001);
 if (process.env.RUN_MIGRATIONS !== "false") await migrate(getDb(), { migrationsFolder: resolve(process.cwd(), "drizzle") });
-const server = app.listen(port, "0.0.0.0", () => console.log(`Healthfield API listening on ${port}`));
+const server = embedded ? null : app.listen(port, "0.0.0.0", () => console.log(`Healthfield API listening on ${port}`));
+/** The request handler, for a host process that owns the HTTP server. */
+export const handler = app;
 const paymentMaintenance = setInterval(() => void finalizeExpiredPaymentCancellations().catch((error) => console.error("Payment cancellation maintenance failed", error)), 30_000);
 paymentMaintenance.unref();
 const initialStkReconciliation = setTimeout(() => void reconcilePendingStkPayments().catch((error) => console.error("Initial STK reconciliation failed", error)), 15_000);
@@ -315,7 +321,8 @@ const dailyReport = setInterval(() => void runDailyReportIfDue().catch((error) =
 dailyReport.unref();
 
 let shuttingDown = false;
-async function shutdown(signal: string) {
+/** Stops the background work and closes the database and cache. The host calls this when embedded. */
+export async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   clearInterval(paymentMaintenance);
@@ -327,9 +334,9 @@ async function shutdown(signal: string) {
   console.log(`Healthfield API received ${signal}; closing server and database pool.`);
   const forceExit = setTimeout(() => process.exit(0), 5_000);
   forceExit.unref();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
   await closeDb();
   await closeSharedCache();
-  process.exit(0);
+  if (!embedded) process.exit(0);
 }
-for (const signal of ["SIGTERM", "SIGINT", "SIGUSR2"] as const) process.once(signal, () => void shutdown(signal));
+if (!embedded) for (const signal of ["SIGTERM", "SIGINT", "SIGUSR2"] as const) process.once(signal, () => void shutdown(signal));

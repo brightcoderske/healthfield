@@ -1,34 +1,30 @@
 #!/bin/bash
-# Deploys the whole system (storefront + API) from this checkout, in one run.
+# Deploys Healthfield: one app, one folder, one process.
 #
 #   cPanel "Deploy HEAD Commit" runs this through .cpanel.yml; it can also be run by hand:
 #   bash scripts/deploy.sh            deploy what is checked out now
 #   bash scripts/deploy.sh --pull     first fast-forward to origin/main, then deploy
 #
-# Where things live is worked out from where this script is, so the checkout can sit in any
-# folder of the cPanel account (for example ~/apps/arctik) without editing the script:
-#
-#   <root>/                 the Next.js storefront   (startup file: server.cjs)
-#   <root>/api-service/     the Express API          (startup file: server.cjs)
+# The storefront and the API are one Node app. The API is built into api-service/dist and is
+# started inside the storefront's own process by the root server.cjs, so there is a single
+# cPanel Node app, a single .env and a single restart. Where it lives is worked out from where
+# this script is, so the checkout can sit in any folder of the cPanel account (~/apps/arctik).
 #
 # Optional settings, all read from the environment:
 #   NODE_VERSION        Node selector version used to find the nodevenv (default 24)
-#   STOREFRONT_VENV     full path of a nodevenv "bin/activate" to use instead of the guessed one
-#   API_VENV            same, for the API (used only if the storefront one is not found)
+#   NODE_VENV           full path of the nodevenv "bin/activate" to use instead of the guessed one
 #   STORAGE_ROOT        persistent uploads/prescriptions (default ~/healthfield-storage)
-#   BUILD_MEMORY_MB     heap limit for the storefront build (default 2048)
+#   BUILD_MEMORY_MB     heap limit for the build (default 2048)
 #   INSTALL_DEPS=1      force a dependency install even if pnpm-lock.yaml is unchanged
-#   SKIP_STOREFRONT=1   deploy only the API
-#   SKIP_API=1          deploy only the storefront
 #
-# The order is chosen so that a failure leaves the running site as it was: both apps are
-# stopped, everything is built and checked, the database is migrated, and only then are the
-# new builds swapped in. A failed build puts the previous storefront build back.
+# The order is chosen so that a failure leaves the running site as it was: the app is stopped,
+# everything is built and checked, the database is migrated, and only then are the new builds
+# swapped in. A failed build or migration puts the previous storefront build back.
 set -Eeuo pipefail
 
 SCRIPT_DIRECTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "${SCRIPT_DIRECTORY}/.." && pwd)"
-STOREFRONT_ROOT="${REPOSITORY_ROOT}"
+APP_ROOT="${REPOSITORY_ROOT}"
 API_ROOT="${REPOSITORY_ROOT}/api-service"
 
 # --pull: bring the checkout up to date with main, then run the (possibly updated) script again.
@@ -42,40 +38,28 @@ ACCOUNT_HOME="${HOME:-$(cd ~ && pwd)}"
 NODE_VERSION="${NODE_VERSION:-24}"
 STORAGE_ROOT="${STORAGE_ROOT:-${ACCOUNT_HOME}/healthfield-storage}"
 BUILD_MEMORY_MB="${BUILD_MEMORY_MB:-2048}"
-SKIP_STOREFRONT="${SKIP_STOREFRONT:-0}"
-SKIP_API="${SKIP_API:-0}"
 
 RELEASE_STAGE="${API_ROOT}/.release.next"
 RELEASE_PREVIOUS="${API_ROOT}/.release.previous"
-STOREFRONT_BUILD="${STOREFRONT_ROOT}/.next"
-STOREFRONT_PREVIOUS="${STOREFRONT_ROOT}/.next.previous"
+STOREFRONT_BUILD="${APP_ROOT}/.next"
+STOREFRONT_PREVIOUS="${APP_ROOT}/.next.previous"
 DEPENDENCY_MARKER="${API_ROOT}/.pnpm-lock.sha256"
 
-# cPanel keeps each Node app's tools in ~/nodevenv/<app root relative to the home folder>/<version>.
+# cPanel keeps the app's tools in ~/nodevenv/<application root relative to the home folder>/<version>.
 RELATIVE_ROOT="${REPOSITORY_ROOT#"${ACCOUNT_HOME}"/}"
-STOREFRONT_VENV="${STOREFRONT_VENV:-${ACCOUNT_HOME}/nodevenv/${RELATIVE_ROOT}/${NODE_VERSION}/bin/activate}"
-API_VENV="${API_VENV:-${ACCOUNT_HOME}/nodevenv/${RELATIVE_ROOT}/api-service/${NODE_VERSION}/bin/activate}"
+NODE_VENV="${NODE_VENV:-${ACCOUNT_HOME}/nodevenv/${RELATIVE_ROOT}/${NODE_VERSION}/bin/activate}"
 
 fail() { echo "deploy: $*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- checks before touching anything
-if [[ "${SKIP_STOREFRONT}" == "1" && "${SKIP_API}" == "1" ]]; then fail "nothing to deploy (both SKIP_ flags are set)."; fi
-if [[ "${SKIP_API}" != "1" && ! -f "${API_ROOT}/.env" ]]; then
-  fail "missing ${API_ROOT}/.env. The server-managed API environment file must stay in place."
+if [[ ! -f "${APP_ROOT}/.env" ]]; then
+  fail "missing ${APP_ROOT}/.env. The server-managed environment file must stay in place."
 fi
-if [[ "${SKIP_STOREFRONT}" != "1" && ! -f "${STOREFRONT_ROOT}/.env" ]]; then
-  fail "missing ${STOREFRONT_ROOT}/.env. The server-managed storefront environment file must stay in place."
-fi
-
-ACTIVATE=""
-for candidate in "${STOREFRONT_VENV}" "${API_VENV}"; do
-  if [[ -f "${candidate}" ]]; then ACTIVATE="${candidate}"; break; fi
-done
-[[ -n "${ACTIVATE}" ]] || fail "no Node.js environment found. Looked for ${STOREFRONT_VENV} and ${API_VENV}. Create the Node.js app in cPanel first, or set STOREFRONT_VENV."
+[[ -f "${NODE_VENV}" ]] || fail "no Node.js environment found at ${NODE_VENV}. Create the Node.js app in cPanel first, or set NODE_VENV."
 
 set +u
 # shellcheck disable=SC1090
-source "${ACTIVATE}"
+source "${NODE_VENV}"
 set -u
 
 export NODE_ENV=production
@@ -107,9 +91,9 @@ fi
 DEPLOY_SHORT_COMMIT="${DEPLOY_COMMIT:0:7}"
 echo "Deploying ${DEPLOY_SHORT_COMMIT} from ${REPOSITORY_ROOT} at $(date -u +%Y-%m-%dT%H:%M:%SZ)."
 
-# ---------------------------------------------------------------- stop the apps
+# ---------------------------------------------------------------- stop the app
 # LiteSpeed sometimes leaves lsnode workers alive after an app is stopped. Only processes whose
-# working directory is exactly an app's own folder and that are Node processes are touched, so a
+# working directory is exactly the app's folder and that are Node processes are touched, so a
 # terminal someone left open in the folder is safe — and never this script or anything that
 # started it.
 PROTECTED_PIDS=" $$ "
@@ -155,8 +139,7 @@ stop_app() {
   echo "No ${label} workers remain."
 }
 
-[[ "${SKIP_API}" == "1" ]] || stop_app "API" "${API_ROOT}"
-[[ "${SKIP_STOREFRONT}" == "1" ]] || stop_app "storefront" "${STOREFRONT_ROOT}"
+stop_app "Healthfield" "${APP_ROOT}"
 
 cd "${REPOSITORY_ROOT}"
 
@@ -177,20 +160,18 @@ else
 fi
 
 # ---------------------------------------------------------------- build everything first
-if [[ "${SKIP_API}" != "1" ]]; then
-  rm -rf "${RELEASE_STAGE}"
-  mkdir -p "${RELEASE_STAGE}"
+rm -rf "${RELEASE_STAGE}"
+mkdir -p "${RELEASE_STAGE}"
 
-  echo "Type-checking the API..."
-  "${PNPM_COMMAND[@]}" run check:api
+echo "Type-checking the API..."
+"${PNPM_COMMAND[@]}" run check:api
 
-  echo "Building the API into an isolated release stage..."
-  HEALTHFIELD_API_OUTPUT="${RELEASE_STAGE}/dist" \
-  HEALTHFIELD_API_DRIZZLE_OUTPUT="${RELEASE_STAGE}/drizzle" \
-  node scripts/build-api.mjs
-  test -s "${RELEASE_STAGE}/dist/server.mjs"
-  test -d "${RELEASE_STAGE}/drizzle"
-fi
+echo "Building the API into an isolated release stage..."
+HEALTHFIELD_API_OUTPUT="${RELEASE_STAGE}/dist" \
+HEALTHFIELD_API_DRIZZLE_OUTPUT="${RELEASE_STAGE}/drizzle" \
+node scripts/build-api.mjs
+test -s "${RELEASE_STAGE}/dist/server.mjs"
+test -d "${RELEASE_STAGE}/drizzle"
 
 STOREFRONT_REPLACED=0
 restore_storefront() {
@@ -211,20 +192,16 @@ on_exit() {
 }
 trap on_exit EXIT
 
-if [[ "${SKIP_STOREFRONT}" != "1" ]]; then
-  echo "Building the storefront (heap limit ${BUILD_MEMORY_MB} MB)..."
-  rm -rf "${STOREFRONT_PREVIOUS}"
-  if [[ -d "${STOREFRONT_BUILD}" ]]; then mv "${STOREFRONT_BUILD}" "${STOREFRONT_PREVIOUS}"; fi
-  STOREFRONT_REPLACED=1
-  NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB}" "${PNPM_COMMAND[@]}" run build
-  test -s "${STOREFRONT_BUILD}/BUILD_ID"
-fi
+echo "Building the storefront (heap limit ${BUILD_MEMORY_MB} MB)..."
+rm -rf "${STOREFRONT_PREVIOUS}"
+if [[ -d "${STOREFRONT_BUILD}" ]]; then mv "${STOREFRONT_BUILD}" "${STOREFRONT_PREVIOUS}"; fi
+STOREFRONT_REPLACED=1
+NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB}" "${PNPM_COMMAND[@]}" run build
+test -s "${STOREFRONT_BUILD}/BUILD_ID"
 
 # ---------------------------------------------------------------- database
-if [[ "${SKIP_API}" != "1" ]]; then
-  echo "Applying database migrations before the runtime swap..."
-  node scripts/migrate-api.mjs
-fi
+echo "Applying database migrations before the runtime swap..."
+node scripts/migrate-api.mjs
 
 # ---------------------------------------------------------------- swap in the new builds
 COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -232,34 +209,28 @@ build_record() {
   printf '{"commit":"%s","builtAt":"%s","buildMode":"cpanel-source"}\n' "${DEPLOY_COMMIT}" "${COMPLETED_AT}"
 }
 
-if [[ "${SKIP_API}" != "1" ]]; then
-  rm -rf "${RELEASE_PREVIOUS}"
-  mkdir -p "${RELEASE_PREVIOUS}"
-  if [[ -d "${API_ROOT}/dist" ]]; then mv "${API_ROOT}/dist" "${RELEASE_PREVIOUS}/dist"; fi
-  if [[ -d "${API_ROOT}/drizzle" ]]; then mv "${API_ROOT}/drizzle" "${RELEASE_PREVIOUS}/drizzle"; fi
-  mv "${RELEASE_STAGE}/dist" "${API_ROOT}/dist"
-  mv "${RELEASE_STAGE}/drizzle" "${API_ROOT}/drizzle"
-  build_record > "${API_ROOT}/.healthfield-build.json"
-fi
-if [[ "${SKIP_STOREFRONT}" != "1" ]]; then
-  build_record > "${STOREFRONT_ROOT}/.healthfield-build.json"
-  STOREFRONT_REPLACED=0
-fi
+rm -rf "${RELEASE_PREVIOUS}"
+mkdir -p "${RELEASE_PREVIOUS}"
+if [[ -d "${API_ROOT}/dist" ]]; then mv "${API_ROOT}/dist" "${RELEASE_PREVIOUS}/dist"; fi
+if [[ -d "${API_ROOT}/drizzle" ]]; then mv "${API_ROOT}/drizzle" "${RELEASE_PREVIOUS}/drizzle"; fi
+mv "${RELEASE_STAGE}/dist" "${API_ROOT}/dist"
+mv "${RELEASE_STAGE}/drizzle" "${API_ROOT}/drizzle"
+# The API reads this from the app's folder (/health reports it).
+build_record > "${APP_ROOT}/.healthfield-build.json"
+STOREFRONT_REPLACED=0
 
 # ---------------------------------------------------------------- persistent files
-mkdir -p "${STORAGE_ROOT}/uploads/products" "${STORAGE_ROOT}/prescriptions" "${API_ROOT}/tmp" "${STOREFRONT_ROOT}/tmp"
+mkdir -p "${STORAGE_ROOT}/uploads/products" "${STORAGE_ROOT}/prescriptions" "${APP_ROOT}/tmp"
 chmod 750 "${STORAGE_ROOT}" "${STORAGE_ROOT}/uploads" "${STORAGE_ROOT}/uploads/products" "${STORAGE_ROOT}/prescriptions"
-if [[ -d "${STOREFRONT_ROOT}/public/uploads/products" ]]; then
-  cp -an "${STOREFRONT_ROOT}/public/uploads/products/." "${STORAGE_ROOT}/uploads/products/"
+if [[ -d "${APP_ROOT}/public/uploads/products" ]]; then
+  cp -an "${APP_ROOT}/public/uploads/products/." "${STORAGE_ROOT}/uploads/products/"
 fi
 
-# ---------------------------------------------------------------- ask Passenger to start them again
+# ---------------------------------------------------------------- ask Passenger to start it again
 # Touching tmp/restart.txt is the supported way to make a cPanel Node app restart; it is harmless
 # if the app is not registered yet.
-[[ "${SKIP_API}" == "1" ]] || touch "${API_ROOT}/tmp/restart.txt"
-[[ "${SKIP_STOREFRONT}" == "1" ]] || touch "${STOREFRONT_ROOT}/tmp/restart.txt"
+touch "${APP_ROOT}/tmp/restart.txt"
 
 echo "Deployed ${DEPLOY_SHORT_COMMIT} at ${COMPLETED_AT}."
-[[ "${SKIP_API}" == "1" ]] || echo "  API:        ${API_ROOT} (previous release kept in ${RELEASE_PREVIOUS})"
-[[ "${SKIP_STOREFRONT}" == "1" ]] || echo "  Storefront: ${STOREFRONT_ROOT} (previous build kept in ${STOREFRONT_PREVIOUS})"
-echo "If either app does not come back by itself, start it from cPanel > Setup Node.js App, then check /health on the API."
+echo "  App: ${APP_ROOT} (previous API release in ${RELEASE_PREVIOUS}, previous storefront build in ${STOREFRONT_PREVIOUS})"
+echo "If the app does not come back by itself, start it from cPanel > Setup Node.js App, then check /health."
