@@ -1,3 +1,10 @@
+// The hosting account counts every thread against its process limit, and native libraries size their
+// pools by the host's CPU count (one Rust runtime started 64 workers on this server). These are set
+// before anything that uses them is loaded; a value already present in the environment wins.
+for (const [name, value] of Object.entries({ TOKIO_WORKER_THREADS: "1", RAYON_NUM_THREADS: "1", UV_THREADPOOL_SIZE: "2", VIPS_CONCURRENCY: "1" })) {
+  if (!process.env[name]) process.env[name] = value;
+}
+
 const http = require("http");
 const net = require("net");
 const next = require("next");

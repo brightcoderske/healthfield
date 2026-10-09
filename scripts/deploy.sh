@@ -145,6 +145,9 @@ stop_app() {
 }
 
 stop_app "Healthfield" "${APP_ROOT}"
+# The retired API-only app can leave a worker behind after it is stopped in cPanel. It runs old code
+# and its own copy of the scheduled jobs, and it uses up the account's process allowance.
+stop_app "legacy API" "${API_ROOT}"
 
 cd "${REPOSITORY_ROOT}"
 
