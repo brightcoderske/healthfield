@@ -295,27 +295,45 @@ app.all("/{*path}", async (nodeRequest, nodeResponse) => {
   }
 });
 
+// The API can run on its own (its own port) or inside the storefront's process, which is how
+// the single-app deployment runs it: the root server.cjs sets HEALTHFIELD_EMBEDDED, imports
+// this bundle, and hands it the requests for /v1, /health and /uploads/products.
+const embedded = process.env.HEALTHFIELD_EMBEDDED === "1";
 const port = Number(process.env.PORT || 3001);
 if (process.env.RUN_MIGRATIONS !== "false") await migrate(getDb(), { migrationsFolder: resolve(process.cwd(), "drizzle") });
-const server = app.listen(port, "0.0.0.0", () => console.log(`Healthfield API listening on ${port}`));
-const paymentMaintenance = setInterval(() => void finalizeExpiredPaymentCancellations().catch((error) => console.error("Payment cancellation maintenance failed", error)), 30_000);
-paymentMaintenance.unref();
-const initialStkReconciliation = setTimeout(() => void reconcilePendingStkPayments().catch((error) => console.error("Initial STK reconciliation failed", error)), 15_000);
-initialStkReconciliation.unref();
-const stkReconciliation = setInterval(() => void reconcilePendingStkPayments().catch((error) => console.error("Scheduled STK reconciliation failed", error)), 30_000);
-stkReconciliation.unref();
-const initialPaymentRecovery = setTimeout(() => void recoverMissedMpesaPayments(null, 2).catch((error) => console.error("Initial M-Pesa Pull recovery failed", error)), 60_000);
-initialPaymentRecovery.unref();
-const paymentRecovery = setInterval(() => void recoverMissedMpesaPayments(null, 2).catch((error) => console.error("Scheduled M-Pesa Pull recovery failed", error)), 15 * 60_000);
-paymentRecovery.unref();
+const server = embedded ? null : app.listen(port, "0.0.0.0", () => console.log(`Healthfield API listening on ${port}`));
+/** The request handler, for a host process that owns the HTTP server. */
+export const handler = app;
+// BACKGROUND_JOBS=false keeps this process from running the scheduled work below (payment
+// reconciliation, M-Pesa recovery, the daily report). It exists so a second copy of the app can be
+// tested against the live database without every job running twice.
+const backgroundJobs = process.env.BACKGROUND_JOBS !== "false";
+const every = (milliseconds: number, label: string, job: () => Promise<unknown>) => {
+  if (!backgroundJobs) return undefined;
+  const timer = setInterval(() => void job().catch((error) => console.error(label, error)), milliseconds);
+  timer.unref();
+  return timer;
+};
+const after = (milliseconds: number, label: string, job: () => Promise<unknown>) => {
+  if (!backgroundJobs) return undefined;
+  const timer = setTimeout(() => void job().catch((error) => console.error(label, error)), milliseconds);
+  timer.unref();
+  return timer;
+};
+if (!backgroundJobs) console.log("Background jobs are off (BACKGROUND_JOBS=false).");
+const paymentMaintenance = every(30_000, "Payment cancellation maintenance failed", finalizeExpiredPaymentCancellations);
+const initialStkReconciliation = after(15_000, "Initial STK reconciliation failed", reconcilePendingStkPayments);
+const stkReconciliation = every(30_000, "Scheduled STK reconciliation failed", reconcilePendingStkPayments);
+const initialPaymentRecovery = after(60_000, "Initial M-Pesa Pull recovery failed", () => recoverMissedMpesaPayments(null, 2));
+const paymentRecovery = every(15 * 60_000, "Scheduled M-Pesa Pull recovery failed", () => recoverMissedMpesaPayments(null, 2));
 // The end-of-day note. Checked every twenty minutes rather than scheduled for eleven:
 // Passenger idles this process out, so the report is sent by whichever tick first finds
 // the trading day past 23:00, and the activity-log guard keeps it to one a day.
-const dailyReport = setInterval(() => void runDailyReportIfDue().catch((error) => console.error("Daily sales report failed", error)), 20 * 60_000);
-dailyReport.unref();
+const dailyReport = every(20 * 60_000, "Daily sales report failed", runDailyReportIfDue);
 
 let shuttingDown = false;
-async function shutdown(signal: string) {
+/** Stops the background work and closes the database and cache. The host calls this when embedded. */
+export async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   clearInterval(paymentMaintenance);
@@ -327,9 +345,9 @@ async function shutdown(signal: string) {
   console.log(`Healthfield API received ${signal}; closing server and database pool.`);
   const forceExit = setTimeout(() => process.exit(0), 5_000);
   forceExit.unref();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
   await closeDb();
   await closeSharedCache();
-  process.exit(0);
+  if (!embedded) process.exit(0);
 }
-for (const signal of ["SIGTERM", "SIGINT", "SIGUSR2"] as const) process.once(signal, () => void shutdown(signal));
+if (!embedded) for (const signal of ["SIGTERM", "SIGINT", "SIGUSR2"] as const) process.once(signal, () => void shutdown(signal));

@@ -13,7 +13,7 @@ const applicationRoot = resolve(repositoryRoot, "api-service");
 // developer machine and on the server without a shell-specific env prefix.
 const candidates = process.env.API_ENV_FILE
   ? [resolve(repositoryRoot, process.env.API_ENV_FILE)]
-  : [resolve(applicationRoot, ".env"), resolve(repositoryRoot, ".env.local")];
+  : [resolve(repositoryRoot, ".env"), resolve(applicationRoot, ".env"), resolve(repositoryRoot, ".env.local")];
 const environmentFile = candidates.find((candidate) => existsSync(candidate));
 
 if (!environmentFile) {
