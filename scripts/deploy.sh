@@ -207,7 +207,15 @@ BUILD_CACHE="${APP_ROOT}/.build-cache"
 if [[ "${FRESH_BUILD:-0}" == "1" ]]; then rm -rf "${BUILD_CACHE}"; fi
 mkdir -p "${BUILD_CACHE}" "${STOREFRONT_BUILD}"
 ln -sfn "${BUILD_CACHE}" "${STOREFRONT_BUILD}/cache"
-LOW_RESOURCE_BUILD=1 RAYON_NUM_THREADS=1 UV_THREADPOOL_SIZE=2 NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB}" "${PNPM_COMMAND[@]}" run build
+# The account sometimes refuses to start a worker for a moment (EAGAIN) when other processes are busy.
+# That passes on its own, so the build is tried up to three times before the deploy is given up.
+BUILD_ATTEMPT=1
+until LOW_RESOURCE_BUILD=1 RAYON_NUM_THREADS=1 UV_THREADPOOL_SIZE=2 NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB}" "${PNPM_COMMAND[@]}" run build; do
+  if (( BUILD_ATTEMPT >= 3 )); then echo "deploy: the storefront build failed ${BUILD_ATTEMPT} times." >&2; exit 1; fi
+  BUILD_ATTEMPT=$((BUILD_ATTEMPT + 1))
+  echo "deploy: the storefront build failed (often a momentary process limit); trying again in 20 seconds (attempt ${BUILD_ATTEMPT} of 3)..." >&2
+  sleep 20
+done
 test -s "${STOREFRONT_BUILD}/BUILD_ID"
 
 # ---------------------------------------------------------------- database
