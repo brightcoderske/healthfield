@@ -62,9 +62,7 @@ tsconfig.tsbuildinfo
 /outputs/
 /work/
 /tmp/
-/deploy/*
-!/deploy/healthfield-next-production.tar.gz
-!/deploy/healthfield-api-production.tar.gz
+/deploy/
 /api-service/dist/
 /api-service/drizzle/
 /api-service/.release.next/
