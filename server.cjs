@@ -1,4 +1,5 @@
 const http = require("http");
+const net = require("net");
 const next = require("next");
 const fs = require("fs");
 const path = require("path");
@@ -78,21 +79,21 @@ async function start() {
   });
 
   if (api) {
-    // Started after the public listener so a hosting layer that takes over the first listen
-    // call (Passenger) takes over the right one.
+    // The storefront's own calls to the API need an address. The host (Passenger) allows one
+    // http.Server.listen() per app and silently ignores the next one, so a second http server
+    // would never start. A plain net server is not touched by that: it accepts the loopback
+    // connections and hands each one to an http server that is never asked to listen itself.
     const internal = http.createServer(api.handler);
-    await new Promise((resolve, reject) => {
-      internal.once("error", reject);
-      internal.listen(0, "127.0.0.1", resolve);
+    const loopback = net.createServer((socket) => internal.emit("connection", socket));
+    const loopbackPort = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), 3000);
+      loopback.once("error", () => { clearTimeout(timer); resolve(null); });
+      loopback.listen(0, "127.0.0.1", () => { clearTimeout(timer); resolve(loopback.address().port); });
     });
-    // How the storefront reaches the API. API_INTERNAL_URL wins if set. Otherwise the loopback
-    // listener, if the host really gave it a port; some hosts take over listen() and then there
-    // is nothing at that address, so fall back to the site's own public address, which routes
-    // /v1 to the API the same way for everyone.
-    const address = internal.address();
-    const loopback = address && typeof address === "object" && address.port ? `http://127.0.0.1:${address.port}` : null;
+    // API_INTERNAL_URL wins if set; otherwise the loopback port; otherwise (a host that blocks
+    // that too) the site's own public address, which routes /v1 to the API for everyone.
     const publicSelf = (process.env.APP_URL || process.env.API_PUBLIC_URL || "").replace(/\/$/, "");
-    process.env.API_BASE_URL = (process.env.API_INTERNAL_URL || loopback || publicSelf).replace(/\/$/, "");
+    process.env.API_BASE_URL = (process.env.API_INTERNAL_URL || (loopbackPort ? `http://127.0.0.1:${loopbackPort}` : publicSelf)).replace(/\/$/, "");
     console.log(`Storefront reaches the embedded API at ${process.env.API_BASE_URL}`);
     // A self-test, so the log says at once whether the storefront can really reach the API.
     fetch(`${process.env.API_BASE_URL}/health`).then(
@@ -108,7 +109,7 @@ async function start() {
       const force = setTimeout(() => process.exit(0), 8000);
       force.unref();
       server.close();
-      internal.close();
+      loopback.close();
       api.shutdown(signal).finally(() => process.exit(0));
     };
     for (const signal of ["SIGTERM", "SIGINT", "SIGUSR2"]) process.once(signal, () => stop(signal));
