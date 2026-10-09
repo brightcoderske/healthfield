@@ -1,4 +1,4 @@
 ---
 deployment:
   tasks:
-    - /bin/bash /home/healthfi/health_field/scripts/deploy-api-git-cpanel.sh
+    - /bin/bash /home/healthfi/apps/arctik/scripts/deploy.sh
