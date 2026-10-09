@@ -8,8 +8,8 @@ calls to the API go to a loopback-only listener inside the same process, so ther
 app, port or hostname to manage. A single script, `scripts/deploy.sh`, builds and releases it.
 
 ```text
-~/apps/arctik/               git clone of main; the one app (startup file: server.cjs)
-~/apps/arctik/.env           the one environment file (kept out of Git)
+~/apps/healthfield/               git clone of main; the one app (startup file: server.cjs)
+~/apps/healthfield/.env           the one environment file (kept out of Git)
 ~/healthfield-storage/       uploads and prescriptions, outside the app (never deployed over)
 ```
 
@@ -18,12 +18,12 @@ anything. Only `.cpanel.yml` names the path.
 
 ## One-time setup
 
-1. **Clone** `main` into `~/apps/arctik` (cPanel **Git Version Control**, or `git clone`).
+1. **Clone** `main` into `~/apps/healthfield` (cPanel **Git Version Control**, or `git clone`).
 2. **Create one app** in cPanel **Setup Node.js App**: Node 24, Production, application root
-   `apps/arctik`, startup file `server.cjs`, application URL the site's own domain.
-   `deploy.sh` finds the app's tools in `~/nodevenv/apps/arctik/24`; if cPanel shows another path,
+   `apps/healthfield`, startup file `server.cjs`, application URL the site's own domain.
+   `deploy.sh` finds the app's tools in `~/nodevenv/apps/healthfield/24`; if cPanel shows another path,
    run it with `NODE_VENV=/path/to/bin/activate`.
-3. **Create `~/apps/arctik/.env`** from `api-service/.env.example`. It holds the API's settings
+3. **Create `~/apps/healthfield/.env`** from `api-service/.env.example`. It holds the API's settings
    (database, SMTP, M-Pesa, Redis, `AUTH_SECRET`, ...) and the storefront's. Git ignores it and
    deploys never touch it. Besides the API settings, set:
 
@@ -53,8 +53,8 @@ To run the storefront alone against an API hosted elsewhere, set `EMBED_API=fals
 From a terminal in the account:
 
 ```bash
-bash ~/apps/arctik/scripts/deploy.sh --pull   # fetch main, then deploy
-bash ~/apps/arctik/scripts/deploy.sh          # deploy what is already checked out
+bash ~/apps/healthfield/scripts/deploy.sh --pull   # fetch main, then deploy
+bash ~/apps/healthfield/scripts/deploy.sh          # deploy what is already checked out
 ```
 
 From cPanel: **Git Version Control > Update from Remote**, then **Deploy HEAD Commit**. That runs

@@ -1,4 +1,4 @@
 ---
 deployment:
   tasks:
-    - /bin/bash /home/healthfi/apps/arctik/scripts/deploy.sh
+    - /bin/bash /home/healthfi/apps/healthfield/scripts/deploy.sh

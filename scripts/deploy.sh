@@ -8,7 +8,7 @@
 # The storefront and the API are one Node app. The API is built into api-service/dist and is
 # started inside the storefront's own process by the root server.cjs, so there is a single
 # cPanel Node app, a single .env and a single restart. Where it lives is worked out from where
-# this script is, so the checkout can sit in any folder of the cPanel account (~/apps/arctik).
+# this script is, so the checkout can sit in any folder of the cPanel account (~/apps/healthfield).
 #
 # Optional settings, all read from the environment:
 #   NODE_VERSION        Node selector version used to find the nodevenv (default 24)
