@@ -2,8 +2,8 @@
 # Deploys Healthfield: one app, one folder, one process.
 #
 #   cPanel "Deploy HEAD Commit" runs this through .cpanel.yml; it can also be run by hand:
-#   bash scripts/deploy.sh            deploy what is checked out now
-#   bash scripts/deploy.sh --pull     first fast-forward to origin/main, then deploy
+#   bash scripts/deploy.sh             first fast-forward to origin/main, then deploy
+#   bash scripts/deploy.sh --no-pull   deploy exactly what is checked out now
 #
 # The storefront and the API are one Node app. The API is built into api-service/dist and is
 # started inside the storefront's own process by the root server.cjs, so there is a single
@@ -27,10 +27,15 @@ REPOSITORY_ROOT="$(cd "${SCRIPT_DIRECTORY}/.." && pwd)"
 APP_ROOT="${REPOSITORY_ROOT}"
 API_ROOT="${REPOSITORY_ROOT}/api-service"
 
-# --pull: bring the checkout up to date with main, then run the (possibly updated) script again.
-if [[ "${1:-}" == "--pull" && "${DEPLOY_ALREADY_PULLED:-0}" != "1" ]]; then
-  git -C "${REPOSITORY_ROOT}" fetch origin main
-  git -C "${REPOSITORY_ROOT}" merge --ff-only origin/main
+# Bring the checkout up to date with main first, then run the (possibly updated) script again.
+# If GitHub cannot be reached, deploy what is checked out; if the checkout cannot fast-forward
+# (local changes or a diverged branch), stop rather than deploy something unexpected.
+if [[ "${1:-}" != "--no-pull" && "${DEPLOY_ALREADY_PULLED:-0}" != "1" ]]; then
+  if git -C "${REPOSITORY_ROOT}" fetch origin main; then
+    git -C "${REPOSITORY_ROOT}" merge --ff-only origin/main || { echo "deploy: the checkout cannot fast-forward to origin/main; resolve it by hand or use --no-pull." >&2; exit 1; }
+  else
+    echo "deploy: could not fetch origin/main; deploying what is checked out." >&2
+  fi
   DEPLOY_ALREADY_PULLED=1 exec bash "${SCRIPT_DIRECTORY}/deploy.sh"
 fi
 

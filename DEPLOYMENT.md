@@ -66,8 +66,8 @@ Safaricom, then retire it.
 From a terminal in the account:
 
 ```bash
-bash ~/health_field/scripts/deploy.sh --pull   # fetch main, then deploy
-bash ~/health_field/scripts/deploy.sh          # deploy what is already checked out
+bash ~/health_field/scripts/deploy.sh             # fetch main, then deploy
+bash ~/health_field/scripts/deploy.sh --no-pull   # deploy what is already checked out
 ```
 
 From cPanel: **Git Version Control > Update from Remote**, then **Deploy HEAD Commit**. That runs
