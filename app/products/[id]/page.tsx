@@ -188,7 +188,7 @@ export default async function ProductPage({
   );
   const [data, home, session] = await Promise.all([
     dataFor(id),
-    backendPublicJson<{ contact: PublicContact }>("/v1/views/home", 30).catch(
+    backendPublicJson<{ contact: PublicContact }>("/v1/views/contact", 60).catch(
       () => null,
     ),
     getSession(),

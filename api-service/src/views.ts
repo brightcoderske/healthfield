@@ -300,6 +300,45 @@ const HOME_CATALOGUE_DRAW = 90;
 const HOME_DRAW_HOURS = 3;
 const homeDrawSeed = () => Math.floor(Date.now() / (HOME_DRAW_HOURS * 60 * 60 * 1000));
 
+/**
+ * The pharmacy's public contact details: what the footer, the contact page and receipts show.
+ * One place builds it, for the home view and for the small contact view that pages needing
+ * only the footer use instead of downloading the whole catalogue.
+ */
+function publicContact(settings: typeof siteSettings.$inferSelect | undefined) {
+  return settings
+    ? {
+        phone: settings.phone ?? "",
+        whatsapp: settings.whatsapp ?? "",
+        supportEmail: settings.supportEmail ?? "",
+        address: settings.address ?? "",
+        openingHours: settings.openingHours ?? "",
+        deliveryMessage: settings.deliveryMessage,
+        facebookUrl: settings.facebookUrl ?? "",
+        instagramUrl: settings.instagramUrl ?? "",
+        xUrl: settings.xUrl ?? "",
+        tiktokUrl: settings.tiktokUrl ?? "",
+        licenceTitle: settings.licenceTitle ?? "",
+        licenceNumber: settings.licenceNumber ?? "",
+        licenceImageUrl: publicImageUrl(settings.licenceImageUrl),
+      }
+    : {
+        phone: "",
+        whatsapp: "",
+        supportEmail: "",
+        address: "",
+        openingHours: "",
+        deliveryMessage: "Fast Delivery Across Kenya",
+        facebookUrl: "",
+        instagramUrl: "",
+        xUrl: "",
+        tiktokUrl: "",
+        licenceTitle: "",
+        licenceNumber: "",
+        licenceImageUrl: null,
+      };
+}
+
 async function home() {
   const db = getDb();
   const [
@@ -433,38 +472,7 @@ async function home() {
         .map((mapping) => mapping.conditionId),
     };
   });
-  const settings = settingsRows[0];
-  const contact = settings
-    ? {
-        phone: settings.phone ?? "",
-        whatsapp: settings.whatsapp ?? "",
-        supportEmail: settings.supportEmail ?? "",
-        address: settings.address ?? "",
-        openingHours: settings.openingHours ?? "",
-        deliveryMessage: settings.deliveryMessage,
-        facebookUrl: settings.facebookUrl ?? "",
-        instagramUrl: settings.instagramUrl ?? "",
-        xUrl: settings.xUrl ?? "",
-        tiktokUrl: settings.tiktokUrl ?? "",
-        licenceTitle: settings.licenceTitle ?? "",
-        licenceNumber: settings.licenceNumber ?? "",
-        licenceImageUrl: publicImageUrl(settings.licenceImageUrl),
-      }
-    : {
-        phone: "",
-        whatsapp: "",
-        supportEmail: "",
-        address: "",
-        openingHours: "",
-        deliveryMessage: "Fast Delivery Across Kenya",
-        facebookUrl: "",
-        instagramUrl: "",
-        xUrl: "",
-        tiktokUrl: "",
-        licenceTitle: "",
-        licenceNumber: "",
-        licenceImageUrl: null,
-      };
+  const contact = publicContact(settingsRows[0]);
   return {
     offers: live.map(offerPayload),
     catalog,
@@ -1006,6 +1014,10 @@ export async function handleView(request: Request, path: string) {
     return json(await home(), {
       headers: { "Cache-Control": "public, max-age=30" },
     });
+  if (path === "contact") {
+    const [settings] = await getDb().select().from(siteSettings).limit(1);
+    return json({ contact: publicContact(settings) }, { headers: { "Cache-Control": "public, max-age=60" } });
+  }
   if (path === "locations") {
     const stores = await getDb()
       .select({

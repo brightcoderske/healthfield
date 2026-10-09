@@ -4,7 +4,7 @@ import { MemoryBackend, SharedCache } from "./cache.ts";
 import { changesCatalogue, changesCounts, changesSessions, publicViewTtlSeconds, serveCachedView, viewCacheKey } from "./catalogue-cache.ts";
 
 test("only the public pages are cached; anything tied to a person never is", () => {
-  for (const view of ["home", "browse", "search", "products/12", "blogs", "blogs/a-slug", "locations", "conditions", "sitemap", "merchant"]) {
+  for (const view of ["home", "browse", "search", "products/12", "blogs", "blogs/a-slug", "locations", "conditions", "contact", "sitemap", "merchant"]) {
     assert.ok(publicViewTtlSeconds(view) > 0, `${view} should be cached`);
   }
   for (const view of ["account", "account/orders/5", "account/payable-prescriptions", "checkout", "consultations", "admin/settings", "admin/orders", "staff/orders", "staff/dashboard", "walk-in-sale", "catalogue", "products/12/reviews", "unknown"]) {

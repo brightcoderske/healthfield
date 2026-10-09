@@ -62,7 +62,7 @@ export default async function Article({ params }: { params: Promise<{ slug: stri
   // The site footer needs contact details; a failure there must not lose the article.
   const [data, home, session] = await Promise.all([
     get(slug),
-    backendPublicJson<{ contact: PublicContact }>("/v1/views/home", 60).catch(() => null),
+    backendPublicJson<{ contact: PublicContact }>("/v1/views/contact", 60).catch(() => null),
     getSession().catch(() => null),
   ]);
   if (!data) notFound();

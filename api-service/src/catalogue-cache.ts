@@ -19,7 +19,7 @@ export function publicViewTtlSeconds(view: string): number {
   if (view === "home" || view === "browse" || view === "search") return 60;
   if (/^products\/\d+$/.test(view)) return 60;
   if (view === "blogs" || /^blogs\/[^/]+$/.test(view)) return 120;
-  if (view === "locations" || view === "conditions") return 300;
+  if (view === "locations" || view === "conditions" || view === "contact") return 300;
   if (view === "sitemap" || view === "merchant") return 300;
   return 0;
 }

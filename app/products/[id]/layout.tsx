@@ -1,10 +1,12 @@
-import { backendJson } from "@/lib/backend-api";
+import { backendPublicJson } from "@/lib/backend-api";
 import { richTextToPlainText } from "@/lib/rich-text-content";
 
 export default async function ProductLayout({ children, params }: { children: React.ReactNode; params: Promise<{ id: string }> }) {
   const id = Number((await params).id);
   let data: { product: { id: number; name: string; description: string | null; shortDescription: string | null; imageUrl: string | null; sku: string; barcode: string | null; brand: string | null; price: string; discountPrice: string | null; prescriptionRequired?: boolean; searchOnly?: boolean }; rating: number | null; reviewCount: number } | null = null;
-  try { data = await backendJson(`/v1/views/products/${id}`); } catch {}
+  // The same request, with the same caching and tag, as the page below makes, so Next answers
+  // both from one fetch. This used to be an uncached request of its own: two API calls per view.
+  try { data = await backendPublicJson(`/v1/views/products/${id}`, 60, [`product:${id}`]); } catch {}
   if (!data) return children;
   const { product, rating, reviewCount } = data;
   // Structured data is what search engines turn into product listings, so a medicine that
