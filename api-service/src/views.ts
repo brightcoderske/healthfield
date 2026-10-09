@@ -66,6 +66,7 @@ import {
   requireTeamPermission,
   sessionHasPermission,
 } from "./staff-permissions";
+import { getSharedCache } from "./redis";
 import { parseNotificationPreferences } from "../../lib/notification-events";
 import { parseVatRate, vatOnNet } from "../../lib/vat";
 import { searchPhrase } from "../../lib/search-rank";
@@ -299,6 +300,45 @@ const HOME_CATALOGUE_DRAW = 90;
 const HOME_DRAW_HOURS = 3;
 const homeDrawSeed = () => Math.floor(Date.now() / (HOME_DRAW_HOURS * 60 * 60 * 1000));
 
+/**
+ * The pharmacy's public contact details: what the footer, the contact page and receipts show.
+ * One place builds it, for the home view and for the small contact view that pages needing
+ * only the footer use instead of downloading the whole catalogue.
+ */
+function publicContact(settings: typeof siteSettings.$inferSelect | undefined) {
+  return settings
+    ? {
+        phone: settings.phone ?? "",
+        whatsapp: settings.whatsapp ?? "",
+        supportEmail: settings.supportEmail ?? "",
+        address: settings.address ?? "",
+        openingHours: settings.openingHours ?? "",
+        deliveryMessage: settings.deliveryMessage,
+        facebookUrl: settings.facebookUrl ?? "",
+        instagramUrl: settings.instagramUrl ?? "",
+        xUrl: settings.xUrl ?? "",
+        tiktokUrl: settings.tiktokUrl ?? "",
+        licenceTitle: settings.licenceTitle ?? "",
+        licenceNumber: settings.licenceNumber ?? "",
+        licenceImageUrl: publicImageUrl(settings.licenceImageUrl),
+      }
+    : {
+        phone: "",
+        whatsapp: "",
+        supportEmail: "",
+        address: "",
+        openingHours: "",
+        deliveryMessage: "Fast Delivery Across Kenya",
+        facebookUrl: "",
+        instagramUrl: "",
+        xUrl: "",
+        tiktokUrl: "",
+        licenceTitle: "",
+        licenceNumber: "",
+        licenceImageUrl: null,
+      };
+}
+
 async function home() {
   const db = getDb();
   const [
@@ -432,38 +472,7 @@ async function home() {
         .map((mapping) => mapping.conditionId),
     };
   });
-  const settings = settingsRows[0];
-  const contact = settings
-    ? {
-        phone: settings.phone ?? "",
-        whatsapp: settings.whatsapp ?? "",
-        supportEmail: settings.supportEmail ?? "",
-        address: settings.address ?? "",
-        openingHours: settings.openingHours ?? "",
-        deliveryMessage: settings.deliveryMessage,
-        facebookUrl: settings.facebookUrl ?? "",
-        instagramUrl: settings.instagramUrl ?? "",
-        xUrl: settings.xUrl ?? "",
-        tiktokUrl: settings.tiktokUrl ?? "",
-        licenceTitle: settings.licenceTitle ?? "",
-        licenceNumber: settings.licenceNumber ?? "",
-        licenceImageUrl: publicImageUrl(settings.licenceImageUrl),
-      }
-    : {
-        phone: "",
-        whatsapp: "",
-        supportEmail: "",
-        address: "",
-        openingHours: "",
-        deliveryMessage: "Fast Delivery Across Kenya",
-        facebookUrl: "",
-        instagramUrl: "",
-        xUrl: "",
-        tiktokUrl: "",
-        licenceTitle: "",
-        licenceNumber: "",
-        licenceImageUrl: null,
-      };
+  const contact = publicContact(settingsRows[0]);
   return {
     offers: live.map(offerPayload),
     catalog,
@@ -983,6 +992,21 @@ async function cardDetails<
     }));
 }
 
+/**
+ * The counts behind the admin and staff badges, remembered for a few seconds.
+ *
+ * Every open admin screen asks for them every few seconds, and they are the same numbers for
+ * everyone who may see them. They are cleared the moment anything that changes them happens
+ * (an order, a prescription, a consultation, a chat or a payment), so a new order still rings
+ * the alert at once; the ten seconds only bounds how stale they can get if something slips by.
+ */
+async function cachedCounts<T>(key: string, build: () => Promise<T>): Promise<T> {
+  const cache = getSharedCache();
+  if (cache.status === "disabled") return build();
+  const version = await cache.version("counts");
+  return (await cache.remember(`counts:${version}:${key}`, 10, build)).value;
+}
+
 export async function handleView(request: Request, path: string) {
   const url = new URL(request.url);
   if (path === "walk-in-sale") return posWorkspaceState(request);
@@ -990,6 +1014,10 @@ export async function handleView(request: Request, path: string) {
     return json(await home(), {
       headers: { "Cache-Control": "public, max-age=30" },
     });
+  if (path === "contact") {
+    const [settings] = await getDb().select().from(siteSettings).limit(1);
+    return json({ contact: publicContact(settings) }, { headers: { "Cache-Control": "public, max-age=60" } });
+  }
   if (path === "locations") {
     const stores = await getDb()
       .select({
@@ -1690,6 +1718,7 @@ export async function handleView(request: Request, path: string) {
     const db = getDb();
     const view = path.slice(6);
     if (view === "navigation") {
+      return json(await cachedCounts("admin", async () => {
       const [
         [{ newOrders }],
         [{ newChats }],
@@ -1729,13 +1758,14 @@ export async function handleView(request: Request, path: string) {
             .from(consultations)
             .where(ne(consultations.status, "CLOSED")),
         ]);
-      return json({
+      return {
         newOrders: Number(newOrders),
         newChats: Number(newChats),
         unmatchedPayments: Number(unmatchedPayments),
         pendingPrescriptions: Number(pendingPrescriptions),
         pendingConsultations: Number(pendingConsultations),
-      });
+      };
+      }));
     }
     if (view === "dashboard") {
       const since = new Date(Date.now() - 92 * 24 * 60 * 60 * 1000);
@@ -2483,6 +2513,8 @@ export async function handleView(request: Request, path: string) {
       auth.session,
       "CONSULTATIONS_VIEW",
     );
+    // Keyed by which counts this person may see, since those are all that differs between them.
+    const counts = await cachedCounts(`staff:${Number(canViewOrders)}${Number(canViewPrescriptions)}${Number(canViewConsultations)}`, async () => {
     const [[{ newOrders }], [{ pendingPrescriptions }], [{ pendingConsultations }]] = await Promise.all([
       canViewOrders
         ? getDb()
@@ -2509,13 +2541,13 @@ export async function handleView(request: Request, path: string) {
             .where(ne(consultations.status, "CLOSED"))
         : Promise.resolve([{ pendingConsultations: 0 }]),
     ]);
-    return json({
+    return {
       newOrders: Number(newOrders),
       pendingPrescriptions: Number(pendingPrescriptions),
       pendingConsultations: Number(pendingConsultations),
-      branch: auth.branch,
-      permissions: auth.session.permissions,
+    };
     });
+    return json({ ...counts, branch: auth.branch, permissions: auth.session.permissions });
   }
   if (path === "staff/dashboard") {
     const auth = await requireTeamBranch(request, "DASHBOARD_VIEW");

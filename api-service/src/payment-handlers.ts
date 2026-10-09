@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, getTableColumns, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { activityLogs, branchInventory, mpesaIncomingPayments, mpesaStkCallbacks, orderItemFulfilments, orderItems, orders, paymentTransactions, siteSettings, users } from "../../db/schema";
 import { requestSession, requireSession } from "./auth";
-import { sendEmail } from "./email";
+import { sendEmailQueued } from "./outbox-delivery";
 import { requireTeamPermission } from "./staff-permissions";
 import { getDb } from "./db";
 import { json } from "./http";
@@ -654,7 +654,7 @@ async function ingestIncomingPayment(incoming: IncomingMpesaPayment, payload: Re
         : (await db.select({ email: users.email }).from(users).where(and(inArray(users.role, ["ADMIN", "SUPER_ADMIN"]), eq(users.isActive, true)))).map((row) => row.email)) : [];
       const reference = incoming.accountReference || "No reference supplied";
       const payer = incoming.payerName || "Name not supplied";
-      if (recipients.length) void sendEmail({
+      if (recipients.length) void sendEmailQueued({
         to: [...new Set(recipients)],
         subject: `Till payment received · ${incoming.receiptNumber}`,
         message: `Safaricom delivered a new Till payment to Healthfield.\n\nReceipt: ${incoming.receiptNumber}\nAmount: KES ${incoming.amount.toLocaleString()}\nPayer: ${payer}\nReference: ${reference}\n\nOpen Unmatched payments if this receipt still needs an order match.`,

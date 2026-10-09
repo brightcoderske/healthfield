@@ -28,6 +28,7 @@ import { extractContentReferences, isPersonalised, renderContentBlocks, renderMe
 import { campaignContentResolver, loadCampaignContent } from "./campaign-content";
 import { apportionBundle, isBundle, loadLiveOffers, offerPriceMap, offerTotal } from "./offers";
 import { campaignBodyHtml, campaignEmailHtml, orderEmailHtml, sendEmail, storefrontOrigin, stripHtml } from "./email";
+import { sendEmailQueued } from "./outbox-delivery";
 import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, emailVerificationTiming } from "./email-verification";
 import { json, publicImageUrl, safeFilename } from "./http";
 import { storageRoot, validatePrescriptionUpload } from "./prescription-files";
@@ -289,7 +290,7 @@ export async function handleAuth(request: Request, action: string) {
     if (!user || !user.isActive) return json({ error: "This reset link is invalid or has expired." }, { status: 400 });
     await db.update(users).set({ passwordHash: await bcrypt.hash(parsed.data.newPassword, 12), forcePasswordChange: false }).where(eq(users.id, user.id));
     await revokeUserSessions(user.id);
-    void sendEmail({ to: user.email, subject: "Your Healthfield password was changed", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy password was changed successfully. If you did not do this, contact the pharmacy immediately.`, action:{label:"Sign in securely",url:`${storefrontOrigin()}/login`}, channel:"security" });
+    void sendEmailQueued({ to: user.email, subject: "Your Healthfield password was changed", message: `Hello ${user.firstName},\n\nYour Healthfield Pharmacy password was changed successfully. If you did not do this, contact the pharmacy immediately.`, action:{label:"Sign in securely",url:`${storefrontOrigin()}/login`}, channel:"security" });
     return json({ ok: true, message: "Password updated. You can sign in with your new password." });
   }
   if (action === "register" && request.method === "POST") {
@@ -338,7 +339,7 @@ export async function handleAuth(request: Request, action: string) {
       if (result.affectedRows === 1) await tx.update(orders).set({ customerId: user.id }).where(and(isNull(orders.customerId), sql`lower(trim(${orders.email})) = ${user.email.trim().toLowerCase()}`));
       return result.affectedRows === 1;
     });
-    if (activated && process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewCustomer) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New verified Healthfield customer", message: `${user.firstName} ${user.lastName} activated a customer account.\nEmail: ${user.email}\nPhone: ${user.phone || "Not provided"}`, channel: "security" }).catch(console.error);
+    if (activated && process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewCustomer) void sendEmailQueued({ to: process.env.NOTIFICATION_EMAIL, subject: "New verified Healthfield customer", message: `${user.firstName} ${user.lastName} activated a customer account.\nEmail: ${user.email}\nPhone: ${user.phone || "Not provided"}`, channel: "security" }).catch(console.error);
     if (activated) {
       const identity = await pharmacyIdentity();
       queueCustomerNotification("ACCOUNT_WELCOME", {
@@ -579,7 +580,7 @@ export async function handleOrders(request: Request, id?: number) {
     // Each step has its own email and SMS switch in Settings; cancelling is a step like
     // any other, so a cancelled order reaches the customer on both channels.
     queueOrderStatusNotification(id, status);
-    if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyOrderStatusChange) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.`, channel:"orders" });
+    if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyOrderStatusChange) void sendEmailQueued({ to: process.env.NOTIFICATION_EMAIL, subject: `Order ${order.orderNumber} → ${parsed.data.status}`, message: `${order.customerName}'s order ${order.orderNumber} changed from ${order.status} to ${parsed.data.status}.`, channel:"orders" });
     return json({ok:true,status,delivery:repricing});
   }
   if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
@@ -704,7 +705,7 @@ export async function handleOrders(request: Request, id?: number) {
       email: { to: orderEmail, subject: received.subject, message: received.message, html: orderEmailHtml({ name: parsed.data.fullName, orderNumber, items: emailItems, subtotal, deliveryFee, total: subtotal + deliveryFee, status: received.status }), channel: "orders" },
     });
   }
-  if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewOrder) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${payable.toLocaleString()}.`, channel:"orders" });
+  if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewOrder) void sendEmailQueued({ to: process.env.NOTIFICATION_EMAIL, subject: `New order ${orderNumber}`, message: `${parsed.data.fullName} placed order ${orderNumber}.\nPhone: ${parsed.data.phone}\nEmail: ${parsed.data.email || "not provided"}\nFulfilment: ${parsed.data.fulfilmentMethod}\nTotal: KES ${payable.toLocaleString()}.`, channel:"orders" });
   return json({ ok: true, id: result.orderId, orderNumber, total: payable, vat, paymentStatus, paymentMethod: parsed.data.paymentMethod, paymentMessage }, { status: 202 });
 }
 
@@ -725,7 +726,7 @@ export async function handleCustomerOrderReceived(request: Request, id: number) 
     await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: "ORDER_RECEIVED_BY_CUSTOMER", entityType: "order", entityId: String(order.id), metadata: { orderNumber: order.orderNumber, fromStatus: "OUT_FOR_DELIVERY", toStatus: "COMPLETED" } });
   });
   queuePaidOrderNotification(order.id, "ORDER_COMPLETED");
-  if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyCustomerReceivedOrder) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: `Customer received ${order.orderNumber}`, message: `${order.customerName} confirmed that delivery order ${order.orderNumber} was received. The order is now completed.`, channel: "orders" });
+  if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyCustomerReceivedOrder) void sendEmailQueued({ to: process.env.NOTIFICATION_EMAIL, subject: `Customer received ${order.orderNumber}`, message: `${order.customerName} confirmed that delivery order ${order.orderNumber} was received. The order is now completed.`, channel: "orders" });
   return json({ ok: true, status: "COMPLETED", message: "Thank you. The pharmacy has been notified that you received the order." });
 }
 
@@ -2050,7 +2051,7 @@ export async function handlePrescriptions(request: Request, downloadId?: number)
       return requestRow;
     });
     void notifyPrescriptionCustomer("PRESCRIPTION_RECEIVED", "RECEIVED", { email: auth.session.email, firstName: auth.session.firstName, phone: sender?.phone }, { subject: "Prescription under pharmacist review", message: `Hello ${auth.session.firstName},\n\nWe received your prescription and placed it under pharmacist review.${linkedProducts.length ? ` ${linkedProducts.length} prescription ${linkedProducts.length === 1 ? "medicine was" : "medicines were"} linked from your cart; prices will be confirmed by the pharmacist.` : " The pharmacist will identify the medicines, availability, quantities and prices."}`, action: { label: "Track prescription", url: `${storefrontOrigin()}/account/prescriptions/${created.insertId}` } });
-    if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewPrescription) void sendEmail({ to: process.env.NOTIFICATION_EMAIL, subject: "New prescription under review", message: `A new prescription request is ready for pharmacist review. Reference: ${created.insertId}.`, channel: "orders" });
+    if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewPrescription) void sendEmailQueued({ to: process.env.NOTIFICATION_EMAIL, subject: "New prescription under review", message: `A new prescription request is ready for pharmacist review. Reference: ${created.insertId}.`, channel: "orders" });
     return json({ ok: true, id: created.insertId, linkedProductIds: linkedProducts.map((product) => product.id) }, { status: 201 });
   } catch (error) {
     await unlink(storedPath).catch(() => undefined);

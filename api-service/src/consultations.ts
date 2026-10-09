@@ -15,7 +15,7 @@ import { healthfieldOrderNumber } from "../../lib/order-number";
 import { consultationSms, prescriptionSms } from "../../lib/sms-templates";
 import { requireSession } from "./auth";
 import { getDb } from "./db";
-import { sendEmail } from "./email";
+import { sendEmailQueued } from "./outbox-delivery";
 import { json, safeFilename } from "./http";
 import { storefrontOrigin } from "./mutations";
 import { notificationSettings, pharmacyIdentity } from "./notification-settings";
@@ -121,7 +121,7 @@ export async function handleConsultations(request: Request, consultationId?: num
       },
       sms: { to: created.phone, message: consultationSms("RECEIVED", { customerName: auth.session.firstName, ...identity }), purpose: "CONSULTATION_UPDATE" },
     });
-    if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewConsultation) void sendEmail({
+    if (process.env.NOTIFICATION_EMAIL && (await notificationSettings()).notifyNewConsultation) void sendEmailQueued({
       to: process.env.NOTIFICATION_EMAIL,
       subject: parsed.data.callbackRequested ? "New consultation request (callback requested)" : "New consultation request",
       message: `A new consultation request is waiting for review. Reference: ${created.reference}.`,
