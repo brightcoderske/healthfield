@@ -85,8 +85,20 @@ async function start() {
       internal.once("error", reject);
       internal.listen(0, "127.0.0.1", resolve);
     });
-    process.env.API_BASE_URL = `http://127.0.0.1:${internal.address().port}`;
+    // How the storefront reaches the API. API_INTERNAL_URL wins if set. Otherwise the loopback
+    // listener, if the host really gave it a port; some hosts take over listen() and then there
+    // is nothing at that address, so fall back to the site's own public address, which routes
+    // /v1 to the API the same way for everyone.
+    const address = internal.address();
+    const loopback = address && typeof address === "object" && address.port ? `http://127.0.0.1:${address.port}` : null;
+    const publicSelf = (process.env.APP_URL || process.env.API_PUBLIC_URL || "").replace(/\/$/, "");
+    process.env.API_BASE_URL = (process.env.API_INTERNAL_URL || loopback || publicSelf).replace(/\/$/, "");
     console.log(`Storefront reaches the embedded API at ${process.env.API_BASE_URL}`);
+    // A self-test, so the log says at once whether the storefront can really reach the API.
+    fetch(`${process.env.API_BASE_URL}/health`).then(
+      (reply) => console.log(`Embedded API self-test: ${reply.status}`),
+      (error) => console.error(`Embedded API self-test FAILED at ${process.env.API_BASE_URL}: ${error && error.cause ? error.cause.code || error.cause.message : error.message}`),
+    );
 
     let stopping = false;
     const stop = (signal) => {
