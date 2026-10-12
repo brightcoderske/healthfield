@@ -1,5 +1,3 @@
-import type { NextConfig } from "next";
-
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
@@ -16,7 +14,11 @@ const securityHeaders = [
 // instead of child processes, and skips Next's own type check. Vercel and CI do not set it and build as before.
 const lowResourceBuild = process.env.LOW_RESOURCE_BUILD === "1";
 
-const nextConfig: NextConfig = {
+// Plain .mjs on purpose: Next compiles a next.config.ts with its Rust compiler (@next/swc) each time the
+// server starts, and that binary starts one thread per CPU of the host (64 here). The hosting account
+// counts every thread against its 100-process limit, and TOKIO_WORKER_THREADS does not reach it.
+/** @type {import("next").NextConfig} */
+const nextConfig = {
   // The type check holds the whole program in memory next to the webpack build, which together
   // pass the account's 2 GB when the build runs in one process. It is skipped only in that mode;
   // types are checked with `tsc --noEmit` before pushing.
