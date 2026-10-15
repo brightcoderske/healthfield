@@ -1515,9 +1515,11 @@ export function Storefront({
 
         {showFeatured && (
           <FeaturedRail items={featuredGroups} startStep={layoutSeed % 97}>
-            {(group) => (
+            {(group, index) => (
               <ProductCard
                 key={group.id}
+                // The featured shelf sits right under the hero, so its first row is on screen at once.
+                priority={index < gridColumns}
                 product={group.defaultVariant}
                 variants={group.hasChoice ? group.variants : undefined}
                 groupName={group.name}
@@ -1565,6 +1567,8 @@ export function Storefront({
                 <Fragment key={group.id}>
                   {slot && <CatalogueInterruption item={slot} />}
                   <ProductCard
+                    // With no featured shelf above it, the first row of the catalogue is what opens the page.
+                    priority={!showFeatured && index < gridColumns}
                     // Keyed by the option it opens on, so a search that lands on a
                     // different colour genuinely reopens the card there. Without this the
                     // card keeps whatever was chosen before the search ran.

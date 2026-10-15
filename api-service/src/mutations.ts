@@ -32,6 +32,7 @@ import { sendEmailQueued } from "./outbox-delivery";
 import { emailVerificationResendCooldownMs, emailVerificationRetryAfterSeconds, emailVerificationTiming } from "./email-verification";
 import { json, publicImageUrl, safeFilename } from "./http";
 import { storageRoot, validatePrescriptionUpload } from "./prescription-files";
+import { ensureProductImageSize, originalForProductImageSize, parseSizedProductImage, writeProductImageSizes } from "./product-images";
 import { extractMpesaReceipt, initiateStkPush, mpesaConfiguration } from "./mpesa";
 import { queueOrderSms, queueOrderStatusNotification, queuePaidOrderNotification } from "./order-notifications";
 import { reconcileManualPaymentFromIncoming, replayStoredStkCallback, requestKnownTransactionStatus } from "./payment-handlers";
@@ -1832,6 +1833,8 @@ async function handleImageUpload(request: Request, kind: "product" | "promotion"
   const directory = path.join(storageRoot(), "uploads", "products");
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, filename), bytes, { flag: "wx" });
+  // Banners are shown at their own size; only catalogue pictures get the small copies.
+  if (kind === "product") await writeProductImageSizes(directory, filename, bytes);
   return json({ imageUrl: publicImageUrl(`/uploads/products/${filename}`) }, { status: 201 });
 }
 
@@ -1843,13 +1846,26 @@ export async function handlePromotionalImage(request: Request) {
   return handleImageUpload(request, "promotion");
 }
 
+const productImageTypes: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".avif": "image/avif", ".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff" };
+
 export async function serveProductImage(filename: string) {
   if (!/^[a-zA-Z0-9-]+\.(?:jpe?g|png|webp|gif|avif|bmp|tiff?)$/i.test(filename)) return json({ error: "Not found." }, { status: 404 });
+  const directory = path.join(storageRoot(), "uploads", "products");
+  // File names are random and never reused, so a picture never changes behind its URL and a
+  // browser can keep it for a year. Only the answers below that are not final are kept briefly.
+  const forever = "public, max-age=31536000, immutable";
   try {
-    const buffer = await readFile(path.join(storageRoot(), "uploads", "products", filename));
+    if (parseSizedProductImage(filename)) {
+      // A small copy: the stored one, or made now for a picture that predates the copies.
+      const sized = await ensureProductImageSize(directory, filename);
+      if (sized) return new Response(new Uint8Array(sized), { headers: { "Content-Type": "image/webp", "Cache-Control": forever, "X-Content-Type-Options": "nosniff" } });
+      // Could not be made: show the original so the card is never left empty, and ask again soon.
+      const original = await originalForProductImageSize(directory, filename);
+      if (original) return new Response(new Uint8Array(original.bytes), { headers: { "Content-Type": productImageTypes[original.extension] || "application/octet-stream", "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" } });
+    }
+    const buffer = await readFile(path.join(directory, filename));
     const extension = path.extname(filename).toLowerCase();
-    const types: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".avif": "image/avif", ".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff" };
-    return new Response(buffer, { headers: { "Content-Type": types[extension] || "application/octet-stream", "Cache-Control": "public, max-age=86400, immutable", "X-Content-Type-Options": "nosniff" } });
+    return new Response(buffer, { headers: { "Content-Type": productImageTypes[extension] || "application/octet-stream", "Cache-Control": forever, "X-Content-Type-Options": "nosniff" } });
   } catch { return json({ error: "Image not found." }, { status: 404 }); }
 }
 

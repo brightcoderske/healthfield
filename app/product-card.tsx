@@ -9,6 +9,7 @@ import { PrescriptionAddButton } from "./prescription-add-button";
 import { VariantPicker } from "./variant-picker";
 import { announceCartAdded } from "./cart-toast";
 import { trackAddToCart } from "@/lib/meta-pixel";
+import { PRODUCT_CARD_IMAGE_SIZES, productImageSources } from "@/lib/product-image";
 
 export type ProductCardProduct = {
   id: number;
@@ -43,6 +44,7 @@ export function ProductCard({
   returnTo,
   onAddToCart,
   onVariantAdded,
+  priority = false,
 }: {
   product: ProductCardProduct;
   /** Every variant in this product's group, in shop order. Omitted for a plain product. */
@@ -58,6 +60,12 @@ export function ProductCard({
   onAddToCart?: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
   /** Told what went in the basket, so the page holding the counts can update them. */
   onVariantAdded?: (productId: number, quantity: number, cart?: Record<number, number>) => void;
+  /**
+   * For cards that are on screen when the page opens. Their picture is fetched at once and ahead
+   * of the rest instead of waiting to be scrolled near, which is what makes the first screen of
+   * products appear quickly. Everything further down stays lazy.
+   */
+  priority?: boolean;
 }) {
   const options = variants && variants.length > 1 ? variants : null;
   // The caller decides which option the card opens on — the cheapest in stock when
@@ -229,9 +237,11 @@ export function ProductCard({
                 <div className="variant-image-slide" key={variant.id}>
                   {variant.imageUrl && !failedImages.includes(variant.id) ? (
                     <img
-                      src={variant.imageUrl}
+                      {...productImageSources(variant.imageUrl)}
+                      sizes={PRODUCT_CARD_IMAGE_SIZES}
                       alt={`${name}, ${variant.variantLabel || ""}`.trim()}
-                      loading="lazy"
+                      loading={priority && variant.id === shown.id ? "eager" : "lazy"}
+                      fetchPriority={priority && variant.id === shown.id ? "high" : undefined}
                       decoding="async"
                       onError={() => setFailedImages((current) => [...current, variant.id])}
                     />
@@ -283,9 +293,11 @@ export function ProductCard({
             )}
             {showImage ? (
               <img
-                src={shown.imageUrl!}
+                {...productImageSources(shown.imageUrl!)}
+                sizes={PRODUCT_CARD_IMAGE_SIZES}
                 alt={name}
-                loading="lazy"
+                loading={priority ? "eager" : "lazy"}
+                fetchPriority={priority ? "high" : undefined}
                 decoding="async"
                 onError={() => setFailedImages((current) => [...current, shown.id])}
               />

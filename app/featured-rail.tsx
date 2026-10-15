@@ -25,7 +25,7 @@ export function FeaturedRail<T extends { id: number }>({
   items: T[];
   /** Which batch to open on, so two visitors do not always start on the same one. */
   startStep?: number;
-  children: (item: T) => ReactNode;
+  children: (item: T, index: number) => ReactNode;
 }) {
   const [step, setStep] = useState(startStep);
   const held = useRef(false);
@@ -59,7 +59,7 @@ export function FeaturedRail<T extends { id: number }>({
         onTouchStart={() => { held.current = true; }}
         onTouchEnd={() => { window.setTimeout(() => { held.current = false; }, ROTATE_MS); }}
       >
-        {shown.map((item) => children(item))}
+        {shown.map((item, index) => children(item, index))}
       </div>
     </section>
   );

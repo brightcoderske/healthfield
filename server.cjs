@@ -31,6 +31,9 @@ function serveProductImage(request, response) {
   if (!match || !["GET", "HEAD"].includes(request.method || "GET")) return false;
 
   const filename = match[1];
+  // The small copies (<name>-400.webp, <name>-800.webp) are made and served by the API, not found
+  // in this folder, so those requests go on to Next, which fetches them from the API.
+  if (/-(?:400|800)\.webp$/i.test(filename)) return false;
   const imagePath = path.join(productUploadRoot, filename);
   fs.stat(imagePath, (error, stats) => {
     if (error || !stats.isFile()) {
@@ -41,7 +44,8 @@ function serveProductImage(request, response) {
     response.writeHead(200, {
       "Content-Type": productImageTypes[path.extname(filename).toLowerCase()] || "application/octet-stream",
       "Content-Length": stats.size,
-      "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+      // Names are random and never reused, so a picture never changes behind its URL.
+      "Cache-Control": "public, max-age=31536000, immutable",
       "X-Content-Type-Options": "nosniff",
     });
     if (request.method === "HEAD") response.end();

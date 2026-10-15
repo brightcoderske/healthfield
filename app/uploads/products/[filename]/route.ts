@@ -27,10 +27,13 @@ export async function GET(
       status: upstream?.status === 404 ? 404 : 502,
       headers: { "Cache-Control": "no-store" },
     });
+  // The API answers with the original, for a few minutes only, when a small copy could not be
+  // made yet. That answer must not be pinned for a year, so its shorter lifetime is kept.
+  const temporary = /max-age=300\b/.test(upstream.headers.get("cache-control") || "");
   return new Response(upstream.body, {
     headers: {
       "Content-Type": type,
-      "Cache-Control": "public, max-age=31536000, s-maxage=31536000, immutable",
+      "Cache-Control": temporary ? "public, max-age=300" : "public, max-age=31536000, s-maxage=31536000, immutable",
       "X-Content-Type-Options": "nosniff",
     },
   });
