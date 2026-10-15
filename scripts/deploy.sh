@@ -212,11 +212,26 @@ mkdir -p "${BUILD_CACHE}" "${STOREFRONT_BUILD}"
 ln -sfn "${BUILD_CACHE}" "${STOREFRONT_BUILD}/cache"
 # The account sometimes refuses to start a worker for a moment (EAGAIN) when other processes are busy.
 # That passes on its own, so the build is tried up to three times before the deploy is given up.
+#
+# The account counts every thread against its process limit (100), and Next's Rust compiler starts one
+# worker thread per CPU it can see, which is 64 on this host. TOKIO_WORKER_THREADS and
+# RAYON_NUM_THREADS do not reach it (the running app showed 64 of them with both set). The number of
+# CPUs a process can see is what sizes the pool, so the build is pinned to two CPUs when taskset can do
+# that here. If it cannot, the build runs as before.
+PIN_CPU=()
+if command -v taskset >/dev/null 2>&1 && taskset -c 0,1 true >/dev/null 2>&1; then
+  PIN_CPU=(taskset -c 0,1)
+  echo "Pinning the storefront build to 2 CPUs so the compiler's thread pool stays small."
+else
+  echo "taskset is not usable here; the storefront build will see every CPU and start a large thread pool."
+fi
+account_threads() { ps -eLo pid -u "$(id -un)" 2>/dev/null | tail -n +2 | wc -l | tr -d ' ' || true; }
 BUILD_ATTEMPT=1
-until LOW_RESOURCE_BUILD=1 RAYON_NUM_THREADS=1 UV_THREADPOOL_SIZE=2 NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB}" "${PNPM_COMMAND[@]}" run build; do
+echo "Threads in use by this account before the build: $(account_threads) of 100."
+until LOW_RESOURCE_BUILD=1 RAYON_NUM_THREADS=1 UV_THREADPOOL_SIZE=2 NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB}" ${PIN_CPU[@]+"${PIN_CPU[@]}"} "${PNPM_COMMAND[@]}" run build; do
   if (( BUILD_ATTEMPT >= 3 )); then echo "deploy: the storefront build failed ${BUILD_ATTEMPT} times." >&2; exit 1; fi
   BUILD_ATTEMPT=$((BUILD_ATTEMPT + 1))
-  echo "deploy: the storefront build failed (often a momentary process limit); trying again in 20 seconds (attempt ${BUILD_ATTEMPT} of 3)..." >&2
+  echo "deploy: the storefront build failed (often a momentary process limit); threads in use by this account now: $(account_threads) of 100; trying again in 20 seconds (attempt ${BUILD_ATTEMPT} of 3)..." >&2
   sleep 20
 done
 test -s "${STOREFRONT_BUILD}/BUILD_ID"
