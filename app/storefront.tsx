@@ -39,7 +39,7 @@ import {
   type OfferTeaser,
   type Promotion,
 } from "./catalogue-interruption";
-import { planBreaks } from "@/lib/catalogue-breaks";
+import { planBreaks, ROWS_BETWEEN_BREAKS } from "@/lib/catalogue-breaks";
 import { useGridColumns } from "./use-grid-columns";
 
 type CatalogProduct = {
@@ -462,8 +462,9 @@ export function Storefront({
         promotions,
         seed: layoutSeed,
         columns: gridColumns,
+        leadingBreak: showFeatured,
       }),
-    [groups, visibleCount, offers, guides, promotions, layoutSeed, gridColumns],
+    [groups, visibleCount, offers, guides, promotions, layoutSeed, gridColumns, showFeatured],
   );
   const breakAt = useMemo(
     () => new Map(breakPlan.map((entry) => [entry.position, entry.item])),
@@ -1514,7 +1515,13 @@ export function Storefront({
         )}
 
         {showFeatured && (
-          <FeaturedRail items={featuredGroups} startStep={layoutSeed % 97}>
+          <FeaturedRail
+            items={featuredGroups}
+            startStep={layoutSeed % 97}
+            // Exactly two rows, so the first interruption card comes after two rows here too.
+            visible={gridColumns * ROWS_BETWEEN_BREAKS}
+            after={breakAt.get(0) && <CatalogueInterruption item={breakAt.get(0)!} />}
+          >
             {(group, index) => (
               <ProductCard
                 key={group.id}
@@ -1556,7 +1563,8 @@ export function Storefront({
             className={`approved-products ${selectedCategory || selectedCondition || query || offersOnly ? "catalogue-expanded" : ""}`}
           >
             {groups.slice(0, visibleCount).map((group, index) => {
-              const slot = breakAt.get(index);
+              // Position 0 is the card that follows the featured shelf; it is drawn there, not here.
+              const slot = index === 0 && showFeatured ? undefined : breakAt.get(index);
               // A search opens the card on the option that actually matched; an ordinary
               // browse opens on the cheapest one that is in stock.
               const opening =

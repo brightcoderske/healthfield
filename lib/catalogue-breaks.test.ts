@@ -168,3 +168,23 @@ test("every blog interruption carries the full collection and rotates its lead",
   const second = guideBreaks[1]?.item;
   assert.ok(first?.kind === "guide" && second?.kind === "guide" && first.guide.id !== second.guide.id, "later rails should rotate the lead blog");
 });
+
+test("with a featured shelf above, the first card follows it and the rhythm carries on", () => {
+  for (const { label, columns } of SCREENS) {
+    const perBreak = columns * 2;
+    const positions = breakPositions(60, columns, true);
+    assert.equal(positions[0], 0, `${label}: the first card sits right after the featured shelf`);
+    positions.forEach((position, index) => index > 0 && assert.equal(position - (index === 1 ? 0 : positions[index - 1]), perBreak, `${label}: gap before card ${index + 1}`));
+    assert.deepEqual(breakPositions(0, columns, true), [], "no products, no card");
+    assert.deepEqual(breakPositions(1, columns, true), [0], "a single product still follows the card");
+  }
+});
+
+test("every slot gets a card when a featured shelf leads the page", () => {
+  for (const { label, columns } of SCREENS) {
+    for (let seed = 1; seed <= 40; seed += 1) {
+      const plan = planBreaks({ products: products(50), offers: [offer(1)], guides: [guide(1)], promotions: [promotion(1)], seed, columns, leadingBreak: true });
+      assert.deepEqual(plan.map((entry) => entry.position), breakPositions(50, columns, true), `${label}, seed ${seed}`);
+    }
+  }
+});

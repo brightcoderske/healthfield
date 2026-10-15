@@ -65,10 +65,15 @@ function shuffled<T>(items: T[], random: () => number) {
  *
  * A position is the index of the product the card sits in front of, so a card is only
  * placed when at least one product follows it.
+ *
+ * `leading` is for a page that already shows a block of its own above the catalogue, such as
+ * the featured shelf, which is sized to exactly two rows. The first card then comes straight
+ * after that block (position 0) and the catalogue carries on in the same rhythm.
  */
-export function breakPositions(count: number, columns: number) {
+export function breakPositions(count: number, columns: number, leading = false) {
   const perBreak = Math.max(1, Math.floor(columns)) * ROWS_BETWEEN_BREAKS;
   const positions: number[] = [];
+  if (leading && count > 0) positions.push(0);
   for (let at = perBreak; at < count; at += perBreak) positions.push(at);
   return positions;
 }
@@ -112,11 +117,13 @@ export function planBreaks(input: {
   seed: number;
   /** Columns the product grid is showing, so a break lands after two full rows. */
   columns: number;
+  /** True when two rows of featured products sit above the catalogue, so a card goes right after them. */
+  leadingBreak?: boolean;
   now?: number;
 }) {
-  const { products, offers, guides, promotions = [], seed, columns, now = Date.now() } = input;
+  const { products, offers, guides, promotions = [], seed, columns, leadingBreak = false, now = Date.now() } = input;
   const random = seededRandom(seed);
-  const positions = breakPositions(products.length, columns);
+  const positions = breakPositions(products.length, columns, leadingBreak);
   if (!positions.length) return [] as Array<{ position: number; item: BreakItem }>;
 
   const context = products.slice(0, 12).flatMap((product) => product.name.toLowerCase().split(/\s+/));
