@@ -40,6 +40,7 @@ import {
   type Promotion,
 } from "./catalogue-interruption";
 import { planBreaks } from "@/lib/catalogue-breaks";
+import { useGridColumns } from "./use-grid-columns";
 
 type CatalogProduct = {
   id: number;
@@ -448,6 +449,7 @@ export function Storefront({
   }, [activeSearchResults, searchedProducts, query]);
   // Which offer and blog cards break up the catalogue scroll, and where. The rules
   // (spacing, relevance, urgency, seeded variation) live in lib/catalogue-breaks.
+  const { ref: productGridRef, columns: gridColumns } = useGridColumns<HTMLDivElement>(2);
   const breakPlan = useMemo(
     () =>
       planBreaks({
@@ -459,23 +461,9 @@ export function Storefront({
         guides,
         promotions,
         seed: layoutSeed,
-        // A shopper mid-search or mid-filter is working towards something specific.
-        focused: Boolean(
-          query.trim() || selectedCategory || selectedCondition || offersOnly,
-        ),
+        columns: gridColumns,
       }),
-    [
-      groups,
-      visibleCount,
-      offers,
-      guides,
-      promotions,
-      layoutSeed,
-      query,
-      selectedCategory,
-      selectedCondition,
-      offersOnly,
-    ],
+    [groups, visibleCount, offers, guides, promotions, layoutSeed, gridColumns],
   );
   const breakAt = useMemo(
     () => new Map(breakPlan.map((entry) => [entry.position, entry.item])),
@@ -1562,6 +1550,7 @@ export function Storefront({
             </div>
           </div>
           <div
+            ref={productGridRef}
             className={`approved-products ${selectedCategory || selectedCondition || query || offersOnly ? "catalogue-expanded" : ""}`}
           >
             {groups.slice(0, visibleCount).map((group, index) => {

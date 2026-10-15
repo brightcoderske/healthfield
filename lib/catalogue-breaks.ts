@@ -29,8 +29,8 @@ export type BreakItem =
   | { kind: "guide"; guide: BreakGuide; guides: BreakGuide[] }
   | { kind: "promotion"; promotion: BreakPromotion; promotions: BreakPromotion[] };
 
-export const INTERRUPTION_EVERY = 10;
-export const MIN_PRODUCTS_BEFORE_BREAK = 3;
+/** Rows of products between one interruption and the next, on every screen size. */
+export const ROWS_BETWEEN_BREAKS = 2;
 
 /** Small deterministic PRNG (mulberry32). Same seed, same sequence, every time. */
 export function seededRandom(seed: number) {
@@ -54,34 +54,22 @@ function shuffled<T>(items: T[], random: () => number) {
 }
 
 /**
- * Where to break the scroll.
+ * Where to break the scroll: after every two full rows of products, on every screen.
  *
- * The gaps deliberately vary rather than landing on a fixed drumbeat: sometimes a
- * row or two of products then a card, sometimes a longer run. An even rhythm reads
- * as advertising furniture; an uneven one reads like part of the page.
+ * The gap is counted in rows, not products, because what a shopper feels is how far they
+ * scroll. A gap of ten products is two rows on a laptop but five on a phone. The caller
+ * passes the number of columns the grid is showing, so a phone (2 columns) breaks after
+ * 4 products and a wide laptop (5 columns) after 10. The rhythm is fixed on purpose:
+ * nothing here depends on the seed, on what the shopper searched for, or on how many
+ * products have loaded, so no input can stretch the gap or switch the breaks off.
  *
- * The base gap scales with catalogue size — a small pharmacy still gets its offers
- * seen, a large one is not peppered with cards — and each gap is then jittered by
- * the seed, so two visits lay out differently.
- *
- * A shopper who is searching or filtering has intent, so they get at most one
- * interruption: derailing a deliberate search is worse than a missed impression.
+ * A position is the index of the product the card sits in front of, so a card is only
+ * placed when at least one product follows it.
  */
-export function breakPositions(count: number, { focused = false, random }: { focused?: boolean; random?: () => number } = {}) {
-  if (count < MIN_PRODUCTS_BEFORE_BREAK * 2) return [];
-  const base = Math.min(INTERRUPTION_EVERY, Math.max(MIN_PRODUCTS_BEFORE_BREAK, Math.floor(count / 2)));
+export function breakPositions(count: number, columns: number) {
+  const perBreak = Math.max(1, Math.floor(columns)) * ROWS_BETWEEN_BREAKS;
   const positions: number[] = [];
-  let at = 0;
-  while (true) {
-    // Jitter each gap by ±40% of the base, never below the minimum run of products.
-    const spread = random ? 0.6 + random() * 0.8 : 1;
-    const gap = Math.max(MIN_PRODUCTS_BEFORE_BREAK, Math.round(base * spread));
-    at += gap;
-    // Never break so late that a lone product trails the card.
-    if (at >= count - 1) break;
-    positions.push(at);
-    if (focused) break;
-  }
+  for (let at = perBreak; at < count; at += perBreak) positions.push(at);
   return positions;
 }
 
@@ -122,12 +110,13 @@ export function planBreaks(input: {
   guides: BreakGuide[];
   promotions?: BreakPromotion[];
   seed: number;
-  focused?: boolean;
+  /** Columns the product grid is showing, so a break lands after two full rows. */
+  columns: number;
   now?: number;
 }) {
-  const { products, offers, guides, promotions = [], seed, focused = false, now = Date.now() } = input;
+  const { products, offers, guides, promotions = [], seed, columns, now = Date.now() } = input;
   const random = seededRandom(seed);
-  const positions = breakPositions(products.length, { focused, random });
+  const positions = breakPositions(products.length, columns);
   if (!positions.length) return [] as Array<{ position: number; item: BreakItem }>;
 
   const context = products.slice(0, 12).flatMap((product) => product.name.toLowerCase().split(/\s+/));

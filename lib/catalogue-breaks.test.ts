@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { breakPositions, planBreaks, seededRandom, MIN_PRODUCTS_BEFORE_BREAK, type BreakGuide, type BreakOffer, type BreakProduct, type BreakPromotion } from "./catalogue-breaks.ts";
+import { breakPositions, planBreaks, type BreakGuide, type BreakOffer, type BreakProduct, type BreakPromotion } from "./catalogue-breaks.ts";
 import { offerTilePresentation, type OfferTeaserProduct } from "./offer-teaser.ts";
 
 const product = (id: number, name = `Product ${id}`): BreakProduct => ({ id, name });
@@ -31,76 +31,94 @@ test("offer image tiles adapt from one product through the compact overflow layo
   assert.equal(seven.tiles[1]?.imageUrl, null, "products without artwork remain represented by a placeholder tile");
 });
 
-test("a catalogue too short to interrupt is left alone", () => {
-  for (const count of [0, 1, 3, MIN_PRODUCTS_BEFORE_BREAK * 2 - 1]) {
-    assert.deepEqual(breakPositions(count, { random: seededRandom(1) }), [], `count ${count}`);
-  }
-});
+const SCREENS = [{ label: "phone", columns: 2 }, { label: "tablet", columns: 3 }, { label: "laptop", columns: 4 }, { label: "wide laptop", columns: 5 }, { label: "ultra-wide", columns: 6 }];
 
-test("breaks never sit at the start, never strand a single trailing product", () => {
-  for (let count = 6; count <= 60; count += 1) {
-    for (let seed = 1; seed <= 12; seed += 1) {
-      const positions = breakPositions(count, { random: seededRandom(seed) });
-      for (const position of positions) {
-        assert.ok(position >= MIN_PRODUCTS_BEFORE_BREAK, `count ${count} seed ${seed}: break at ${position} is too early`);
-        assert.ok(position < count - 1, `count ${count} seed ${seed}: break at ${position} strands the tail`);
-      }
-      const ascending = positions.every((value, index) => index === 0 || value > positions[index - 1]);
-      assert.ok(ascending, `count ${count} seed ${seed}: positions must ascend`);
-      assert.equal(new Set(positions).size, positions.length, "no duplicate positions");
+test("a break comes after every two full rows, whatever the screen", () => {
+  for (const { label, columns } of SCREENS) {
+    const perBreak = columns * 2;
+    for (let count = 0; count <= 120; count += 1) {
+      const positions = breakPositions(count, columns);
+      const expected = Array.from({ length: Math.max(0, Math.ceil(count / perBreak) - 1) }, (_, index) => (index + 1) * perBreak);
+      assert.deepEqual(positions, expected, `${label}: ${count} products`);
+      // Rows are counted between cards: never more than two products-rows in a row.
+      positions.forEach((position, index) => assert.equal(position - (positions[index - 1] ?? 0), perBreak, `${label}: gap before break ${index + 1}`));
+      // A card always has a product after it, and the first run is also two rows.
+      assert.ok(positions.every((position) => position < count), `${label}: a card must not be the last thing`);
     }
   }
 });
 
-test("gaps vary rather than repeating a fixed rhythm", () => {
-  const seen = new Set<string>();
-  for (let seed = 1; seed <= 25; seed += 1) seen.add(breakPositions(48, { random: seededRandom(seed) }).join(","));
-  assert.ok(seen.size > 5, `expected varied layouts across seeds, saw ${seen.size}`);
+test("a catalogue of two rows or fewer is left alone", () => {
+  for (const { columns } of SCREENS) {
+    for (const count of [0, 1, columns, columns * 2]) assert.deepEqual(breakPositions(count, columns), [], `${columns} columns, ${count} products`);
+    assert.deepEqual(breakPositions(columns * 2 + 1, columns), [columns * 2]);
+  }
+});
 
-  const gaps = new Set<number>();
-  const positions = breakPositions(120, { random: seededRandom(7) });
-  positions.forEach((value, index) => gaps.add(index === 0 ? value : value - positions[index - 1]));
-  assert.ok(gaps.size > 1, "a single catalogue should not use one identical gap throughout");
+test("a bad column count can never switch the breaks off or stretch the gap", () => {
+  for (const columns of [0, -3, 0.4, Number.NaN]) {
+    const positions = breakPositions(40, Math.max(1, columns || 1));
+    assert.ok(positions.length >= 19, `columns ${columns} gave ${positions.length} breaks`);
+  }
+  assert.deepEqual(breakPositions(10, 2.9), [4, 8], "a fractional count is rounded down");
 });
 
 test("the same seed always produces the same layout", () => {
   // Server render and client hydration must agree or React tears the page down.
-  const once = planBreaks({ products: products(40), offers: [offer(1)], guides: [guide(1)], seed: 99 });
-  const twice = planBreaks({ products: products(40), offers: [offer(1)], guides: [guide(1)], seed: 99 });
+  const once = planBreaks({ products: products(40), offers: [offer(1)], guides: [guide(1)], seed: 99, columns: 4 });
+  const twice = planBreaks({ products: products(40), offers: [offer(1)], guides: [guide(1)], seed: 99, columns: 4 });
   assert.deepEqual(JSON.stringify(once), JSON.stringify(twice));
 });
 
-test("a searching shopper is interrupted at most once", () => {
-  const plan = planBreaks({ products: products(60), offers: [offer(1)], guides: [guide(1)], seed: 4, focused: true });
-  assert.ok(plan.length <= 1, `focused browsing should not be peppered with cards, got ${plan.length}`);
+test("different seeds change what is shown but never where", () => {
+  const seen = new Set<string>();
+  for (let seed = 1; seed <= 30; seed += 1) {
+    const plan = planBreaks({ products: products(60), offers: [offer(1), offer(2)], guides: [guide(1), guide(2)], promotions: [promotion(1)], seed, columns: 5 });
+    assert.deepEqual(plan.map((entry) => entry.position), [10, 20, 30, 40, 50], `seed ${seed}`);
+    seen.add(plan.map((entry) => entry.item.kind).join(","));
+  }
+  assert.ok(seen.size > 1, "the order of card types should still vary between visits");
+});
+
+test("searching or filtering does not thin the breaks out", () => {
+  // planBreaks no longer has a 'focused' mode: a long result list is broken up like any other.
+  const plan = planBreaks({ products: products(60), offers: [offer(1)], guides: [guide(1)], seed: 4, columns: 4 });
+  assert.equal(plan.length, 7);
 });
 
 test("no offer, blog, or promotional content means no interruption", () => {
-  const plan = planBreaks({ products: products(40), offers: [], guides: [], seed: 3 });
+  const plan = planBreaks({ products: products(40), offers: [], guides: [], seed: 3, columns: 4 });
   assert.deepEqual(plan, []);
 });
 
-test("the randomizer emits every available storefront interruption type", () => {
+test("every available slot gets a card, for every content mix, seed and screen", () => {
   const scenarios = [
-    { label: "offers only", offers: [offer(1), offer(2)], guides: [] },
-    { label: "blogs only", offers: [], guides: [guide(1), guide(2)] },
-    { label: "offers and blogs", offers: [offer(1), offer(2)], guides: [guide(1), guide(2)] },
-    { label: "promotions only", offers: [], guides: [], promotions: [promotion(1), promotion(2)] },
+    { label: "offers only", offers: [offer(1), offer(2)], guides: [] as BreakGuide[], promotions: [] as BreakPromotion[] },
+    { label: "one offer", offers: [offer(1)], guides: [] as BreakGuide[], promotions: [] as BreakPromotion[] },
+    { label: "blogs only", offers: [] as BreakOffer[], guides: [guide(1), guide(2)], promotions: [] as BreakPromotion[] },
+    { label: "offers and blogs", offers: [offer(1), offer(2)], guides: [guide(1), guide(2)], promotions: [] as BreakPromotion[] },
+    { label: "promotions only", offers: [] as BreakOffer[], guides: [] as BreakGuide[], promotions: [promotion(1), promotion(2)] },
     { label: "all types", offers: [offer(1)], guides: [guide(1)], promotions: [promotion(1)] },
   ];
   for (const scenario of scenarios) {
-    for (let seed = 1; seed <= 100; seed += 1) {
-      const plan = planBreaks({ products: products(60), offers: scenario.offers, guides: scenario.guides, promotions: scenario.promotions || [], seed });
-      assert.ok(plan.length > 0, `${scenario.label}, seed ${seed} should produce interruptions`);
-      const expected = new Set([scenario.offers.length ? "offer" : "", scenario.guides.length ? "guide" : "", scenario.promotions?.length ? "promotion" : ""].filter(Boolean));
-      assert.ok(plan.every((entry) => expected.has(entry.item.kind)), `${scenario.label}, seed ${seed} emitted a kind without content`);
+    for (const { label, columns } of SCREENS) {
+      for (let seed = 1; seed <= 60; seed += 1) {
+        const count = 50;
+        const plan = planBreaks({ products: products(count), offers: scenario.offers, guides: scenario.guides, promotions: scenario.promotions, seed, columns });
+        const slots = breakPositions(count, columns);
+        assert.deepEqual(plan.map((entry) => entry.position), slots, `${scenario.label}, ${label}, seed ${seed}: a slot was left empty`);
+        const expected = new Set([scenario.offers.length ? "offer" : "", scenario.guides.length ? "guide" : "", scenario.promotions.length ? "promotion" : ""].filter(Boolean));
+        assert.ok(plan.every((entry) => expected.has(entry.item.kind)), `${scenario.label}, seed ${seed} emitted a kind without content`);
+        // Neighbouring cards differ whenever there is more than one kind to choose from.
+        if (expected.size > 1) plan.forEach((entry, index) => index > 0 && assert.notEqual(entry.item.kind, plan[index - 1].item.kind, `${scenario.label}, seed ${seed}`));
+      }
     }
   }
 });
 
 test("every promotional interruption carries all adverts and rotates its lead", () => {
   const adverts = [promotion(1), promotion(2), promotion(3)];
-  const plan = planBreaks({ products: products(80), offers: [], guides: [], promotions: adverts, seed: 23 });
+  const plan = planBreaks({ products: products(80), offers: [], guides: [], promotions: adverts, seed: 23, columns: 4 });
   const promotionBreaks = plan.filter((entry) => entry.item.kind === "promotion");
   assert.ok(promotionBreaks.length > 1);
   for (const entry of promotionBreaks) {
@@ -117,7 +135,7 @@ test("every promotional interruption carries all adverts and rotates its lead", 
 test("offers closest to expiry are shown first", () => {
   const soon = new Date(Date.now() + 2 * 86_400_000).toISOString();
   const later = new Date(Date.now() + 30 * 86_400_000).toISOString();
-  const plan = planBreaks({ products: products(60), offers: [offer(1, later), offer(2, soon)], guides: [], seed: 5 });
+  const plan = planBreaks({ products: products(60), offers: [offer(1, later), offer(2, soon)], guides: [], seed: 5, columns: 4 });
   const firstOffer = plan.find((entry) => entry.item.kind === "offer");
   assert.equal(firstOffer && firstOffer.item.kind === "offer" && firstOffer.item.offer.id, 2, "the offer about to end should lead");
 });
@@ -129,6 +147,7 @@ test("a guide that matches what is on screen wins over one that does not", () =>
     offers: [],
     guides: [guide(1, "Sleep and rest"), guide(2, "Managing allergy season", "cetirizine and antihistamines")],
     seed: 11,
+    columns: 4,
   });
   const firstGuide = plan.find((entry) => entry.item.kind === "guide");
   assert.equal(firstGuide && firstGuide.item.kind === "guide" && firstGuide.item.guide.id, 2, "the relevant guide should lead");
@@ -136,7 +155,7 @@ test("a guide that matches what is on screen wins over one that does not", () =>
 
 test("every blog interruption carries the full collection and rotates its lead", () => {
   const catalogueGuides = [guide(1), guide(2), guide(3), guide(4)];
-  const plan = planBreaks({ products: products(60), offers: [], guides: catalogueGuides, seed: 17 });
+  const plan = planBreaks({ products: products(60), offers: [], guides: catalogueGuides, seed: 17, columns: 4 });
   const guideBreaks = plan.filter((entry) => entry.item.kind === "guide");
   assert.ok(guideBreaks.length > 1, "a long catalogue should contain multiple blog interruptions");
   for (const entry of guideBreaks) {
