@@ -149,6 +149,93 @@ stop_app "Healthfield" "${APP_ROOT}"
 # and its own copy of the scheduled jobs, and it uses up the account's process allowance.
 stop_app "legacy API" "${API_ROOT}"
 
+# ---------------------------------------------------------------- report what is running, on every exit
+# From here on the app is stopped, so every way out of this script, success or failure, ends by asking
+# the live site what it is running and saying so plainly. A failure puts the previous build back first.
+SITE_URL="${SITE_URL:-$(sed -n 's/^APP_URL=//p' "${APP_ROOT}/.env" 2>/dev/null | head -1 | tr -d "\"' \r")}"
+SITE_URL="${SITE_URL:-https://www.healthfieldpharmacy.co.ke}"
+SITE_URL="${SITE_URL%/}"
+SITE_RUNNING=""
+VERIFY_SECONDS="${VERIFY_SECONDS:-90}"
+VERIFY_INTERVAL="${VERIFY_INTERVAL:-5}"
+STOREFRONT_REPLACED=0
+SWAPPED=0
+REPORTED=0
+
+site_commit() {
+  # The commit /health reports, or nothing if the site does not answer.
+  curl -fsS --max-time 15 "${SITE_URL}/health" 2>/dev/null | grep -o '"commit":"[0-9a-f]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/' || true
+}
+
+# verify_site <expected commit, or empty for any>: waits up to VERIFY_SECONDS (90) for the site to answer. The first
+# request is also what makes Passenger start the app again after the restart file was touched.
+verify_site() {
+  local expected="${1:-}" waited=0 seen=""
+  SITE_RUNNING=""
+  if ! command -v curl >/dev/null 2>&1; then return 2; fi
+  while (( waited <= VERIFY_SECONDS )); do
+    seen="$(site_commit)"
+    if [[ -n "${seen}" && ( -z "${expected}" || "${seen}" == "${expected}" ) ]]; then SITE_RUNNING="${seen}"; return 0; fi
+    SITE_RUNNING="${seen}"
+    sleep "${VERIFY_INTERVAL}"
+    waited=$((waited + VERIFY_INTERVAL))
+  done
+  return 1
+}
+
+restore_storefront() {
+  # Runs when anything fails after the storefront build was started: the previous build goes back
+  # so the site is not left with a half-written one.
+  if [[ "${STOREFRONT_REPLACED}" == "1" ]]; then
+    if [[ -d "${STOREFRONT_PREVIOUS}" ]]; then
+      echo "Restoring the previous storefront build." >&2
+      rm -rf "${STOREFRONT_BUILD}"
+      mv "${STOREFRONT_PREVIOUS}" "${STOREFRONT_BUILD}" && echo "The previous storefront build is back in place." >&2
+    else
+      echo "There was no previous storefront build to put back." >&2
+    fi
+    STOREFRONT_REPLACED=0
+  fi
+}
+
+report_site() {
+  [[ "${REPORTED}" == "1" ]] && return 0
+  REPORTED=1
+  # The app was stopped for the deploy; this asks Passenger to start it again from what is in place now.
+  touch "${APP_ROOT}/tmp/restart.txt" 2>/dev/null || true
+  echo "Checking the running site (${SITE_URL}/health)..." >&2
+  verify_site ""
+  local state=$?
+  if [[ ${SWAPPED} -eq 1 ]]; then
+    echo "NOTE: the new version had already been swapped in when this failed, so nothing was put back." >&2
+  fi
+  if [[ ${state} -eq 0 ]]; then
+    if [[ ${SWAPPED} -eq 1 ]]; then
+      echo "The site is running ${SITE_RUNNING:0:7}." >&2
+    else
+      echo "RESTORE COMPLETED: the site is running ${SITE_RUNNING:0:7}, the version it had before this deploy. Nothing on the live site changed." >&2
+    fi
+  elif [[ ${state} -eq 2 ]]; then
+    echo "curl is not available, so the running site could not be checked. Open ${SITE_URL}/health to confirm it." >&2
+  else
+    echo "The site did not answer within ${VERIFY_SECONDS} seconds. Start the app from cPanel > Setup Node.js App, then open ${SITE_URL}/health." >&2
+  fi
+}
+
+on_exit() {
+  local status=$?
+  trap - EXIT
+  set +e
+  if [[ ${status} -ne 0 ]]; then
+    echo "deploy: FAILED with exit code ${status}; the deploy of ${DEPLOY_SHORT_COMMIT} did not complete." >&2
+    restore_storefront
+    report_site
+  fi
+  rm -rf "${RELEASE_STAGE}" 2>/dev/null
+  exit ${status}
+}
+trap on_exit EXIT
+
 cd "${REPOSITORY_ROOT}"
 
 # ---------------------------------------------------------------- dependencies (shared by both apps)
@@ -180,25 +267,6 @@ HEALTHFIELD_API_DRIZZLE_OUTPUT="${RELEASE_STAGE}/drizzle" \
 node scripts/build-api.mjs
 test -s "${RELEASE_STAGE}/dist/server.mjs"
 test -d "${RELEASE_STAGE}/drizzle"
-
-STOREFRONT_REPLACED=0
-restore_storefront() {
-  # Runs when anything fails after the storefront build was started: the previous build goes back
-  # so the site is not left with a half-written one.
-  if [[ "${STOREFRONT_REPLACED}" == "1" && -d "${STOREFRONT_PREVIOUS}" ]]; then
-    echo "Restoring the previous storefront build." >&2
-    rm -rf "${STOREFRONT_BUILD}"
-    mv "${STOREFRONT_PREVIOUS}" "${STOREFRONT_BUILD}"
-    STOREFRONT_REPLACED=0
-  fi
-}
-on_exit() {
-  local status=$?
-  if [[ ${status} -ne 0 ]]; then restore_storefront; fi
-  rm -rf "${RELEASE_STAGE}" 2>/dev/null || true
-  exit ${status}
-}
-trap on_exit EXIT
 
 echo "Building the storefront (heap limit ${BUILD_MEMORY_MB} MB)..."
 rm -rf "${STOREFRONT_PREVIOUS}"
@@ -252,6 +320,7 @@ if [[ -d "${API_ROOT}/dist" ]]; then mv "${API_ROOT}/dist" "${RELEASE_PREVIOUS}/
 if [[ -d "${API_ROOT}/drizzle" ]]; then mv "${API_ROOT}/drizzle" "${RELEASE_PREVIOUS}/drizzle"; fi
 mv "${RELEASE_STAGE}/dist" "${API_ROOT}/dist"
 mv "${RELEASE_STAGE}/drizzle" "${API_ROOT}/drizzle"
+SWAPPED=1
 # The API reads this from the app's folder (/health reports it).
 build_record > "${APP_ROOT}/.healthfield-build.json"
 STOREFRONT_REPLACED=0
@@ -270,4 +339,20 @@ touch "${APP_ROOT}/tmp/restart.txt"
 
 echo "Deployed ${DEPLOY_SHORT_COMMIT} at ${COMPLETED_AT}."
 echo "  App: ${APP_ROOT} (previous API release in ${RELEASE_PREVIOUS}, previous storefront build in ${STOREFRONT_PREVIOUS})"
-echo "If the app does not come back by itself, start it from cPanel > Setup Node.js App, then check /health."
+
+# Ask the live site rather than leaving that to the person reading this log. Passenger starts the app on
+# the first request after the restart file was touched, so this is also what brings it back.
+echo "Checking the running site (${SITE_URL}/health)..."
+verify_site "${DEPLOY_COMMIT}"
+case $? in
+  0) echo "VERIFIED: the site is running ${DEPLOY_SHORT_COMMIT}. Deploy completed." ;;
+  2) echo "Deploy completed, but curl is not available to check the site. Open ${SITE_URL}/health and look for ${DEPLOY_SHORT_COMMIT}." ;;
+  *)
+    if [[ -n "${SITE_RUNNING}" ]]; then
+      REPORTED=1
+      echo "deploy: the site answers but still reports ${SITE_RUNNING:0:7}, not ${DEPLOY_SHORT_COMMIT}. Restart the app from cPanel > Setup Node.js App, then open ${SITE_URL}/health." >&2
+      exit 1
+    fi
+    echo "WARNING: the new version is in place but the site did not answer within ${VERIFY_SECONDS} seconds. Start the app from cPanel > Setup Node.js App, then open ${SITE_URL}/health and look for ${DEPLOY_SHORT_COMMIT}." >&2
+    ;;
+esac
