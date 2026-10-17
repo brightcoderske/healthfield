@@ -33,7 +33,7 @@
     "test:prescription-files": "node --experimental-strip-types --test api-service/src/prescription-files.test.ts",
     "smoke:api": "node scripts/smoke-api.mjs",
     "start": "node server.cjs",
-    "test": "npm run test:two-factor && npm run test:email-verification && npm run test:mpesa && npm run test:prescriptions && npm run test:permissions && npm run test:consultations && npm run test:dispensing && npm run test:delivery && npm run test:checkout-token && npm run test:sms-templates && npm run test:notification-events && npm run test:campaign-merge && npm run test:editor-drafts && npm run test:vat && npm run test:thermal-receipt && npm run test:profit && npm run test:pos && npm run test:prescription-files && npm run test:offers && npm run test:catalogue && npm run test:cache && npm run test:featured && npm run test:variants && npm run test:search && npm run test:richtext && npm run test:merchant-feed && npm run test:product-images && npm run build && npm run check:api && npm run build:api && npm run smoke:api",
+    "test": "npm run test:two-factor && npm run test:email-verification && npm run test:mpesa && npm run test:prescriptions && npm run test:permissions && npm run test:consultations && npm run test:dispensing && npm run test:delivery && npm run test:checkout-token && npm run test:sms-templates && npm run test:notification-events && npm run test:campaign-merge && npm run test:editor-drafts && npm run test:vat && npm run test:thermal-receipt && npm run test:profit && npm run test:pos && npm run test:prescription-files && npm run test:offers && npm run test:catalogue && npm run test:cache && npm run test:featured && npm run test:variants && npm run test:search && npm run test:richtext && npm run test:merchant-feed && npm run test:product-images && npm run test:storefront-url && npm run build && npm run check:api && npm run build:api && npm run smoke:api",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -51,7 +51,8 @@
     "test:search": "node --experimental-strip-types --test lib/search-rank.test.ts",
     "test:richtext": "node --experimental-strip-types --test lib/rich-text-safety.test.ts",
     "test:merchant-feed": "node --experimental-strip-types --test lib/google-merchant-feed.test.ts",
-    "test:product-images": "node --experimental-strip-types --test lib/product-image.test.ts api-service/src/product-images.test.ts"
+    "test:product-images": "node --experimental-strip-types --test lib/product-image.test.ts api-service/src/product-images.test.ts",
+    "test:storefront-url": "node --experimental-strip-types --test lib/storefront-url.test.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

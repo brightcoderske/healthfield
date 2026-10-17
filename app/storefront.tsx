@@ -41,6 +41,8 @@ import {
 } from "./catalogue-interruption";
 import { planBreaks, ROWS_BETWEEN_BREAKS } from "@/lib/catalogue-breaks";
 import { useGridColumns } from "./use-grid-columns";
+import { useCatalogueRestore } from "./use-catalogue-restore";
+import { readStorefrontFilters, writeStorefrontFilters } from "@/lib/storefront-url";
 
 type CatalogProduct = {
   id: number;
@@ -227,14 +229,23 @@ export function Storefront({
   promotions?: Promotion[];
   layoutSeed?: number;
 }) {
-  const [query, setQuery] = useState(initialQuery);
+  // The address bar is what this page trusts when it starts, not the props the server rendered with.
+  // Back from a product brings this page up from the browser's memory with its original props (no
+  // search, no filter) while the address bar still says what the shopper was looking at. On the
+  // server there is no address bar, so the props are used; on a first load the two agree.
+  const [startFilters] = useState(() =>
+    typeof window === "undefined"
+      ? { query: initialQuery, categoryId: initialCategoryId, conditionId: initialConditionId }
+      : readStorefrontFilters(window.location.search, initialCategories, initialConditions),
+  );
+  const [query, setQuery] = useState(startFilters.query);
   const [cart, setCart] = useState<Record<number, number>>(initialCart);
   const [wishlist] = useState<number[]>(initialWishlist);
   const [selectedCategory, setSelectedCategory] = useState<number | null>(
-    initialCategoryId,
+    startFilters.categoryId,
   );
   const [selectedCondition, setSelectedCondition] = useState<number | null>(
-    initialConditionId,
+    startFilters.conditionId,
   );
   const [conditionQuery, setConditionQuery] = useState("");
   const [categoryQuery, setCategoryQuery] = useState("");
@@ -248,6 +259,8 @@ export function Storefront({
     products: CatalogProduct[];
   } | null>(null);
   const [visibleCount, setVisibleCount] = useState(PRODUCT_INITIAL_SIZE);
+  // Back from a product returns to the same place in the same list, not the top of a fresh one.
+  useCatalogueRestore(visibleCount, setVisibleCount);
   const [searchResults, setSearchResults] = useState<
     (SearchPayload & { term: string }) | null
   >(null);
@@ -652,17 +665,20 @@ export function Storefront({
     scheduleSearchResultsScroll();
   }
   // Kept in the address bar — not pushed through the router, which would re-fetch this
-  // force-dynamic page on every keystroke — purely so the entry the Back button lands on
-  // already carries the search that was running, instead of a blank one.
+  // force-dynamic page on every keystroke — so the entry the Back button lands on carries the search
+  // or the category or condition that was showing. The page reads them back when it starts (see
+  // startFilters), which is what makes Back return to the results instead of the home page.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const trimmed = query.trim();
-    if (trimmed) params.set("q", trimmed);
-    else params.delete("q");
-    const search = params.toString();
+    const search = writeStorefrontFilters(window.location.search, {
+      query,
+      categorySlug: initialCategories.find((category) => category.id === selectedCategory)?.slug ?? null,
+      conditionSlug: initialConditions.find((condition) => condition.id === selectedCondition)?.slug ?? null,
+    });
     const url = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
-    window.history.replaceState(window.history.state, "", url);
-  }, [query]);
+    if (url !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(window.history.state, "", url);
+    }
+  }, [query, selectedCategory, selectedCondition, initialCategories, initialConditions]);
   useEffect(() => {
     if (!openMenu) return;
     const dismiss = (event: Event) => {
