@@ -1,0 +1,65 @@
+/* Prescription document viewer (app/admin/prescriptions/zoomable-document.tsx).
+
+   The picture zooms inside its own frame, so the page is never pinch-zoomed and the reviewer can
+   always get back out. touch-action:none on the picture's frame is what hands pinches and drags to
+   the viewer instead of the browser; a PDF keeps the browser's own handling. */
+
+.prescription-workflow-document > .zoom-document { min-height: 0; flex: 1; padding: 0; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+.zoom-document-frame { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.zoom-document-frame.is-image { touch-action: none; cursor: zoom-in; user-select: none; -webkit-user-select: none; }
+.zoom-document-frame.is-image.is-zoomed { cursor: grab; }
+.zoom-document-frame.is-image.is-zoomed:active { cursor: grabbing; }
+.zoom-document-frame img {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  display: block;
+  object-fit: contain;
+  transform-origin: 0 0;
+  box-shadow: none;
+  -webkit-user-drag: none;
+}
+.zoom-document-frame iframe { width: 100%; height: 100%; min-height: 0; border: 0; background: #fff; }
+
+.zoom-document-tools {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(20, 10, 25, 0.78);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+.zoom-document-tools button {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  color: #fff;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.zoom-document-tools button:disabled { opacity: 0.38; cursor: default; }
+.zoom-document-tools button svg { width: 15px; height: 15px; }
+.zoom-document-tools output { min-width: 42px; color: #fff; font-size: 11px; font-weight: 800; text-align: center; }
+
+/* Full screen: the whole window for the document, above the review sheet. */
+.zoom-document.is-expanded { position: fixed; inset: 0; z-index: 3000; background: #1b1020; }
+.zoom-document.is-expanded .zoom-document-tools { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); }
+
+@media (max-width: 560px) {
+  /* Fit and Full screen keep their words; the percentage is the first thing to go on a narrow phone. */
+  .zoom-document-tools output { display: none; }
+}
