@@ -69,6 +69,11 @@ export type OutboxOptions = {
   /** How long a worker may hold a job before another may take it. */
   leaseMs?: number;
   batchSize?: number;
+  /**
+   * A message delivered more than this long after it was queued is logged as late, with how late it
+   * was and after how many tries, so a delay a customer noticed can be traced to its cause.
+   */
+  lateAfterMs?: number;
   clock?: () => number;
   log?: (message: string, detail?: Record<string, unknown>) => void;
 };
@@ -122,6 +127,7 @@ export class Outbox {
   maxAgeMs: number;
   leaseMs: number;
   batchSize: number;
+  lateAfterMs: number;
   clock: () => number;
   log: (message: string, detail?: Record<string, unknown>) => void;
   running: boolean;
@@ -137,6 +143,7 @@ export class Outbox {
     this.maxAgeMs = options.maxAgeMs ?? 6 * 60 * 60_000;
     this.leaseMs = options.leaseMs ?? 60_000;
     this.batchSize = options.batchSize ?? 10;
+    this.lateAfterMs = options.lateAfterMs ?? 2 * 60_000;
     this.clock = options.clock ?? Date.now;
     this.log = options.log ?? (() => undefined);
     this.running = false;
@@ -213,6 +220,10 @@ export class Outbox {
     if (outcome.result === "delivered") {
       await storage.complete(job);
       tally.delivered += 1;
+      const waitedMs = now - job.createdAt;
+      if (waitedMs > this.lateAfterMs) {
+        this.log("sent a message late", { kind: job.kind, minutesAfterQueued: Math.round(waitedMs / 60_000), failedTriesBefore: job.attempts });
+      }
     } else if (outcome.result === "skipped") {
       await storage.complete(job);
       tally.skipped += 1;

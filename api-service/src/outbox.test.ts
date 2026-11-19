@@ -151,3 +151,26 @@ test("an unknown kind of message is let go rather than retried for ever", async 
   await outbox.enqueue("email", {});
   assert.equal((await outbox.runOnce()).skipped, 1);
 });
+
+test("a message sent long after it was queued is logged as late, with how late and after how many tries", async () => {
+  const logged: Array<{ message: string; detail?: Record<string, unknown> }> = [];
+  const { sender } = scripted({ result: "delivered" });
+  const { time, outbox } = setup(sender, { log: (message, detail) => logged.push({ message, detail }) });
+  await outbox.enqueue("sms", { to: "0712000000" });
+  // Nothing ran the queue for 47 minutes: the app had been stopped by the host while idle.
+  time.advance(47 * 60_000);
+  assert.equal((await outbox.runOnce()).delivered, 1);
+  const late = logged.find((entry) => entry.message === "sent a message late");
+  assert.ok(late, "the late send is logged");
+  assert.deepEqual(late.detail, { kind: "sms", minutesAfterQueued: 47, failedTriesBefore: 0 });
+});
+
+test("a message sent promptly is not logged as late", async () => {
+  const logged: string[] = [];
+  const { sender } = scripted({ result: "delivered" });
+  const { time, outbox } = setup(sender, { log: (message) => logged.push(message) });
+  await outbox.enqueue("sms", { to: "0712000000" });
+  time.advance(20_000);
+  await outbox.runOnce();
+  assert.deepEqual(logged, []);
+});
