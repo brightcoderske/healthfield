@@ -65,3 +65,13 @@
 .rich-content a:hover{color:#7c2382}
 .rich-content mark{background:#fdf0b8;color:inherit;padding:0 3px;border-radius:3px}
 .blog-editor-body .rich-text-field{display:flex;flex-direction:column;gap:5px;font-size:10px;font-weight:800}
+
+/* Edit and Delete sit together in the row's last column (in the text column on a phone). */
+.blog-admin-list .blog-row-actions{min-width:0;display:flex;flex-direction:column;align-items:stretch;gap:6px}
+.blog-admin-list .blog-row-actions button{height:34px;padding:0 10px;border:1px solid #d9c9dd;border-radius:7px;color:#74247f;background:white;display:flex;align-items:center;justify-content:center;gap:5px;cursor:pointer}
+.blog-admin-list .blog-row-actions button svg{width:14px}
+.blog-admin-list .blog-row-actions .blog-row-delete{border-color:#f0c9d2;color:#a3213d}
+.blog-admin-list .blog-row-actions .blog-row-delete:hover{background:#fdeef1}
+.blog-admin-list .blog-row-actions button:disabled{opacity:.55;cursor:default}
+.blog-list-message{margin:14px 0 0}
+@media(max-width:760px){.blog-admin-list .blog-row-actions{grid-column:2;flex-direction:row;width:max-content}}

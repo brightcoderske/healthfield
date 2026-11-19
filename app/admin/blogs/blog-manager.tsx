@@ -1,6 +1,6 @@
-"use client";import{ArrowLeft,BookOpen,ImagePlus,Pencil,Plus,Save,X}from"lucide-react";import{ChangeEvent,FormEvent,useState}from"react";import{useModalViewport}from"@/app/admin/use-modal-viewport";import{RichTextEditor}from"@/app/admin/products/rich-text-editor";import{BlogProductPicker,type PickerProduct}from"./blog-product-picker";type Post={id:number;title:string;excerpt:string;content:string;imageUrl:string|null;metaTitle:string|null;metaDescription:string|null;isPublished:boolean;category?:string|null;productIds?:number[]};const blank:Post={id:0,title:"",excerpt:"",content:"",imageUrl:null,metaTitle:null,metaDescription:null,isPublished:false,category:"",productIds:[]};
+"use client";import{ArrowLeft,BookOpen,ImagePlus,Pencil,Plus,Save,Trash2,X}from"lucide-react";import{ChangeEvent,FormEvent,useState}from"react";import{useModalViewport}from"@/app/admin/use-modal-viewport";import{RichTextEditor}from"@/app/admin/products/rich-text-editor";import{BlogProductPicker,type PickerProduct}from"./blog-product-picker";type Post={id:number;title:string;excerpt:string;content:string;imageUrl:string|null;metaTitle:string|null;metaDescription:string|null;isPublished:boolean;category?:string|null;productIds?:number[]};const blank:Post={id:0,title:"",excerpt:"",content:"",imageUrl:null,metaTitle:null,metaDescription:null,isPublished:false,category:"",productIds:[]};
 // Topics offered in the editor; they become the badges and filters on the blog index.
-const blogCategories=["Health Tips","Medicines","Nutrition","Mental Health","Parenting","Lifestyle"];export function BlogManager({initial,products=[],backHref="/admin"}:{initial:Post[];products?:PickerProduct[];backHref?:string}){const[editing,setEditing]=useState<Post|null>(null),[imageFile,setImageFile]=useState<File|null>(null),[preview,setPreview]=useState(""),[message,setMessage]=useState(""),[saving,setSaving]=useState(false),[failed,setFailed]=useState(false),[dirty,setDirty]=useState(false),[tagged,setTagged]=useState<number[]>([]);
+const blogCategories=["Health Tips","Medicines","Nutrition","Mental Health","Parenting","Lifestyle"];export function BlogManager({initial,products=[],backHref="/admin"}:{initial:Post[];products?:PickerProduct[];backHref?:string}){const[editing,setEditing]=useState<Post|null>(null),[imageFile,setImageFile]=useState<File|null>(null),[preview,setPreview]=useState(""),[message,setMessage]=useState(""),[saving,setSaving]=useState(false),[failed,setFailed]=useState(false),[dirty,setDirty]=useState(false),[tagged,setTagged]=useState<number[]>([]),[posts,setPosts]=useState<Post[]>(initial),[deletingId,setDeletingId]=useState<number|null>(null),[listNote,setListNote]=useState<{text:string;error:boolean}|null>(null);
 // Sizes the sheet to what the phone is actually showing, keyboard included, and keeps
 // the focused field above it.
 useModalViewport(Boolean(editing));
@@ -8,6 +8,24 @@ function open(post:Post){setEditing(post);setImageFile(null);setPreview(post.ima
 // A tap on the backdrop is easy to make by accident on a phone, and used to throw the
 // article away without a word.
 function close(){if(saving)return;if(dirty&&!window.confirm("Close this article without saving? Your changes will be lost."))return;setEditing(null);setDirty(false);setFailed(false);setMessage("")}
+// Deleting is for good: the article leaves the blog and the shop, and links to it stop working, so
+// the confirmation names it. Unpublishing (untick "Publish article") is the way to hide one for now.
+async function remove(post:Post){
+  if(deletingId!==null)return;
+  if(!window.confirm(`Delete "${post.title||"Untitled article"}" for good?\n\nIt disappears from the blog, and any links to it stop working. This cannot be undone. To hide it for now instead, edit it and untick Publish.`))return;
+  setDeletingId(post.id);setListNote(null);
+  try{
+    const response=await fetch(`/api/blogs/${post.id}`,{method:"DELETE",signal:AbortSignal.timeout(30_000)});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok){setListNote({text:data.error||"The article could not be deleted.",error:true});return}
+    setPosts(items=>items.filter(item=>item.id!==post.id));
+    setListNote({text:`"${post.title||"Untitled article"}" was deleted.`,error:false});
+  }catch{
+    setListNote({text:"Could not reach the server, so nothing was deleted. Try again.",error:true});
+  }finally{
+    setDeletingId(null);
+  }
+}
 function fail(text:string){setFailed(true);setMessage(text);return undefined}function image(event:ChangeEvent<HTMLInputElement>){const file=event.target.files?.[0]||null;if(file&&file.size>2*1024*1024){event.target.value="";return fail("Article images must be 2 MB or smaller.")}setImageFile(file);if(file)setPreview(URL.createObjectURL(file))}async function submit(event:FormEvent<HTMLFormElement>){
   event.preventDefault();
   if(!editing)return;
@@ -39,7 +57,7 @@ function fail(text:string){setFailed(true);setMessage(text);return undefined}fun
   }finally{
     setSaving(false);
   }
-}return <main className="blog-admin polished-blog-admin"><header><div><a href={backHref}><ArrowLeft/> Dashboard</a><span><BookOpen/><div><h1>Blog articles</h1><p>Create formatted, searchable health articles. SEO is generated automatically from the title and summary.</p></div></span></div><button onClick={()=>open(blank)}><Plus/> New article</button></header><section className="blog-admin-list">{initial.map(item=><article key={item.id}>{item.imageUrl?<img src={item.imageUrl} alt=""/>:<span className="blog-image-placeholder"><BookOpen/></span>}<div><small className={item.isPublished?"published":"draft"}>{item.isPublished?"Published":"Draft"}</small><strong>{item.title}</strong><p>{item.excerpt}</p></div><button onClick={()=>open(item)}><Pencil/> Edit</button></article>)}</section>{editing&&<div className="blog-modal" onClick={close}><form className="blog-editor polished-blog-editor" onSubmit={submit} onInput={()=>setDirty(true)} onInvalidCapture={event=>{
+}return <main className="blog-admin polished-blog-admin"><header><div><a href={backHref}><ArrowLeft/> Dashboard</a><span><BookOpen/><div><h1>Blog articles</h1><p>Create formatted, searchable health articles. SEO is generated automatically from the title and summary.</p></div></span></div><button onClick={()=>open(blank)}><Plus/> New article</button></header>{listNote&&<div className={listNote.error?"blog-save-message blog-list-message is-error":"blog-save-message blog-list-message"} role="status">{listNote.text}</div>}<section className="blog-admin-list">{posts.map(item=><article key={item.id}>{item.imageUrl?<img src={item.imageUrl} alt=""/>:<span className="blog-image-placeholder"><BookOpen/></span>}<div><small className={item.isPublished?"published":"draft"}>{item.isPublished?"Published":"Draft"}</small><strong>{item.title}</strong><p>{item.excerpt}</p></div><div className="blog-row-actions"><button type="button" onClick={()=>open(item)}><Pencil/> Edit</button><button type="button" className="blog-row-delete" onClick={()=>remove(item)} disabled={deletingId!==null} aria-label={`Delete ${item.title}`}><Trash2/> {deletingId===item.id?"Deleting…":"Delete"}</button></div></article>)}</section>{editing&&<div className="blog-modal" onClick={close}><form className="blog-editor polished-blog-editor" onSubmit={submit} onInput={()=>setDirty(true)} onInvalidCapture={event=>{
       // A required field the browser refuses to submit is often off screen on a phone,
       // so the press on Save looked like it did nothing at all.
       const field=event.target as HTMLElement;

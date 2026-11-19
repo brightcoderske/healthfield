@@ -27,6 +27,7 @@ import "./product-grid.css";
 import "./offers-ui.css";
 import "./catalogue-breaks.css";
 import "./document-zoom.css";
+import "./home-blogs.css";
 import "./blog-index.css";
 import "./thermal-receipt.css";
 import "./consultations-ui.css";

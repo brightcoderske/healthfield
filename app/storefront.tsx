@@ -42,6 +42,7 @@ import {
 import { planBreaks, ROWS_BETWEEN_BREAKS } from "@/lib/catalogue-breaks";
 import { useGridColumns } from "./use-grid-columns";
 import { useCatalogueRestore } from "./use-catalogue-restore";
+import { HomeBlogGrid } from "./home-blog-grid";
 import { readStorefrontFilters, writeStorefrontFilters } from "@/lib/storefront-url";
 
 type CatalogProduct = {
@@ -1665,6 +1666,12 @@ export function Storefront({
             </section>
           )}
         </section>
+
+        {/* A few articles after the products, on the plain homepage only: a shopper searching or
+            filtering is after a product, not reading. */}
+        {!normalizedQuery && !selectedCategory && !selectedCondition && !offersOnly && (
+          <HomeBlogGrid guides={guides} />
+        )}
       </main>
 
       <nav className="approved-nav">
