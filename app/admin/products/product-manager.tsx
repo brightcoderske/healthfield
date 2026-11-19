@@ -29,7 +29,10 @@ const PAGE_SIZE = 25;
 const FEATURED_FILTER_KEY = "healthfield-admin-products-featured-filter";
 const PRESCRIPTION_FILTER_KEY = "healthfield-admin-products-prescription-filter";
 
-export function ProductManager({ initialProducts, categories, conditions, branches = [], stock = [], canEditCost = false }: { branches?: Array<{id:number;name:string}>; stock?: Array<{branchId:number;productId:number;quantityAvailable:number;reorderLevel:number}>; initialProducts: Product[]; categories: Option[]; conditions: Option[]; canEditCost?: boolean }) {
+// Also the staff product editor (/staff/products, PRODUCTS_MANAGE): there it is given no shops, so the
+// stock section is not drawn, canEditCost stays false, and canDelete is false because deleting a
+// product stays with administrators. The API enforces the same limits; these only decide what is drawn.
+export function ProductManager({ initialProducts, categories, conditions, branches = [], stock = [], canEditCost = false, canDelete = true, backHref = "/admin" }: { branches?: Array<{id:number;name:string}>; stock?: Array<{branchId:number;productId:number;quantityAvailable:number;reorderLevel:number}>; initialProducts: Product[]; categories: Option[]; conditions: Option[]; canEditCost?: boolean; canDelete?: boolean; backHref?: string }) {
   const [items, setItems] = useState(initialProducts);
   // Optional: a product saves perfectly well without anyone touching stock here.
   const formRef = useRef<HTMLFormElement>(null);
@@ -463,7 +466,7 @@ Continue?`,
     if (new URLSearchParams(window.location.search).get("new") === "1") openEditor("new");
   }, []);
   return <main className="compact-admin-page">
-    <header><div><a href="/admin"><ArrowLeft/> Dashboard</a><h1>Products</h1></div><div className="product-header-actions">{canEditCost ? <button type="button" className="bulk-open" onClick={() => (bulk ? closeBulk.current?.() : setBulk(true))}><Table2/> {bulk ? "Close bulk edit" : "Bulk edit"}</button> : null}<button onClick={() => openEditor("new")}><Plus/> Add product</button></div></header>
+    <header><div><a href={backHref}><ArrowLeft/> Dashboard</a><h1>Products</h1></div><div className="product-header-actions">{canEditCost ? <button type="button" className="bulk-open" onClick={() => (bulk ? closeBulk.current?.() : setBulk(true))}><Table2/> {bulk ? "Close bulk edit" : "Bulk edit"}</button> : null}<button onClick={() => openEditor("new")}><Plus/> Add product</button></div></header>
     {bulk && canEditCost ? <BulkEditor
       products={items}
       categories={categories}
@@ -519,7 +522,7 @@ Continue?`,
             <span className="flag-cell">{isOption?null:flagSwitch(product,"searchOnly","Search-only")}</span>
             <span className="featured-cell">{isOption?null:<button type="button" className={`row-star${product.isFeatured?" is-on":""}`} disabled={savingId===product.id||(!product.isFeatured&&(!product.isActive||product.prescriptionRequired||Boolean(product.searchOnly)))} onClick={()=>toggleFeatured(product)} aria-pressed={product.isFeatured} title={!product.isActive&&!product.isFeatured?`${product.name} is not on sale, so it cannot be featured`:(product.prescriptionRequired||product.searchOnly)&&!product.isFeatured?`${product.name} is hidden from listings, so it cannot be featured`:product.isFeatured?`${product.name} is featured on the homepage`:`Feature ${product.name} on the homepage`} aria-label={product.isFeatured?`Remove ${product.name} from featured`:`Feature ${product.name}`}><Star/></button>}</span>
             <span className="active-cell">{flagSwitch(product,"isActive","Active")}<em className={product.isActive?"status-active":"status-inactive"}>{savingId===product.id?"Saving…":product.isActive?"Active":"Inactive"}</em></span>
-            <button className="row-delete" aria-label={`Delete ${product.name}`} disabled={savingId===product.id} onClick={()=>deleteProduct(product)}><Trash2/></button>
+            {canDelete ? <button className="row-delete" aria-label={`Delete ${product.name}`} disabled={savingId===product.id} onClick={()=>deleteProduct(product)}><Trash2/></button> : null}
           </div>;
         };
         if(!group.children.length) return optionRow(group.lead,false);
@@ -547,7 +550,7 @@ Continue?`,
             {/* Deleting the product would delete whichever option happens to be the row
                 that carries its history. Options are removed in the product's own
                 options table, which switches them off rather than destroying them. */}
-            <button className="row-delete" aria-label={`Delete ${group.lead.groupName||group.lead.name} and all its options`} title="Delete this product and all its options" disabled={savingId===group.lead.id} onClick={()=>deleteProduct(group.lead,true)}><Trash2/></button>
+            {canDelete ? <button className="row-delete" aria-label={`Delete ${group.lead.groupName||group.lead.name} and all its options`} title="Delete this product and all its options" disabled={savingId===group.lead.id} onClick={()=>deleteProduct(group.lead,true)}><Trash2/></button> : null}
           </div>
           {options.map((product)=>optionRow(product,true))}
         </Fragment>;

@@ -70,7 +70,9 @@ const STATUS_LABELS: Record<string, string> = {
   UNDELIVERED: "Not delivered",
 };
 
-export function SmsReports({ data }: { data: SmsReportData }) {
+// campaignsHref is null for someone who may read the reports but not send campaigns, so the
+// "New campaign" link is not offered to them.
+export function SmsReports({ data, backHref = "/admin", campaignsHref = "/admin/campaigns" }: { data: SmsReportData; backHref?: string; campaignsHref?: string | null }) {
   const messages = data.messages;
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState("");
@@ -102,7 +104,7 @@ export function SmsReports({ data }: { data: SmsReportData }) {
     <main className="compact-admin-page sms-admin">
       <header>
         <div>
-          <Link href="/admin">← Dashboard</Link>
+          <Link href={backHref}>← Dashboard</Link>
           <h1>Bulk SMS reports</h1>
           <p>
             Every message the system has sent, with what Celcom said about it. Credentials
@@ -143,8 +145,8 @@ export function SmsReports({ data }: { data: SmsReportData }) {
               : "Available once Celcom issues and approves your promotional sender ID."}
           </small>
         </div>
-        {data.configuration.promotionalSenderId ? (
-          <Link href="/admin/campaigns">New campaign</Link>
+        {!campaignsHref ? null : data.configuration.promotionalSenderId ? (
+          <Link href={campaignsHref}>New campaign</Link>
         ) : (
           <span className="sms-promo-locked"><Lock /> Awaiting sender ID</span>
         )}

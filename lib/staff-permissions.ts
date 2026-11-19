@@ -1,6 +1,7 @@
 export const STAFF_PERMISSION_VALUES = [
   "DASHBOARD_VIEW",
   "PRODUCTS_VIEW",
+  "PRODUCTS_MANAGE",
   "POS_USE",
   "ORDERS_VIEW",
   "ORDERS_PROCESS",
@@ -15,6 +16,8 @@ export const STAFF_PERMISSION_VALUES = [
   "INVENTORY_UPDATE",
   "OFFERS_MANAGE",
   "BLOGS_MANAGE",
+  "SMS_VIEW",
+  "CAMPAIGNS_MANAGE",
 ] as const;
 
 export type StaffPermission = typeof STAFF_PERMISSION_VALUES[number];
@@ -26,6 +29,7 @@ export const STAFF_PERMISSION_GROUPS: ReadonlyArray<{
   { label: "Overview and catalogue", permissions: [
     { value:"DASHBOARD_VIEW", label:"View dashboard", description:"Open the shop dashboard and shop-scoped reports." },
     { value:"PRODUCTS_VIEW", label:"View products", description:"Browse the active product catalogue and prices." },
+    { value:"PRODUCTS_MANAGE", label:"Manage products", description:"Add products and edit their details, prices, options and pictures. Buying prices and bulk editing stay with the owner, deleting a product stays with administrators, and stock is changed from Inventory." },
   ] },
   { label: "Sales and orders", permissions: [
     { value:"POS_USE", label:"Use point of sale (POS)", description:"Open cashier sessions and use sales, payments, held sales, expenses, stock receiving and session reports for the assigned shop." },
@@ -49,15 +53,27 @@ export const STAFF_PERMISSION_GROUPS: ReadonlyArray<{
     { value:"OFFERS_MANAGE", label:"Manage offers", description:"Create, edit, publish and remove product offers." },
     { value:"BLOGS_MANAGE", label:"Manage blogs", description:"Create, edit, publish and remove blog articles." },
   ] },
+  { label: "Customer messaging", permissions: [
+    { value:"SMS_VIEW", label:"View SMS reports", description:"Open the bulk SMS delivery reports and balance, and refresh delivery status." },
+    { value:"CAMPAIGNS_MANAGE", label:"Send campaigns", description:"Write and send email and SMS campaigns to customers. Each send reaches everyone in the chosen audience and uses SMS credit, so grant it sparingly." },
+  ] },
 ];
 
 // Existing staff keep their current operational access after migration. An owner can
 // then narrow each account deliberately without a surprise lockout during rollout.
-// Consultation permissions are deliberately absent: issuing a prescription is a
-// prescriber's act, so it is granted deliberately per account rather than handed to
-// every new staff member the way dispensing access is.
+// Some permissions are never handed out by default and are granted per account:
+//  - consultations, because issuing a prescription is a prescriber's act;
+//  - managing products, because it changes prices customers pay;
+//  - SMS reports and campaigns, because a campaign messages every customer and spends SMS credit.
+const GRANTED_DELIBERATELY: readonly StaffPermission[] = [
+  "CONSULTATIONS_VIEW",
+  "CONSULTATIONS_PROCESS",
+  "PRODUCTS_MANAGE",
+  "SMS_VIEW",
+  "CAMPAIGNS_MANAGE",
+];
 export const DEFAULT_STAFF_PERMISSIONS: readonly StaffPermission[] = STAFF_PERMISSION_VALUES.filter(
-  (permission) => permission !== "CONSULTATIONS_VIEW" && permission !== "CONSULTATIONS_PROCESS",
+  (permission) => !GRANTED_DELIBERATELY.includes(permission),
 );
 
 export const STAFF_PERMISSION_SET = new Set<string>(STAFF_PERMISSION_VALUES);
@@ -70,10 +86,21 @@ export function hasStaffPermission(role: string, permissions: readonly string[] 
   return role === "ADMIN" || role === "SUPER_ADMIN" || (role === "STAFF" && Boolean(permissions?.includes(permission)));
 }
 
+/** True when the account holds at least one of `required` (a single permission works too). */
+export function hasAnyStaffPermission(
+  role: string,
+  permissions: readonly string[] | undefined,
+  required: StaffPermission | readonly StaffPermission[],
+) {
+  const list: readonly StaffPermission[] = typeof required === "string" ? [required] : required;
+  return list.some((permission) => hasStaffPermission(role, permissions, permission));
+}
+
 export const STAFF_PERMISSION_PATHS: ReadonlyArray<{ permission: StaffPermission; href: string }> = [
   { permission:"DASHBOARD_VIEW", href:"/staff" },
   { permission:"POS_USE", href:"/staff/sales" },
   { permission:"PRODUCTS_VIEW", href:"/staff/products" },
+  { permission:"PRODUCTS_MANAGE", href:"/staff/products" },
   { permission:"INVENTORY_VIEW", href:"/staff/inventory" },
   { permission:"ORDERS_VIEW", href:"/staff/orders" },
   { permission:"PAST_ORDERS_VIEW", href:"/staff/past-orders" },
@@ -81,6 +108,8 @@ export const STAFF_PERMISSION_PATHS: ReadonlyArray<{ permission: StaffPermission
   { permission:"CONSULTATIONS_VIEW", href:"/staff/consultations" },
   { permission:"OFFERS_MANAGE", href:"/staff/offers" },
   { permission:"BLOGS_MANAGE", href:"/staff/blogs" },
+  { permission:"SMS_VIEW", href:"/staff/sms" },
+  { permission:"CAMPAIGNS_MANAGE", href:"/staff/campaigns" },
 ];
 
 export function firstStaffPath(role: string, permissions: readonly string[] | undefined) {

@@ -38,7 +38,7 @@ import { queueOrderSms, queueOrderStatusNotification, queuePaidOrderNotification
 import { reconcileManualPaymentFromIncoming, replayStoredStkCallback, requestKnownTransactionStatus } from "./payment-handlers";
 import { canGrantTeamRole, canManageTeamAccount } from "./staff-access-policy";
 import { secureHashEqual, twoFactorChallengeLifetimeMs, twoFactorCodeHash, twoFactorMaximumAttempts, twoFactorMaximumResends, twoFactorResendCooldownMs, twoFactorTiming } from "./two-factor";
-import { requireTeamPermission, sessionHasPermission } from "./staff-permissions";
+import { requireAnyTeamPermission, requireTeamPermission, sessionHasPermission } from "./staff-permissions";
 
 /**
  * VAT for an order the site prices itself. Shelf prices are net, so the tax is added to
@@ -1165,7 +1165,7 @@ const variantRowSchema = z.object({
  */
 export async function handleProductVariants(request: Request, id: number) {
   if (request.method !== "PUT") return json({ error: "Method not allowed." }, { status: 405 });
-  const auth = await requireSession(request, [...admins]);
+  const auth = await requireTeamPermission(request, "PRODUCTS_MANAGE");
   if ("response" in auth) return auth.response;
   const parsed = z
     .object({ optionName: z.string().trim().max(40).optional(), variants: z.array(variantRowSchema).max(40) })
@@ -1181,6 +1181,8 @@ export async function handleProductVariants(request: Request, id: number) {
   // column, and hiding the field in the browser would not have stopped a crafted request.
   const ownerOnly = auth.session.role === "SUPER_ADMIN";
   if (!ownerOnly) for (const row of parsed.data.variants) row.costPrice = undefined;
+  // Stock for staff is changed from Inventory, limited to their own shop, never from here.
+  if (auth.session.role === "STAFF") for (const row of parsed.data.variants) row.stock = undefined;
   const [target] = await db.select().from(products).where(eq(products.id, id)).limit(1);
   if (!target) return json({ error: "Product not found." }, { status: 404 });
   // Options belong to the lead. Calling this on a sibling edits the whole list, which is
@@ -1320,8 +1322,12 @@ export async function handleProducts(request: Request, id?: number) {
   if (request.method === "GET" && !id) {
     return json({ products: (await db.select().from(products).where(eq(products.isActive, true)).orderBy(desc(products.isFeatured), desc(products.createdAt))).map((product) => ({ ...product, imageUrl: publicImageUrl(product.imageUrl) })) }, { headers: { "Cache-Control": "public, max-age=60" } });
   }
-  const auth = await requireSession(request, [...admins]);
+  // Administrators, and staff granted PRODUCTS_MANAGE. Staff product managers edit the catalogue only:
+  // buying prices stay with the owner (below), deleting stays with administrators, and stock is left
+  // to Inventory, where a staff member's rights are limited to their own shop.
+  const auth = await requireTeamPermission(request, "PRODUCTS_MANAGE");
   if ("response" in auth) return auth.response;
+  const administrator = auth.session.role === "ADMIN" || auth.session.role === "SUPER_ADMIN";
   if (request.method === "POST" && !id) {
     const parsed = productSchema.safeParse(await body(request));
     if (!parsed.success) {
@@ -1355,7 +1361,7 @@ export async function handleProducts(request: Request, id?: number) {
       if (values.conditionIds.length) await tx.insert(productHealthConditions).values(values.conditionIds.map((conditionId) => ({ productId: record.insertId, conditionId })));
       const stores = await tx.select({ id: branches.id }).from(branches).where(eq(branches.isActive, true));
       if (stores.length) await tx.insert(branchInventory).values(stores.map((store) => ({ branchId: store.id, productId: record.insertId, quantityAvailable: 0, quantityReserved: 0, reorderLevel: 5, updatedBy: auth.session.userId })));
-      await applyProductStock(tx, record.insertId, auth.session.userId, values.stock);
+      await applyProductStock(tx, record.insertId, auth.session.userId, administrator ? values.stock : undefined);
       return record;
     });
     return json({ ok: true, id: created.insertId, sku: generatedSku, unfeatured: evicted }, { status: 201 });
@@ -1366,6 +1372,7 @@ export async function handleProducts(request: Request, id?: number) {
   }
   if (!id || !Number.isInteger(id)) return json({ error: "Invalid product." }, { status: 400 });
   if (request.method === "DELETE") {
+    if (!administrator) return json({ error: "Only an administrator can delete a product. Switch it off instead, so it stops showing in the shop." }, { status: 403 });
     const url = new URL(request.url);
     const group = await productGroupOf(db, id);
     if (!group) return json({ error: "That product no longer exists." }, { status: 404 });
@@ -1448,7 +1455,7 @@ export async function handleProducts(request: Request, id?: number) {
       // that cannot be shown never holds a place on the shelf.
       const losesStar = parsed.data.isActive === false || parsed.data.prescriptionRequired === true || parsed.data.searchOnly === true;
       evicted = await applyFeatured(tx, id, losesStar ? false : isFeatured);
-      await applyProductStock(tx, id, auth.session.userId, stock);
+      await applyProductStock(tx, id, auth.session.userId, administrator ? stock : undefined);
       if (renameTo) {
         // The label-free title on every option, and each option's full name rebuilt from it.
         for (const row of group.rows) {
@@ -1808,7 +1815,8 @@ async function optimizeProductImage(bytes: Buffer<ArrayBufferLike>, type: string
 }
 
 async function handleImageUpload(request: Request, kind: "product" | "promotion") {
-  const auth = kind === "product" ? await requireTeamPermission(request, "BLOGS_MANAGE") : await requireSession(request, [...admins], true);
+  // Product pictures and blog pictures share this upload, so either permission is enough.
+  const auth = kind === "product" ? await requireAnyTeamPermission(request, ["PRODUCTS_MANAGE", "BLOGS_MANAGE"]) : await requireSession(request, [...admins], true);
   if ("response" in auth) return auth.response;
   const form = await request.formData();
   const image = form.get("image");
@@ -2411,7 +2419,7 @@ function safeName<T extends { firstName?: string | null; lastName?: string | nul
 }
 
 export async function handleCampaigns(request: Request) {
-  const auth = await requireSession(request, [...admins]);
+  const auth = await requireTeamPermission(request, "CAMPAIGNS_MANAGE");
   if ("response" in auth) return auth.response;
   const parsed = z.object({ name:z.string().trim().min(2).max(180),channel:z.enum(["EMAIL","SMS","EMAIL_AND_SMS"]),subject:z.string().trim().max(220).optional().default(""),message:z.string().trim().min(2).max(3000),audience:z.enum(["MARKETING_CUSTOMERS","ORDER_CUSTOMERS","ALL_CONTACTS"]).default("MARKETING_CUSTOMERS"),lookbackDays:z.coerce.number().int().min(0).max(3650).default(0) }).safeParse(await body(request));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message || "Invalid campaign." }, { status: 400 });

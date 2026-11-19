@@ -18,7 +18,7 @@ type Campaign = {
   createdAt: string;
 };
 
-export function CampaignManager({ initialCampaigns, insertables }: { initialCampaigns: Campaign[]; insertables?: CampaignInsertables }) {
+export function CampaignManager({ initialCampaigns, insertables, backHref = "/admin" }: { initialCampaigns: Campaign[]; insertables?: CampaignInsertables; backHref?: string }) {
   const [campaigns, setCampaigns] = useState(initialCampaigns);
   const [message, setMessage] = useState("");
   const [body, setBody] = useState("");
@@ -78,7 +78,7 @@ export function CampaignManager({ initialCampaigns, insertables }: { initialCamp
 
   return (
     <main className="campaign-page">
-      <header><a href="/admin">← Dashboard</a><span><MessageSquareText /><div><h1>Customer campaigns</h1></div></span></header>
+      <header><a href={backHref}>← Dashboard</a><span><MessageSquareText /><div><h1>Customer campaigns</h1></div></span></header>
       <div className="campaign-layout">
         <form onSubmit={submit}>
           <h2>Create campaign</h2>

@@ -1007,6 +1007,99 @@ async function cachedCounts<T>(key: string, build: () => Promise<T>): Promise<T>
   return (await cache.remember(`counts:${version}:${key}`, 10, build)).value;
 }
 
+/**
+ * What the product editor needs: the whole catalogue with its health conditions, the categories and
+ * conditions to choose from, and (for administrators) the shops and stock for the optional stock line.
+ *
+ * Shared by the admin products screen and the staff one (PRODUCTS_MANAGE). Buying prices leave the
+ * server only when showsCost is set, for the owner; hiding the field in the browser would still have
+ * shipped the figure to it. withStock is off for staff, who change stock from Inventory for their own shop.
+ */
+async function productEditorView({ showsCost, withStock }: { showsCost: boolean; withStock: boolean }) {
+  const db = getDb();
+  const [catalog, categoryRows, conditions, mappings, branchRows, stockRows] = await Promise.all([
+    db.select().from(products).orderBy(desc(products.createdAt)),
+    db
+      .select()
+      .from(categories)
+      .where(eq(categories.isActive, true))
+      .orderBy(asc(categories.displayOrder)),
+    db
+      .select()
+      .from(healthConditions)
+      .where(eq(healthConditions.isActive, true))
+      .orderBy(asc(healthConditions.displayOrder)),
+    db.select().from(productHealthConditions),
+    // The modal offers an optional stock line, so it needs the shops to choose from
+    // and whatever is already recorded for the product being edited.
+    withStock
+      ? db.select({ id: branches.id, name: branches.name }).from(branches).where(eq(branches.isActive, true)).orderBy(asc(branches.name))
+      : Promise.resolve([] as Array<{ id: number; name: string }>),
+    withStock
+      ? db.select({ id: branchInventory.id, branchId: branchInventory.branchId, productId: branchInventory.productId, quantityAvailable: branchInventory.quantityAvailable, quantityReserved: branchInventory.quantityReserved, reorderLevel: branchInventory.reorderLevel }).from(branchInventory)
+      : Promise.resolve([] as Array<{ id: number; branchId: number; productId: number; quantityAvailable: number; quantityReserved: number; reorderLevel: number }>),
+  ]);
+  return {
+    branches: branchRows,
+    stock: stockRows,
+    canEditCost: showsCost,
+    products: catalog.map((product) => ({
+      ...product,
+      costPrice: showsCost ? product.costPrice : null,
+      costPriceEstimated: showsCost ? product.costPriceEstimated : false,
+      imageUrl: publicImageUrl(product.imageUrl),
+      price: Number(product.price),
+      discountPrice: product.discountPrice
+        ? Number(product.discountPrice)
+        : null,
+      conditionIds: mappings
+        .filter((mapping) => mapping.productId === product.id)
+        .map((mapping) => mapping.conditionId),
+    })),
+    categories: categoryRows,
+    conditions,
+  };
+}
+
+/**
+ * The campaign list and what the composer can insert. Shared by the admin campaigns screen and the
+ * staff one (CAMPAIGNS_MANAGE).
+ *
+ * The composer offers products, offers and blogs as insertable blocks, so the pickers need something
+ * to list. Only live items: a campaign must never link a customer to a deactivated product or an
+ * unpublished draft.
+ */
+async function campaignComposerView() {
+  const db = getDb();
+  const [campaignRows, productRows, offerRows, blogRows] = await Promise.all([
+    db.select().from(campaigns).orderBy(desc(campaigns.createdAt)).limit(60),
+    db.select({ id: products.id, name: products.name }).from(products).where(eq(products.isActive, true)).orderBy(asc(products.name)).limit(300),
+    db.select({ id: offers.id, title: offers.title }).from(offers).where(eq(offers.isActive, true)).orderBy(desc(offers.id)).limit(100),
+    db.select({ id: blogPosts.id, title: blogPosts.title }).from(blogPosts).where(isNotNull(blogPosts.publishedAt)).orderBy(desc(blogPosts.publishedAt)).limit(100),
+  ]);
+  return {
+    campaigns: campaignRows,
+    insertables: {
+      products: productRows,
+      offers: offerRows.map((row) => ({ id: row.id, name: row.title })),
+      blogs: blogRows.map((row) => ({ id: row.id, name: row.title })),
+    },
+  };
+}
+
+/** The bulk SMS report and balance. Shared by the admin SMS screen and the staff one (SMS_VIEW). */
+async function smsReportView() {
+  const [report, balance] = await Promise.all([smsReport(200), smsBalance()]);
+  return {
+    ...report,
+    configuration: smsConfigurationSummary(),
+    // Whatever Celcom returns is passed through untouched: their balance payload is
+    // not documented field by field, and guessing a shape would show a wrong number.
+    balance,
+    topUpUrl: smsTopUpUrl(),
+  };
+}
+
 export async function handleView(request: Request, path: string) {
   const url = new URL(request.url);
   if (path === "walk-in-sale") return posWorkspaceState(request);
@@ -2049,25 +2142,7 @@ export async function handleView(request: Request, path: string) {
     }
     if (view === "prescriptions") return json(await prescriptionQueue());
     if (view === "consultations") return json(await consultationQueue());
-    if (view === "campaigns") {
-      // The composer offers products, offers and blogs as insertable blocks, so the
-      // pickers need something to list. Only live items: a campaign must never link a
-      // customer to a deactivated product or an unpublished draft.
-      const [campaignRows, productRows, offerRows, blogRows] = await Promise.all([
-        db.select().from(campaigns).orderBy(desc(campaigns.createdAt)).limit(60),
-        db.select({ id: products.id, name: products.name }).from(products).where(eq(products.isActive, true)).orderBy(asc(products.name)).limit(300),
-        db.select({ id: offers.id, title: offers.title }).from(offers).where(eq(offers.isActive, true)).orderBy(desc(offers.id)).limit(100),
-        db.select({ id: blogPosts.id, title: blogPosts.title }).from(blogPosts).where(isNotNull(blogPosts.publishedAt)).orderBy(desc(blogPosts.publishedAt)).limit(100),
-      ]);
-      return json({
-        campaigns: campaignRows,
-        insertables: {
-          products: productRows,
-          offers: offerRows.map((row) => ({ id: row.id, name: row.title })),
-          blogs: blogRows.map((row) => ({ id: row.id, name: row.title })),
-        },
-      });
-    }
+    if (view === "campaigns") return json(await campaignComposerView());
     if (view === "stores")
       return json({
         stores: await db
@@ -2266,17 +2341,7 @@ export async function handleView(request: Request, path: string) {
         smsConfigured: smsConfigurationSummary().configured,
       });
     }
-    if (view === "sms") {
-      const [report, balance] = await Promise.all([smsReport(200), smsBalance()]);
-      return json({
-        ...report,
-        configuration: smsConfigurationSummary(),
-        // Whatever Celcom returns is passed through untouched: their balance payload is
-        // not documented field by field, and guessing a shape would show a wrong number.
-        balance,
-        topUpUrl: smsTopUpUrl(),
-      });
-    }
+    if (view === "sms") return json(await smsReportView());
     if (view === "delivery") {
       // Branches are returned whether or not they carry a pin: an unpinned branch is
       // the single most common reason distance pricing silently falls back to a flat
@@ -2411,47 +2476,8 @@ export async function handleView(request: Request, path: string) {
       });
     }
     if (view === "products") {
-      const [catalog, categoryRows, conditions, mappings, branchRows, stockRows] = await Promise.all([
-        db.select().from(products).orderBy(desc(products.createdAt)),
-        db
-          .select()
-          .from(categories)
-          .where(eq(categories.isActive, true))
-          .orderBy(asc(categories.displayOrder)),
-        db
-          .select()
-          .from(healthConditions)
-          .where(eq(healthConditions.isActive, true))
-          .orderBy(asc(healthConditions.displayOrder)),
-        db.select().from(productHealthConditions),
-        // The modal offers an optional stock line, so it needs the shops to choose from
-        // and whatever is already recorded for the product being edited.
-        db.select({ id: branches.id, name: branches.name }).from(branches).where(eq(branches.isActive, true)).orderBy(asc(branches.name)),
-        db.select({ id: branchInventory.id, branchId: branchInventory.branchId, productId: branchInventory.productId, quantityAvailable: branchInventory.quantityAvailable, quantityReserved: branchInventory.quantityReserved, reorderLevel: branchInventory.reorderLevel }).from(branchInventory),
-      ]);
-      // Buying prices leave the server only for the owner. Hiding the field in the
-      // browser would still have shipped the figure to it.
-      const showsCost = auth.session.role === "SUPER_ADMIN";
-      return json({
-        branches: branchRows,
-        stock: stockRows,
-        canEditCost: showsCost,
-        products: catalog.map((product) => ({
-          ...product,
-          costPrice: showsCost ? product.costPrice : null,
-          costPriceEstimated: showsCost ? product.costPriceEstimated : false,
-          imageUrl: publicImageUrl(product.imageUrl),
-          price: Number(product.price),
-          discountPrice: product.discountPrice
-            ? Number(product.discountPrice)
-            : null,
-          conditionIds: mappings
-            .filter((mapping) => mapping.productId === product.id)
-            .map((mapping) => mapping.conditionId),
-        })),
-        categories: categoryRows,
-        conditions,
-      });
+      // Buying prices leave the server only for the owner.
+      return json(await productEditorView({ showsCost: auth.session.role === "SUPER_ADMIN", withStock: true }));
     }
     if (view === "inventory") {
       const [catalog, stock, sales] = await Promise.all([
@@ -2838,6 +2864,23 @@ export async function handleView(request: Request, path: string) {
     const auth = await requireTeamPermission(request, "BLOGS_MANAGE");
     if ("response" in auth) return auth.response;
     return json(await contentBlogView());
+  }
+  if (path === "staff/product-editor") {
+    const auth = await requireTeamPermission(request, "PRODUCTS_MANAGE");
+    if ("response" in auth) return auth.response;
+    // The admin product screen's data, without buying prices (the owner's) and without shops and
+    // stock: a staff product manager changes stock from Inventory, for their own shop only.
+    return json(await productEditorView({ showsCost: false, withStock: false }));
+  }
+  if (path === "staff/sms") {
+    const auth = await requireTeamPermission(request, "SMS_VIEW");
+    if ("response" in auth) return auth.response;
+    return json(await smsReportView());
+  }
+  if (path === "staff/campaigns") {
+    const auth = await requireTeamPermission(request, "CAMPAIGNS_MANAGE");
+    if ("response" in auth) return auth.response;
+    return json(await campaignComposerView());
   }
   if (path === "staff/products") {
     const auth = await requireTeamPermission(request, "PRODUCTS_VIEW");
