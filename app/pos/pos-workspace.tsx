@@ -3,7 +3,7 @@
 import {
   Banknote, BarChart3, Camera, CheckCircle2, ChevronLeft, ChevronRight, CircleDollarSign,
   ClipboardList, CreditCard, FileText, HandCoins, LoaderCircle, Minus, PackagePlus, Pause,
-  Percent, Plus, Printer, ReceiptText, RotateCcw, Search, ShoppingCart, Smartphone, Trash2, UserRound,
+  Percent, Plus, Printer, ReceiptText, RotateCcw, Search, ShoppingCart, Smartphone, Trash2, Truck, UserRound,
   WalletCards, X,
 } from "lucide-react";
 import Link from "next/link";
@@ -14,6 +14,7 @@ import { createCheckoutToken } from "@/lib/checkout-token";
 import { cashChange, nairobiDateTime, saleTotal, splitPaymentBalances } from "@/lib/pos";
 import { manualTillPollDelay, paymentPollDelay } from "@/lib/payment-poll";
 import { parseVatRate, vatOnNet, vatRateLabel } from "@/lib/vat";
+import { MapPicker, type PinnedLocation } from "@/app/map-picker";
 import type { HeldSale, PosProduct, PosReport, PosWorkspaceData } from "./types";
 import styles from "./pos.module.css";
 
@@ -22,6 +23,10 @@ type Panel = "held" | "stock" | "expense" | "close" | "reports" | null;
 type CheckoutStep = "METHOD" | "DETAILS" | null;
 type TillCandidate = { id: number; receiptNumber: string; amount: number; phone: string | null; payerName: string | null; accountReference: string | null; receivedAt: string };
 type Sale = { id: number; orderNumber: string; total: number; checkoutToken: string; state: "WAITING" | "VERIFYING" | "REVIEWING" | "FAILED" | "CANCELLING" | "CANCELLED" | "COMPLETE"; message: string; candidate?: TillCandidate | null; candidates?: TillCandidate[]; receiptNumber?: string | null };
+
+/** A delivered phone or WhatsApp order: where it goes and what the cashier charges for it. */
+type PosDelivery = { address: string; area: string; fee: string; pin: PinnedLocation | null; calculatedFee: number | null };
+type PosDeliveryQuote = { available: boolean; fee: number; distanceKm: number; message: string; bandLabel: string | null; branchName: string | null; fallbackReason: string | null };
 
 const money = (value: number) => `KES ${Number(value || 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -129,17 +134,31 @@ function ActivePos({ data, backHref, clock, initialPanel = null }: { data: PosWo
   const salePanelRef = useRef<HTMLElement>(null);
   const focusSearch = useCallback(() => { if (window.matchMedia?.("(pointer: coarse)").matches) return; searchRef.current?.focus(); }, []);
   const [checkout, setCheckout] = useState<CheckoutStep>(null);
+  // Prices changed for this sale only, as typed, by product. The product's own price is untouched.
+  const canEditPrices = Boolean(data.canEditPrices);
+  const [prices, setPrices] = useState<Record<number, string>>({});
+  const [editingPrice, setEditingPrice] = useState<number | null>(null);
+  const [delivery, setDelivery] = useState<PosDelivery | null>(null);
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
 
   useEffect(() => { setAutoPrint(window.localStorage.getItem("healthfield:pos:auto-print") === "true"); }, []);
   useEffect(() => { focusSearch(); }, [focusSearch]);
 
   const availability = useMemo(() => new Map(data.stock.filter((row) => row.branchId === session.branchId).map((row) => [row.productId, row.available])), [data.stock, session.branchId]);
-  const rows = useMemo(() => data.products.filter((product) => cart[product.id]).map((product) => ({ ...product, quantity: cart[product.id], available: availability.get(product.id) || 0 })), [data.products, cart, availability]);
-  const subtotal = rows.reduce((sum, row) => sum + (row.discountPrice ?? row.price) * row.quantity, 0);
+  const rows = useMemo(() => data.products.filter((product) => cart[product.id]).map((product) => {
+    const shelf = product.discountPrice ?? product.price;
+    const typed = Number(prices[product.id]);
+    // A price typed for this sale counts only for someone allowed to change prices, and only when it is a real price.
+    const unit = canEditPrices && prices[product.id] && typed > 0 ? Math.round(typed * 100) / 100 : shelf;
+    return { ...product, quantity: cart[product.id], available: availability.get(product.id) || 0, shelf, unit };
+  }), [data.products, cart, availability, prices, canEditPrices]);
+  const subtotal = rows.reduce((sum, row) => sum + row.unit * row.quantity, 0);
   const net = saleTotal(subtotal, Number(discount) || 0);
   const vatRate = parseVatRate(data.vat?.rate);
   const vatAmount = showVat && vatRate ? vatOnNet(net, vatRate) : null;
-  const total = Math.round((net + (vatAmount ?? 0)) * 100) / 100;
+  // Delivery is added after VAT and is not taxed, the same as on a website order.
+  const deliveryFee = delivery ? Math.max(0, Math.round((Number(delivery.fee) || 0) * 100) / 100) : 0;
+  const total = Math.round((net + (vatAmount ?? 0) + deliveryFee) * 100) / 100;
   const change = cashChange(mode === "SPLIT" ? Number(splitCash) || 0 : total, Number(cashReceived) || 0);
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -207,7 +226,7 @@ function ActivePos({ data, backHref, clock, initialPanel = null }: { data: PosWo
   }, [sale?.state, sale?.checkoutToken, mode, splitMethod]);
 
   function resetSale() {
-    setCart({}); setDiscount(""); setCustomerName(""); setPhone(""); setEmail(""); setCashReceived(""); setSplitCash(""); setSplitOther(""); setSale(null); setHeldSaleId(undefined); setManualProof(""); setMessage(""); setCheckout(null); setShowVat(false); checkoutToken.current = createCheckoutToken(); pollCount.current = 0; router.refresh(); window.setTimeout(focusSearch, 0);
+    setCart({}); setDiscount(""); setCustomerName(""); setPhone(""); setEmail(""); setCashReceived(""); setSplitCash(""); setSplitOther(""); setSale(null); setHeldSaleId(undefined); setManualProof(""); setMessage(""); setCheckout(null); setShowVat(false); setPrices({}); setEditingPrice(null); setDelivery(null); setDeliveryOpen(false); checkoutToken.current = createCheckoutToken(); pollCount.current = 0; router.refresh(); window.setTimeout(focusSearch, 0);
   }
   function openCheckout() {
     if (!rows.length) return setMessage("Add at least one product before charging.");
@@ -227,7 +246,7 @@ function ActivePos({ data, backHref, clock, initialPanel = null }: { data: PosWo
       { method: splitMethod, amount: otherAmount, phone },
     ] : [{ method: mode, amount: total, cashReceived: mode === "CASH" ? Number(cashReceived) : undefined, phone }];
     setSending(true); setMessage("");
-    const response = await fetch("/api/walk-in-sales", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: session.id, heldSaleId, customerName, phone, email, checkoutToken: checkoutToken.current, discountAmount: Number(discount) || 0, chargeVat: showVat, items: rows.map((row) => ({ productId: row.id, quantity: row.quantity })), payments }) }).catch(() => null);
+    const response = await fetch("/api/walk-in-sales", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: session.id, heldSaleId, customerName, phone, email, checkoutToken: checkoutToken.current, discountAmount: Number(discount) || 0, chargeVat: showVat, items: rows.map((row) => ({ productId: row.id, quantity: row.quantity, ...(row.unit !== row.shelf ? { unitPrice: row.unit } : {}) })), delivery: delivery ? { fee: deliveryFee, address: delivery.address, area: delivery.area || undefined, latitude: delivery.pin?.latitude, longitude: delivery.pin?.longitude } : undefined, payments }) }).catch(() => null);
     const body = await response?.json().catch(() => ({}));
     if (!response?.ok) setMessage(body?.error || "The sale could not be completed.");
     else {
@@ -323,11 +342,17 @@ function ActivePos({ data, backHref, clock, initialPanel = null }: { data: PosWo
       <section className={styles.salePanel} ref={salePanelRef}>
         <header><ShoppingCart/><strong>Current sale</strong><b>{cartCount}</b>{rows.length ? <button type="button" className={styles.clearCart} onClick={() => { setCart({}); setDiscount(""); setMessage("Sale cleared."); }}>Clear</button> : null}</header>
         <div className={styles.cart}>{rows.length ? rows.map((row) => <div className={styles.cartRow} key={row.id}>
-          <span><strong>{row.name}</strong><small>{money(row.discountPrice ?? row.price)} each</small></span>
+          <span><strong>{row.name}</strong><small>{money(row.unit)} each{row.unit !== row.shelf ? <em className={styles.wasPrice}> · shelf {money(row.shelf)}</em> : null}</small>{canEditPrices ? <button type="button" className={styles.priceLink} onClick={() => setEditingPrice((current) => current === row.id ? null : row.id)}>{editingPrice === row.id ? "Done" : "Change price"}</button> : null}</span>
           <div><button onClick={() => setQuantity(row.id, row.quantity - 1)}><Minus/></button><input type="number" min="1" max={row.available} value={row.quantity} onChange={(event) => setQuantity(row.id, Number(event.target.value))}/><button onClick={() => setQuantity(row.id, row.quantity + 1)}><Plus/></button></div>
-          <strong>{money((row.discountPrice ?? row.price) * row.quantity)}</strong><button className={styles.remove} onClick={() => setQuantity(row.id, 0)}><X/></button>
+          <strong>{money(row.unit * row.quantity)}</strong><button className={styles.remove} onClick={() => { setQuantity(row.id, 0); setPrices((current) => { const next = { ...current }; delete next[row.id]; return next; }); }}><X/></button>
+          {canEditPrices && editingPrice === row.id ? <div className={styles.priceEditor}>
+            <label>Price each for this sale (KES)<input type="number" inputMode="decimal" min="0.01" step=".01" autoFocus value={prices[row.id] ?? String(row.shelf)} onKeyDown={digitsOnly} onChange={(event) => { const value = event.target.value; setPrices((current) => ({ ...current, [row.id]: value })); }}/></label>
+            <button type="button" onClick={() => { setPrices((current) => { const next = { ...current }; delete next[row.id]; return next; }); setEditingPrice(null); }}>Use shelf price</button>
+            <small>Only this sale changes. The change is recorded with the shelf price and your name.</small>
+          </div> : null}
         </div>) : <div className={styles.emptyCart}><ShoppingCart/><strong>Start a new sale</strong><span>Search, scan, or tap a product.</span></div>}</div>
-        <div className={styles.totals}><label>Discount (KES)<input type="number" min="0" max={subtotal} step=".01" value={discount} onChange={(event) => setDiscount(event.target.value)}/></label><p><span>Subtotal</span><b>{money(subtotal)}</b></p><p><span>Discount</span><b>- {money(Number(discount) || 0)}</b></p>{vatAmount !== null ? <p className={styles.vatLine}><span>{vatRateLabel(vatRate)}</span><b>+ {money(vatAmount)}</b></p> : null}<p className={styles.grand}><span>Total</span><b>{money(total)}</b></p></div>
+        <div className={styles.totals}><label>Discount (KES)<input type="number" min="0" max={subtotal} step=".01" value={discount} onChange={(event) => setDiscount(event.target.value)}/></label><p><span>Subtotal</span><b>{money(subtotal)}</b></p><p><span>Discount</span><b>- {money(Number(discount) || 0)}</b></p>{vatAmount !== null ? <p className={styles.vatLine}><span>{vatRateLabel(vatRate)}</span><b>+ {money(vatAmount)}</b></p> : null}{delivery ? <p className={styles.deliveryLine}><span>Delivery{delivery.area ? ` · ${delivery.area}` : ""}</span><b>+ {money(deliveryFee)}</b></p> : null}<p className={styles.grand}><span>Total</span><b>{money(total)}</b></p></div>
+        <button type="button" className={delivery ? styles.deliveryChipOn : styles.deliveryChip} disabled={!rows.length} onClick={() => { setMessage(""); setDeliveryOpen(true); }}><Truck/><span><small>Delivery</small><strong>{delivery ? delivery.address : "Collected at the counter — tap to add delivery"}</strong></span><ChevronRight/></button>
         <button type="button" className={customerSummary ? styles.customerChipOn : styles.customerChip} onClick={() => { setMessage(""); setCheckout("DETAILS"); }}><UserRound/><span><small>Customer</small><strong>{customerSummary || "Walk-in — tap to add name, phone or email"}</strong></span><ChevronRight/></button>
         <button className={styles.payButton} disabled={sending || !rows.length || total <= 0} onClick={openCheckout}>{sending ? <LoaderCircle className={styles.spin}/> : <CircleDollarSign/>}{sending ? "Processing…" : `Charge ${money(total)}`}</button>
       </section>
@@ -339,7 +364,7 @@ function ActivePos({ data, backHref, clock, initialPanel = null }: { data: PosWo
     {checkout ? <div className={styles.overlay} role="dialog" aria-modal="true" aria-label="Take payment">
       <section className={styles.sheet}>
         <header>{checkout === "DETAILS" ? <button type="button" className={styles.sheetBack} onClick={() => setCheckout("METHOD")}><ChevronLeft/> Payment method</button> : <strong>Take payment</strong>}<button type="button" aria-label="Close payment" onClick={() => setCheckout(null)}><X/></button></header>
-        <div className={styles.sheetTotal}><small>Amount due</small><strong>{money(total)}</strong><span>{cartCount} item{cartCount === 1 ? "" : "s"} · {session.branchName} · {data.cashier.name}</span>{vatAmount !== null ? <em className={styles.sheetVat}>Includes {vatRateLabel(vatRate)} of {money(vatAmount)}</em> : null}</div>
+        <div className={styles.sheetTotal}><small>Amount due</small><strong>{money(total)}</strong><span>{cartCount} item{cartCount === 1 ? "" : "s"} · {session.branchName} · {data.cashier.name}</span>{vatAmount !== null ? <em className={styles.sheetVat}>Includes {vatRateLabel(vatRate)} of {money(vatAmount)}</em> : null}{delivery ? <em className={styles.sheetVat}>Includes delivery of {money(deliveryFee)} to {delivery.address}</em> : null}</div>
         {checkout === "METHOD" ? <div className={styles.methodGrid}>
           {data.payment.cashEnabled ? <button type="button" onClick={() => chooseMode("CASH")}><Banknote/><b>Cash</b><small>Count cash and give change</small></button> : null}
           {data.payment.mpesaEnabled ? <button type="button" onClick={() => chooseMode("MPESA_EXPRESS")}><Smartphone/><b>M-PESA prompt</b><small>Push a payment request to the customer phone</small></button> : null}
@@ -375,6 +400,16 @@ function ActivePos({ data, backHref, clock, initialPanel = null }: { data: PosWo
         </div> : null}
       </section>
     </div> : null}
+    {deliveryOpen ? <DeliverySheet
+      initial={delivery}
+      sessionId={session.id}
+      mapsApiKey={data.delivery?.mapsApiKey ?? null}
+      items={rows.map((row) => ({ productId: row.id, quantity: row.quantity }))}
+      subtotal={net}
+      onSave={(next) => { setDelivery(next); setDeliveryOpen(false); setMessage("Delivery added to the sale."); }}
+      onRemove={() => { setDelivery(null); setDeliveryOpen(false); setMessage("Delivery removed. The sale is collected at the counter."); }}
+      onClose={() => setDeliveryOpen(false)}
+    /> : null}
     {cameraOpen ? <CameraScanner onClose={() => setCameraOpen(false)} onCode={handleCameraCode}/>: null}
     {panel ? <PosPanel panel={panel} close={() => setPanel(null)} data={data} session={session} products={data.products} current={{ cart, discount: Number(discount) || 0, customerName, phone, email }} onHeld={() => { setCart({}); setDiscount(""); setCustomerName(""); setPhone(""); setEmail(""); setPanel(null); router.refresh(); }} onResume={(held) => { setCart(Object.fromEntries(held.cart.map((item) => [item.productId, item.quantity]))); setDiscount(String(held.discountAmount || "")); setCustomerName(held.customerName || ""); setPhone(held.phone || ""); setEmail(held.email || ""); setHeldSaleId(held.id); setPanel(null); }} onChanged={() => router.refresh()}/> : null}
     {autoPrint && sale?.state === "COMPLETE" ? <iframe className={styles.printFrame} title="Automatic receipt printing" src={`${backHref}/receipts/orders/${sale.id}?autoPrint=1`}/> : null}
@@ -388,6 +423,103 @@ function SaleStatus({ sale, backHref, sending, manualProof, setManualProof, subm
     {["WAITING", "REVIEWING"].includes(sale.state) ? <form className={styles.proof} onSubmit={submitManualProof}><input value={manualProof} onChange={(event) => setManualProof(event.target.value)} placeholder="Receipt code or full M-PESA SMS"/><button disabled={sending || manualProof.trim().length < 10}>Verify receipt</button><small>Use only if the automatic Till callback is delayed. Never request a second payment.</small></form> : null}
     <div className={styles.statusActions}>{sale.state === "COMPLETE" ? <><button onClick={print}><Printer/> Print receipt</button><Link href={`${backHref}/receipts/orders/${sale.id}`}>Open receipt</Link><button onClick={newSale}>New sale</button></> : sale.state === "CANCELLED" ? <button onClick={newSale}>New sale</button> : sale.state === "FAILED" ? <><button disabled={sending} onClick={retry}>Retry M-PESA</button><button disabled={sending} onClick={cancel}>Cancel safely</button><button onClick={newSale}>Leave pending sale</button></> : sale.state === "CANCELLING" ? <small>Keep this sale open while Healthfield checks for a late confirmation. It will release stock automatically if none arrived.</small> : <small>You may leave this screen; the session cannot close while payment remains pending.</small>}</div>
   </section></div>;
+}
+
+/**
+ * Adds delivery to a till sale: a customer who phoned or sent a WhatsApp and wants it brought to them.
+ *
+ * The cashier searches the customer's area on the map (or drags the pin), and the fee is calculated
+ * from this till's shop with the same distance rules as the website. The cashier can change the fee,
+ * for example free delivery for a regular customer; the sale records the calculated fee beside the one
+ * charged. Without a Maps key the cashier types the address and the fee.
+ */
+function DeliverySheet({ initial, sessionId, mapsApiKey, items, subtotal, onSave, onRemove, onClose }: {
+  initial: PosDelivery | null;
+  sessionId: number;
+  mapsApiKey: string | null;
+  items: Array<{ productId: number; quantity: number }>;
+  subtotal: number;
+  onSave: (delivery: PosDelivery) => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  const [pin, setPin] = useState<PinnedLocation | null>(initial?.pin ?? null);
+  const [address, setAddress] = useState(initial?.address ?? "");
+  const [area, setArea] = useState(initial?.area ?? "");
+  // Until the cashier types a fee, the field follows the calculated one.
+  const [fee, setFee] = useState(initial?.fee ?? "");
+  const [feeTyped, setFeeTyped] = useState(Boolean(initial));
+  const [quote, setQuote] = useState<{ key: string; result: PosDeliveryQuote | null; error: string } | null>(null);
+  const [error, setError] = useState("");
+  const autoAddress = useRef(initial?.pin?.address ?? "");
+  const pinKey = pin ? `${pin.latitude},${pin.longitude}` : "";
+  const itemsKey = JSON.stringify(items);
+
+  useEffect(() => {
+    if (!pin) return;
+    let cancelled = false;
+    const key = pinKey;
+    void (async () => {
+      const response = await fetch("/api/pos/delivery-quote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, latitude: pin.latitude, longitude: pin.longitude, subtotal, items: JSON.parse(itemsKey) }) }).catch(() => null);
+      const body = await response?.json().catch(() => ({}));
+      if (cancelled) return;
+      if (!response?.ok) setQuote({ key, result: null, error: body?.error || "The fee could not be calculated. Type the fee instead." });
+      else setQuote({ key, result: body as PosDeliveryQuote, error: "" });
+    })();
+    return () => { cancelled = true; };
+    // pin is captured through pinKey; the basket through itemsKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinKey, itemsKey, sessionId, subtotal]);
+
+  const current = quote && quote.key === pinKey ? quote : null;
+  const calculatedFee = current?.result?.available ? current.result.fee : null;
+  const shownFee = feeTyped ? fee : calculatedFee !== null ? String(calculatedFee) : fee;
+  const changed = calculatedFee !== null && shownFee !== "" && Math.abs((Number(shownFee) || 0) - calculatedFee) > 0.004;
+
+  function choose(next: PinnedLocation | null) {
+    setPin(next);
+    // Fill the address from the map, unless the cashier has written their own.
+    if (next?.address && (!address.trim() || address === autoAddress.current)) {
+      setAddress(next.address);
+      autoAddress.current = next.address;
+    }
+  }
+
+  function save() {
+    if (address.trim().length < 3) return setError("Enter where the delivery is going.");
+    const amount = Number(shownFee);
+    if (shownFee === "" || !Number.isFinite(amount) || amount < 0) return setError("Enter the delivery fee. Use 0 for free delivery.");
+    onSave({ address: address.trim(), area: area.trim(), fee: String(Math.round(amount * 100) / 100), pin, calculatedFee });
+  }
+
+  return <div className={styles.overlay} role="dialog" aria-modal="true" aria-label="Delivery">
+    <section className={styles.sheet}>
+      <header><strong>Delivery</strong><button type="button" aria-label="Close delivery" onClick={onClose}><X/></button></header>
+      <div className={styles.sheetBody}>
+        <div className={styles.sheetSection}>
+          <h3>Where is it going?</h3>
+          {mapsApiKey ? <MapPicker value={pin} onChange={choose} height={220} apiKey={mapsApiKey} searchPlaceholder="Search the customer's estate, road or landmark"/> : <p className={styles.methodNote}>Map search is not set up on this site, so type the address and the fee.</p>}
+          {pin ? <p className={styles.quoteNote} role="status">{!current ? <><LoaderCircle className={styles.spin}/> Calculating the delivery fee…</>
+            : current.error ? current.error
+            : current.result && current.result.available ? <>Calculated fee: <b>{money(current.result.fee)}</b>{current.result.distanceKm ? ` · ${current.result.distanceKm} km` : ""}{current.result.branchName ? ` from ${current.result.branchName}` : ""}{current.result.bandLabel ? ` · ${current.result.bandLabel}` : ""}{current.result.fallbackReason ? " · flat fee" : ""}</>
+            : current.result?.message || "This location is outside the delivery area. You can still charge a fee by hand."}</p> : null}
+        </div>
+        <div className={styles.sheetSection}>
+          <div className={styles.sheetFields}>
+            <label className={styles.full}>Delivery address<textarea rows={2} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Estate, road, building, house or gate"/></label>
+            <label>Area (optional)<input value={area} onChange={(event) => setArea(event.target.value)} placeholder="e.g. Juja, Gate C"/></label>
+            <label>Delivery fee (KES)<input type="number" inputMode="decimal" min="0" step=".01" value={shownFee} onKeyDown={digitsOnly} onChange={(event) => { setFee(event.target.value); setFeeTyped(true); }} placeholder="0.00"/></label>
+          </div>
+          {changed ? <p className={styles.quoteWarn}>You changed the fee from the calculated {money(calculatedFee!)}. The sale records both. <button type="button" onClick={() => { setFeeTyped(false); setFee(""); }}>Use {money(calculatedFee!)}</button></p> : null}
+        </div>
+        {error ? <p className={styles.error}>{error}</p> : null}
+      </div>
+      <div className={styles.sheetFoot}>
+        {initial ? <button type="button" className={styles.deliveryRemove} onClick={onRemove}>Remove delivery</button> : null}
+        <button type="button" className={styles.confirmPay} onClick={save}><Truck/> {initial ? "Update delivery" : "Add delivery"}</button>
+      </div>
+    </section>
+  </div>;
 }
 
 type DetectorApi = { detect(source: CanvasImageSource): Promise<Array<{ rawValue: string }>> };

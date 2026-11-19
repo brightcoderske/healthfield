@@ -65,3 +65,26 @@
   .sheetFields{grid-template-columns:1fr}
   .cameraView video{max-height:38vh}
 }
+
+/* Changing a price for one sale, and adding delivery (pos-workspace.tsx). */
+.wasPrice{color:#a3213d;font-style:normal}
+.priceLink{margin-top:4px;padding:0;border:0;background:none;color:#70227e;font-size:8.5px;font-weight:800;text-decoration:underline;cursor:pointer;text-align:left}
+.priceEditor{grid-column:1/-1;display:grid;grid-template-columns:1fr auto;align-items:end;gap:6px 8px;padding:8px;border-radius:8px;background:#f8f2f9}
+.priceEditor label{display:flex;flex-direction:column;gap:4px;font-size:8.5px;font-weight:800;color:#4b3d50}
+.priceEditor input{height:34px;padding:0 9px;border:1px solid #d8c8dc;border-radius:7px;font-size:12px}
+.priceEditor button{height:34px;padding:0 10px;border:1px solid #d8c8dc;border-radius:7px;background:#fff;color:#70227e;font-size:9px;font-weight:800}
+.priceEditor small{grid-column:1/-1;color:#857a88;font-size:8px}
+.deliveryLine{color:#4b3d50}.deliveryLine b{font-weight:700}
+.deliveryChip,.deliveryChipOn{width:100%;padding:10px 12px;border:0;border-bottom:1px solid #eee8ef;background:#fff;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:9px;text-align:left;color:#4b3d50}
+.deliveryChipOn{background:#f8f2f9;color:#5d2266}
+.deliveryChip:disabled{opacity:.55}
+.deliveryChip>svg:first-child,.deliveryChipOn>svg:first-child{width:19px;color:#70227e}
+.deliveryChip>svg:last-child,.deliveryChipOn>svg:last-child{width:15px;color:#a394a7}
+.deliveryChip small,.deliveryChipOn small{display:block;color:#857a88;font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+.deliveryChip strong,.deliveryChipOn strong{display:block;margin-top:3px;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.quoteNote{margin:8px 0 0;padding:8px 10px;border-radius:8px;background:#f7f2f8;color:#4b3d50;font-size:9.5px;line-height:1.5;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.quoteNote svg{width:14px}
+.quoteWarn{margin:8px 0 0;padding:8px 10px;border-radius:8px;background:#fff7e6;color:#7a5313;font-size:9px;line-height:1.5}
+.quoteWarn button{margin-left:6px;padding:0;border:0;background:none;color:#70227e;font-weight:800;text-decoration:underline;cursor:pointer}
+.sheetFields textarea{width:100%;padding:8px 9px;border:1px solid #d8c8dc;border-radius:7px;font:inherit;font-size:12px;resize:vertical}
+.deliveryRemove{width:100%;min-height:40px;margin-bottom:7px;border:1px solid #f0c9d2;border-radius:10px;background:#fff;color:#a3213d;font-size:12px;font-weight:800}

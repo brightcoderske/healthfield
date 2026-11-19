@@ -39,10 +39,10 @@ test("new staff receive an assignable POS role and land on the POS when it is th
   assert.equal(firstStaffPath("STAFF",["POS_USE"]),"/staff/sales");
 });
 
-test("products, SMS reports and campaigns can be granted, and are never granted by default", () => {
+test("products, till prices, SMS reports and campaigns can be granted, and are never granted by default", () => {
   // Each changes what customers pay or what they receive, and campaigns spend SMS credit, so an owner
   // ticks them per account. Existing and new staff gain nothing until then.
-  for (const permission of ["PRODUCTS_MANAGE", "SMS_VIEW", "CAMPAIGNS_MANAGE"] as const) {
+  for (const permission of ["PRODUCTS_MANAGE", "POS_PRICE_EDIT", "SMS_VIEW", "CAMPAIGNS_MANAGE"] as const) {
     assert.equal(STAFF_PERMISSION_VALUES.includes(permission), true, permission);
     assert.equal(DEFAULT_STAFF_PERMISSIONS.includes(permission), false, permission);
     assert.equal(hasStaffPermission("STAFF", [...DEFAULT_STAFF_PERMISSIONS], permission), false, permission);

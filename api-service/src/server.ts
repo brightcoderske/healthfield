@@ -9,7 +9,7 @@ import { getDb, closeDb, databaseClock } from "./db";
 import { json } from "./http";
 import { handleConsultationAttachment, handleConsultationMessages, handleConsultations } from "./consultations";
 import { handleSmsReportRefresh } from "./sms-routes";
-import { handleDeliveryBands, handleDeliveryPreview, handleDeliveryQuote, handleDeliverySettings } from "./delivery";
+import { handleDeliveryBands, handleDeliveryPreview, handleDeliveryQuote, handleDeliverySettings, handlePosDeliveryQuote } from "./delivery";
 import { handleView } from "./views";
 import { changesCatalogue, changesCounts, changesSessions, serveCachedView } from "./catalogue-cache";
 import { outboxStatus, startOutbox } from "./outbox-delivery";
@@ -242,6 +242,7 @@ async function route(request: Request, ip: string): Promise<Response> {
     return responseOf(handleDeliveryQuote(request));
   }
   if (url.pathname === "/v1/delivery/preview") return responseOf(handleDeliveryPreview(request));
+  if (url.pathname === "/v1/pos/delivery-quote") return responseOf(handlePosDeliveryQuote(request));
   if (url.pathname === "/v1/delivery/settings") return responseOf(handleDeliverySettings(request));
   if (url.pathname === "/v1/delivery/bands") return responseOf(handleDeliveryBands(request));
   const deliveryBandMatch = url.pathname.match(/^\/v1\/delivery\/bands\/(\d+)$/);

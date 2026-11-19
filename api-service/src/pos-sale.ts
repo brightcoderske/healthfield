@@ -6,6 +6,7 @@ import {
   paymentTransactions, posHeldSales, posSessions, posTills, products, siteSettings,
 } from "../../db/schema";
 import { cashChange, saleTotal, splitPaymentBalances } from "../../lib/pos";
+import { buildPosLines, deliveryFeeWasChanged } from "../../lib/pos-pricing";
 import { parseVatRate, vatOnNet } from "../../lib/vat";
 import { healthfieldOrderNumber } from "../../lib/order-number";
 import { getDb } from "./db";
@@ -14,7 +15,8 @@ import { initiateStkPush, mpesaConfiguration } from "./mpesa";
 import { queueOrderSms, queuePaidOrderNotification } from "./order-notifications";
 import { reconcileManualPaymentFromIncoming, replayStoredStkCallback } from "./payment-handlers";
 import { consumePosBatches } from "./pos-inventory";
-import { requireTeamPermission } from "./staff-permissions";
+import { requireTeamPermission, sessionHasPermission } from "./staff-permissions";
+import { resolveDeliveryQuote } from "./delivery";
 
 const partSchema = z.object({
   method: z.enum(["CASH", "MPESA_EXPRESS", "MANUAL_MPESA"]),
@@ -42,7 +44,17 @@ export async function handlePosSale(request: Request) {
     sessionId: z.coerce.number().int().positive(), heldSaleId: z.coerce.number().int().positive().optional(),
     customerName: z.string().trim().max(200).optional(), phone: z.string().trim().max(30).optional(), email: z.string().trim().email().optional().or(z.literal("")),
     checkoutToken: z.string().uuid(), discountAmount: z.coerce.number().finite().nonnegative().max(100_000_000).default(0),
-    items: z.array(z.object({ productId: z.coerce.number().int().positive(), quantity: z.coerce.number().int().min(1).max(999) })).min(1).max(250),
+    // unitPrice: a price other than the shelf price for this sale only (POS_PRICE_EDIT).
+    items: z.array(z.object({ productId: z.coerce.number().int().positive(), quantity: z.coerce.number().int().min(1).max(999), unitPrice: z.coerce.number().finite().positive().max(10_000_000).optional() })).min(1).max(250),
+    // A phone or WhatsApp order that is delivered. The fee is what the cashier charges; the server works
+    // out the calculated fee itself from the pinned location, so any difference is recorded.
+    delivery: z.object({
+      fee: z.coerce.number().finite().nonnegative().max(100_000),
+      address: z.string().trim().min(3).max(1000),
+      area: z.string().trim().max(160).optional(),
+      latitude: z.coerce.number().min(-90).max(90).optional(),
+      longitude: z.coerce.number().min(-180).max(180).optional(),
+    }).optional(),
     payments: z.array(partSchema).min(1).max(2), chargeVat: z.coerce.boolean().default(false),
   }).safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ error: "Check the session, cart, discount and payment amounts." }, { status: 400 });
@@ -53,16 +65,15 @@ export async function handlePosSale(request: Request) {
   const [duplicate] = await db.select({ id: orders.id, orderNumber: orders.orderNumber, total: orders.total, paymentStatus: orders.paymentStatus, paymentReference: orders.paymentReference }).from(orders).where(eq(orders.checkoutToken, parsed.data.checkoutToken)).limit(1);
   if (duplicate) return json({ ok: true, id: duplicate.id, orderNumber: duplicate.orderNumber, total: Number(duplicate.total), paymentStatus: duplicate.paymentStatus, receiptNumber: duplicate.paymentReference, duplicate: true });
 
-  const grouped = new Map<number, number>();
-  for (const item of parsed.data.items) grouped.set(item.productId, (grouped.get(item.productId) || 0) + item.quantity);
-  const requested = [...grouped].map(([productId, quantity]) => ({ productId, quantity }));
-  const catalog = await db.select().from(products).where(and(inArray(products.id, requested.map((item) => item.productId)), eq(products.isActive, true)));
-  if (catalog.length !== requested.length) return json({ error: "One or more products are unavailable." }, { status: 409 });
-  const rawLines = requested.map((item) => {
-    const product = catalog.find((entry) => entry.id === item.productId)!;
-    const price = Number(product.discountPrice ?? product.price);
-    return { product, quantity: item.quantity, base: Math.round(price * item.quantity * 100) / 100 };
-  });
+  const productIds = [...new Set(parsed.data.items.map((item) => item.productId))];
+  const catalog = await db.select().from(products).where(and(inArray(products.id, productIds), eq(products.isActive, true)));
+  if (catalog.length !== productIds.length) return json({ error: "One or more products are unavailable." }, { status: 409 });
+  // Each line at its shelf price, or at the price the cashier set for this sale if they may change prices.
+  const priced = buildPosLines(parsed.data.items, new Map(catalog.map((product) => [product.id, { name: product.name, shelfPrice: Number(product.discountPrice ?? product.price) }])));
+  if (!priced.ok) return json({ error: priced.error }, { status: 400 });
+  if (priced.priceChanges.length && !sessionHasPermission(auth.session, "POS_PRICE_EDIT")) return json({ error: "You do not have permission to change prices at the till." }, { status: 403 });
+  const requested = priced.lines.map((line) => ({ productId: line.productId, quantity: line.quantity }));
+  const rawLines = priced.lines.map((line) => ({ product: catalog.find((entry) => entry.id === line.productId)!, quantity: line.quantity, base: line.base }));
   const subtotal = rawLines.reduce((sum, line) => sum + line.base, 0);
   if (parsed.data.discountAmount > subtotal) return json({ error: "The discount cannot be higher than the sale subtotal." }, { status: 400 });
   const net = saleTotal(subtotal, parsed.data.discountAmount);
@@ -73,7 +84,26 @@ export async function handlePosSale(request: Request) {
   const vatRate = parsed.data.chargeVat ? parseVatRate(settings?.vatRate) : 0;
   const vat = vatRate ? vatOnNet(net, vatRate) ?? 0 : 0;
   if (parsed.data.chargeVat && !vat) return json({ error: "Set a VAT rate in settings before charging VAT on a sale." }, { status: 409 });
-  const total = Math.round((net + vat) * 100) / 100;
+  // Delivery is priced from this till's own shop with the same rules as the website, so the fee the
+  // cashier charges can be compared with it. It is added after VAT and is not taxed.
+  const delivery = parsed.data.delivery;
+  let deliveryAudit: Record<string, unknown> | null = null;
+  const deliveryFee = delivery ? Math.round(delivery.fee * 100) / 100 : 0;
+  if (delivery) {
+    const point = delivery.latitude !== undefined && delivery.longitude !== undefined ? { latitude: delivery.latitude, longitude: delivery.longitude } : null;
+    let calculatedFee: number | null = null;
+    let distanceKm: number | null = null;
+    if (point) {
+      const [tillShop] = await db.select({ branchId: posSessions.branchId }).from(posSessions).where(eq(posSessions.id, parsed.data.sessionId)).limit(1);
+      const quoted = await resolveDeliveryQuote({ point, lines: requested, subtotal: net, preferredBranchId: tillShop?.branchId ?? null }).catch(() => null);
+      if (quoted?.quote.available) {
+        calculatedFee = quoted.quote.fee;
+        distanceKm = quoted.quote.distanceKm;
+      }
+    }
+    deliveryAudit = { fee: deliveryFee, calculatedFee, changedByCashier: deliveryFeeWasChanged(deliveryFee, calculatedFee), distanceKm, pinned: point !== null };
+  }
+  const total = Math.round((net + vat + deliveryFee) * 100) / 100;
   if (!splitPaymentBalances(total, parsed.data.payments)) return json({ error: `Payment parts must add up to KES ${total.toLocaleString("en-KE")}.` }, { status: 400 });
   const cashPart = parsed.data.payments.find((part) => part.method === "CASH");
   const change = cashPart ? cashChange(cashPart.amount, cashPart.cashReceived ?? cashPart.amount) : 0;
@@ -111,9 +141,14 @@ export async function handlePosSale(request: Request) {
       const [order] = await tx.insert(orders).values({
         orderNumber: temporaryOrderNumber, checkoutToken: parsed.data.checkoutToken,
         customerName: parsed.data.customerName || "Walk-in customer", phone: parsed.data.phone || "Walk-in", email: parsed.data.email || null,
-        fulfilmentMethod: "PICKUP", status: cashOnly ? "COMPLETED" : "AWAITING_PAYMENT", paymentStatus: cashOnly ? "PAID" : "PENDING",
+        fulfilmentMethod: delivery ? "DELIVERY" : "PICKUP", status: cashOnly ? "COMPLETED" : "AWAITING_PAYMENT", paymentStatus: cashOnly ? "PAID" : "PENDING",
+        ...(delivery ? {
+          deliveryAddress: delivery.address, deliveryArea: delivery.area || null,
+          deliveryLatitude: delivery.latitude !== undefined ? delivery.latitude.toFixed(7) : null,
+          deliveryLongitude: delivery.longitude !== undefined ? delivery.longitude.toFixed(7) : null,
+        } : {}),
         paymentMethod: parsed.data.payments.length > 1 ? "SPLIT" : parsed.data.payments[0].method,
-        amountPaid: cashPart ? cashPart.amount.toFixed(2) : "0", subtotal: subtotal.toFixed(2), deliveryFee: "0", discount: parsed.data.discountAmount.toFixed(2), vat: vat.toFixed(2), vatRate: vatRate.toFixed(2), total: total.toFixed(2),
+        amountPaid: cashPart ? cashPart.amount.toFixed(2) : "0", subtotal: subtotal.toFixed(2), deliveryFee: deliveryFee.toFixed(2), discount: parsed.data.discountAmount.toFixed(2), vat: vat.toFixed(2), vatRate: vatRate.toFixed(2), total: total.toFixed(2),
         suggestedBranchId: branch.id, posSessionId: session.id, cashierId: auth.session.userId, tillId: session.tillId, transactedAt: sql`current_timestamp`,
       });
       const orderNumber = healthfieldOrderNumber(branch.code, order.insertId);
@@ -144,7 +179,7 @@ export async function handlePosSale(request: Request) {
         if (!held) throw new Error("The held sale is no longer available.");
         await tx.update(posHeldSales).set({ status: "COMPLETED", completedOrderId: order.insertId }).where(eq(posHeldSales.id, held.id));
       }
-      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: cashOnly ? "POS_SALE_COMPLETED" : "POS_SALE_PAYMENT_STARTED", entityType: "order", entityId: String(order.insertId), metadata: { sessionId: session.id, branchId: branch.id, tillId: session.tillId, total, subtotal, discount: parsed.data.discountAmount, paymentMethods: methods, itemCount: lines.length } });
+      await tx.insert(activityLogs).values({ actorId: auth.session.userId, action: cashOnly ? "POS_SALE_COMPLETED" : "POS_SALE_PAYMENT_STARTED", entityType: "order", entityId: String(order.insertId), metadata: { ...(priced.priceChanges.length ? { priceChanges: priced.priceChanges } : {}), ...(deliveryAudit ? { delivery: deliveryAudit } : {}), sessionId: session.id, branchId: branch.id, tillId: session.tillId, total, subtotal, discount: parsed.data.discountAmount, paymentMethods: methods, itemCount: lines.length } });
       return { orderId: order.insertId, orderNumber, cashOnly: Boolean(cashOnly), paymentIds, cashReference };
     });
 

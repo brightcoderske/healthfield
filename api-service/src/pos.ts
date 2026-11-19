@@ -17,7 +17,8 @@ import { mpesaConfiguration } from "./mpesa";
 import { renderPosSessionReport, type PosSessionReportData } from "./pos-session-report";
 import { storageRoot, validatePrescriptionUpload } from "./prescription-files";
 import { sendSms } from "./sms";
-import { requireTeamPermission } from "./staff-permissions";
+import { requireTeamPermission, sessionHasPermission } from "./staff-permissions";
+import { googleMapsBrowserKey } from "./delivery";
 
 const moneySchema = z.coerce.number().finite().nonnegative().max(100_000_000);
 const cartSchema = z.array(z.object({ productId: z.coerce.number().int().positive(), quantity: z.coerce.number().int().min(1).max(999) })).min(1).max(250);
@@ -97,6 +98,10 @@ export async function posWorkspaceState(request: Request) {
     // The cashier screen may disclose VAT even when the site-wide receipt setting is off,
     // so the rate travels with the workspace regardless of the flag.
     vat: { enabled: Boolean(settings?.vatEnabled), rate: Number(settings?.vatRate ?? 0) },
+    // Whether this cashier may sell at a price other than the shelf price; the sale checks it again.
+    canEditPrices: sessionHasPermission(auth.session, "POS_PRICE_EDIT"),
+    // The map search for delivery orders. Without a key the cashier types the address and the fee.
+    delivery: { mapsApiKey: googleMapsBrowserKey() || null },
   });
 }
 

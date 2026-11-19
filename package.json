@@ -24,7 +24,7 @@
     "test:editor-drafts": "node --experimental-strip-types --test lib/editor-drafts.test.ts",
     "test:vat": "node --experimental-strip-types --test lib/vat.test.ts",
     "test:profit": "node --experimental-strip-types --test lib/profit.test.ts",
-    "test:pos": "node --experimental-strip-types --test lib/pos.test.ts",
+    "test:pos": "node --experimental-strip-types --test lib/pos.test.ts lib/pos-pricing.test.ts",
     "test:thermal-receipt": "node --experimental-strip-types --test lib/thermal-receipt.test.ts",
     "test:campaign-merge": "node --experimental-strip-types --test lib/campaign-merge.test.ts",
     "test:sms-templates": "node --experimental-strip-types --test lib/sms-templates.test.ts",

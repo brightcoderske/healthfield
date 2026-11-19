@@ -1,6 +1,6 @@
 import { asc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { branchInventory, branches, deliveryBands, orderItems, orders, siteSettings } from "../../db/schema";
+import { branchInventory, branches, deliveryBands, orderItems, orders, posSessions, siteSettings } from "../../db/schema";
 import {
   chooseFulfilmentBranch, quoteDelivery, roadDistanceKm, validateBands,
   type BasketLine, type DeliveryBand, type DeliveryQuote, type GeoPoint, type StockIndex,
@@ -9,6 +9,7 @@ import { requireSession } from "./auth";
 import { getDb } from "./db";
 import { json } from "./http";
 import { getSharedCache } from "./redis";
+import { requireTeamPermission } from "./staff-permissions";
 
 const admins = ["ADMIN", "SUPER_ADMIN"] as const;
 
@@ -521,6 +522,43 @@ export async function handleDeliverySettings(request: Request) {
 }
 
 /** Admin-facing preview: what would a customer at this pin be charged right now? */
+/**
+ * The delivery fee for a till sale: a phone or WhatsApp order the cashier is putting through.
+ *
+ * Priced with the same rules as the website, but always from the shop the till is in, because that is
+ * where the order is packed. The sale itself recalculates this and records any fee the cashier changes.
+ */
+export async function handlePosDeliveryQuote(request: Request) {
+  const auth = await requireTeamPermission(request, "POS_USE");
+  if ("response" in auth) return auth.response;
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, { status: 405 });
+  const parsed = pointSchema.extend({
+    sessionId: z.coerce.number().int().positive(),
+    subtotal: z.coerce.number().nonnegative().default(0),
+    items: z.array(z.object({ productId: z.coerce.number().int().positive(), quantity: z.coerce.number().int().min(1).max(999) })).max(250).default([]),
+  }).safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "Pin the delivery location to get a fee." }, { status: 400 });
+  const [session] = await getDb().select({ branchId: posSessions.branchId, userId: posSessions.userId, status: posSessions.status }).from(posSessions).where(eq(posSessions.id, parsed.data.sessionId)).limit(1);
+  if (!session || session.userId !== auth.session.userId || session.status !== "OPEN") return json({ error: "Open your POS session first." }, { status: 409 });
+  const resolved = await resolveDeliveryQuote({
+    point: { latitude: parsed.data.latitude, longitude: parsed.data.longitude },
+    lines: parsed.data.items,
+    subtotal: parsed.data.subtotal,
+    preferredBranchId: session.branchId,
+  });
+  return json({
+    available: resolved.quote.available,
+    fee: resolved.quote.fee,
+    free: resolved.quote.free,
+    distanceKm: resolved.quote.distanceKm,
+    message: resolved.quote.message,
+    bandLabel: resolved.quote.band?.label ?? null,
+    branchName: resolved.branch?.name ?? null,
+    routed: resolved.routed,
+    fallbackReason: resolved.fallbackReason,
+  });
+}
+
 export async function handleDeliveryPreview(request: Request) {
   const auth = await requireSession(request, [...admins]);
   if ("response" in auth) return auth.response;

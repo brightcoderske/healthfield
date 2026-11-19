@@ -23,6 +23,10 @@ export type PosWorkspaceData = {
   payment: { cashEnabled: boolean; mpesaEnabled: boolean; manualEnabled: boolean; tillNumber: string | null; accountName: string | null };
   /** Optional: the API service deploys separately, so an older build omits it. */
   vat?: { enabled: boolean; rate: number };
+  /** Whether this cashier may sell at a price other than the shelf price (POS_PRICE_EDIT). */
+  canEditPrices?: boolean;
+  /** The browser Maps key for finding a delivery location; null when maps are not set up. */
+  delivery?: { mapsApiKey: string | null };
 };
 
 export type PosReport = {

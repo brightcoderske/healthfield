@@ -3,6 +3,7 @@ export const STAFF_PERMISSION_VALUES = [
   "PRODUCTS_VIEW",
   "PRODUCTS_MANAGE",
   "POS_USE",
+  "POS_PRICE_EDIT",
   "ORDERS_VIEW",
   "ORDERS_PROCESS",
   "PAST_ORDERS_VIEW",
@@ -33,6 +34,7 @@ export const STAFF_PERMISSION_GROUPS: ReadonlyArray<{
   ] },
   { label: "Sales and orders", permissions: [
     { value:"POS_USE", label:"Use point of sale (POS)", description:"Open cashier sessions and use sales, payments, held sales, expenses, stock receiving and session reports for the assigned shop." },
+    { value:"POS_PRICE_EDIT", label:"Change prices at the till", description:"Sell a product at a different price on a till sale. The product's own price is not changed, and every change is recorded with the shelf price and who made it." },
     { value:"ORDERS_VIEW", label:"View active orders", description:"Open the shared active-order queue and order details." },
     { value:"ORDERS_PROCESS", label:"Process orders", description:"Change order details, fulfilment shops and statuses." },
     { value:"PAST_ORDERS_VIEW", label:"View past orders", description:"Open dispatched, completed and cancelled orders." },
@@ -63,12 +65,13 @@ export const STAFF_PERMISSION_GROUPS: ReadonlyArray<{
 // then narrow each account deliberately without a surprise lockout during rollout.
 // Some permissions are never handed out by default and are granted per account:
 //  - consultations, because issuing a prescription is a prescriber's act;
-//  - managing products, because it changes prices customers pay;
+//  - managing products and changing prices at the till, because they change what customers pay;
 //  - SMS reports and campaigns, because a campaign messages every customer and spends SMS credit.
 const GRANTED_DELIBERATELY: readonly StaffPermission[] = [
   "CONSULTATIONS_VIEW",
   "CONSULTATIONS_PROCESS",
   "PRODUCTS_MANAGE",
+  "POS_PRICE_EDIT",
   "SMS_VIEW",
   "CAMPAIGNS_MANAGE",
 ];
