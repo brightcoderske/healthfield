@@ -44,6 +44,7 @@ import { useGridColumns } from "./use-grid-columns";
 import { useCatalogueRestore } from "./use-catalogue-restore";
 import { HomeBlogGrid } from "./home-blog-grid";
 import { DeliveryBike } from "./delivery-bike";
+import { DeliveryCurve } from "./delivery-curve";
 import { readStorefrontFilters, writeStorefrontFilters } from "@/lib/storefront-url";
 
 type CatalogProduct = {
@@ -1494,10 +1495,13 @@ export function Storefront({
             with nothing in mind. Once a filter is on they only separate the filter from
             its results — and, in the two-column layout, they land under both. */}
         {!filtering && (
-          <PrescriptionHero className="prescription-hero-mobile" priority />
+          <PrescriptionHero
+            className="prescription-hero-mobile"
+            priority
+            // The delivery bike floats along the bottom of the phone banner rather than taking a row of its own.
+            overlay={<DeliveryBike id="banner" variant="banner" />}
+          />
         )}
-        {/* On a phone the banner has no room for the delivery bike, so it gets a road of its own here. */}
-        {!filtering && <DeliveryBike id="strip" variant="strip" />}
         {!filtering && <PrescriptionQuickActions />}
 
         {!filtering && (
@@ -1726,6 +1730,7 @@ export function Storefront({
           width={54}
           height={46}
         />
+        <DeliveryCurve id="services" />
       </button>
       <div
         className="approved-services-overlay"

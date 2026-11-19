@@ -1,4 +1,5 @@
 import { ArrowRight } from "lucide-react";
+import type { ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { CONSULT_PATH } from "./consult-banner";
@@ -23,10 +24,13 @@ export function PrescriptionHero({
   className,
   priority = false,
   availability = "7am – 10pm",
+  overlay,
 }: {
   className?: string;
   priority?: boolean;
   availability?: string;
+  /** Drawn inside the banner, over the picture and behind the words: the phone banner's delivery bike. */
+  overlay?: ReactNode;
 }) {
   return (
     <section className={className ? `prescription-hero ${className}` : "prescription-hero"}>
@@ -58,6 +62,7 @@ export function PrescriptionHero({
           <b>{availability}</b>
         </div>
       </div>
+      {overlay}
     </section>
   );
 }

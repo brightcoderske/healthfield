@@ -79,29 +79,33 @@
 @keyframes delivery-bike-speed { from { opacity: 0.25; } to { opacity: 0.75; } }
 
 /* Desktop banner: along the bottom, from just past the trust badges to the right edge. The banner is
-   too narrow for it below 1000px, where the strip under the phone banner shows instead. */
+   too narrow for it below 1000px, where it floats over the phone banner instead. */
 .delivery-bike-hero { --bike-width: 134px; position: absolute; z-index: 2; left: 440px; right: 14px; bottom: 2px; height: 92px; }
 /* Over the photograph it needs a soft white outline, or the purple and pink sink into the scene. */
 .delivery-bike-hero .delivery-bike-svg { filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 2px #fff) drop-shadow(0 4px 6px rgba(60, 24, 68, 0.22)); }
 @media (max-width: 999px) { .delivery-bike-hero { display: none; } }
 
-/* Phones and small tablets: a slim road of its own under the banner. */
-.delivery-bike-strip {
-  height: 86px;
-  margin: 8px 0 2px;
-  border-radius: 12px;
-  border: 1px solid #f6dfeb;
-  background: linear-gradient(180deg, #fff 0%, #fdf2f7 100%);
+/* Phones and small tablets: floating along the bottom of the phone banner. The banner's words and
+   button sit above it, so the bike passes behind them and they stay readable and tappable; it passes in
+   front of the picture. */
+.delivery-bike-banner { --bike-width: 108px; position: absolute; z-index: 1; left: 0; right: 0; bottom: 0; height: 84px; }
+.prescription-hero-mobile .prescription-hero-copy { position: relative; z-index: 2; }
+/* The banner gains a road along its bottom for the bike: the words and button end above it, and the
+   "Available" badge moves up to match, so the bike is in full view for the whole ride. Only the words'
+   arch passes behind the button. The picture still reaches the bottom edge. */
+@media (max-width: 999px) {
+  .prescription-hero-mobile:has(.delivery-bike-banner) .prescription-hero-copy { padding-bottom: 58px; }
+  .prescription-hero-mobile:has(.delivery-bike-banner) .prescription-hero-availability { bottom: 60px; }
 }
-.delivery-bike-strip::after {
-  content: "";
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 8px;
-  border-bottom: 2px dashed #ecc7da;
+@media (min-width: 1000px) { .delivery-bike-banner { display: none; } }
+
+/* The words take turns, 2.5 seconds each: the four phrases share one arc and fade in and out. */
+.delivery-bike-phrase { opacity: 0; animation: delivery-bike-phrase 10s ease-in-out infinite; }
+@keyframes delivery-bike-phrase {
+  0% { opacity: 0; }
+  4%, 21% { opacity: 1; }
+  25%, 100% { opacity: 0; }
 }
-@media (min-width: 1000px) { .delivery-bike-strip { display: none; } }
 
 /* Less motion asked for: the bike stays parked, facing the way in. */
 @media (prefers-reduced-motion: reduce) {
@@ -109,7 +113,45 @@
   .delivery-bike-face,
   .delivery-bike-svg,
   .delivery-bike-wheel,
-  .delivery-bike-speed { animation: none; }
+  .delivery-bike-speed,
+  .delivery-bike-phrase { animation: none; }
   .delivery-bike-rider { left: 12px; }
+  /* Only the first phrase, still. */
+  .delivery-bike-phrase:first-of-type { opacity: 1; }
   .delivery-bike-speed { opacity: 0.5; }
+}
+
+/* The delivery phrases curved over the floating Healthfield logo (app/delivery-curve.tsx), taking turns
+   like the bike's. No backing: the words carry a white outline so they read on any background. They
+   fade in once the page has scrolled past the banner. */
+.delivery-curve {
+  position: absolute;
+  /* Nudged 7px left of centre: the logo sits close to the screen's right edge, and the longest
+     phrase would otherwise run off it. */
+  inset: -18px -11px -18px -25px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+.delivery-curve.is-visible { opacity: 1; transform: translateY(0); }
+.delivery-curve svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.delivery-curve text {
+  fill: #70227e;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.2px;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 3.2px;
+  stroke-linejoin: round;
+}
+/* The back-to-top button sits just above the logo; with the words showing it moves up to keep clear. */
+body:has(.delivery-curve.is-visible) .back-to-top.visible { transform: translateY(-14px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .delivery-curve { transition: none; }
+  .delivery-curve .delivery-bike-phrase { animation: none; }
+  .delivery-curve .delivery-bike-phrase:first-of-type { opacity: 1; }
 }

@@ -1,26 +1,32 @@
+/** What the bike and the floating logo say, in turn. */
+export const DELIVERY_PHRASES = ["We deliver", "Order today", "In 3 hrs", "Countrywide"] as const;
+
 /**
- * A small delivery motorbike in the shop's colours that rides back and forth with "We deliver" arched
- * over it, so a visitor sees at a glance that orders can be brought to them.
+ * A small delivery motorbike in the shop's colours that rides back and forth with words arched over it
+ * that take turns: "We deliver", "Order today", "In 3 hrs", "Countrywide".
  *
  * Pure SVG and CSS (app/delivery-bike.css): nothing to download and no script running. The bike turns
  * round at each end so it always faces the way it is going; the words ride above it and never turn, so
  * they always read the right way. Anyone who has asked their device for less motion gets it parked.
  *
  *  - variant "hero": floats along the bottom of the desktop banner, beside the trust badges.
- *  - variant "strip": its own slim road under the phone banner, where the banner has no room for it.
+ *  - variant "banner": floats along the bottom of the phone banner, behind its words and button (so they
+ *    stay readable and tappable) and in front of the picture. It takes no space of its own.
  *
  * `id` keeps the curved text's path unique when both are on the page.
  */
-export function DeliveryBike({ id, variant }: { id: string; variant: "hero" | "strip" }) {
+export function DeliveryBike({ id, variant }: { id: string; variant: "hero" | "banner" }) {
   const arc = `delivery-bike-arc-${id}`;
   return (
-    <div className={`delivery-bike-lane delivery-bike-${variant}`} role="img" aria-label="We deliver">
+    <div className={`delivery-bike-lane delivery-bike-${variant}`} role="img" aria-label={DELIVERY_PHRASES.join(". ")}>
       <div className="delivery-bike-rider">
         <svg className="delivery-bike-words" viewBox="0 0 128 34" aria-hidden="true">
           <path id={arc} d="M14 31 Q64 -1 114 31" fill="none" />
-          <text>
-            <textPath href={`#${arc}`} startOffset="50%" textAnchor="middle">We deliver</textPath>
-          </text>
+          {DELIVERY_PHRASES.map((phrase, index) => (
+            <text key={phrase} className="delivery-bike-phrase" style={{ animationDelay: `${index * 2.5}s` }}>
+              <textPath href={`#${arc}`} startOffset="50%" textAnchor="middle">{phrase}</textPath>
+            </text>
+          ))}
         </svg>
         <div className="delivery-bike-face">
           <svg className="delivery-bike-svg" viewBox="-16 0 136 64" aria-hidden="true">
