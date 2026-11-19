@@ -1,0 +1,115 @@
+/* The "We deliver" motorbike (app/delivery-bike.tsx).
+
+   The lane is a size container, so the ride is measured in its own width (cqw): the bike goes from
+   one end to the other whatever the screen size. One trip each way takes 7.2 seconds, with a pause at
+   each end in which the bike turns round (it squeezes through scaleX(0), which reads as a U-turn).
+   Only transform and opacity are animated, so the browser can run it without re-laying out the page. */
+
+.delivery-bike-lane {
+  --bike-width: 122px;
+  position: relative;
+  container-type: inline-size;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.delivery-bike-rider {
+  position: absolute;
+  left: 0;
+  bottom: 4px;
+  width: var(--bike-width);
+  animation: delivery-bike-ride 16s ease-in-out infinite;
+  will-change: transform;
+}
+
+.delivery-bike-words {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  margin-bottom: -6px;
+}
+.delivery-bike-words text {
+  fill: #70227e;
+  font-family: inherit;
+  font-size: 14.5px;
+  font-weight: 850;
+  letter-spacing: 0.4px;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.delivery-bike-face { animation: delivery-bike-face 16s ease-in-out infinite; transform-origin: 50% 50%; }
+.delivery-bike-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  animation: delivery-bike-bob 0.42s ease-in-out infinite alternate;
+  filter: drop-shadow(0 4px 6px rgba(60, 24, 68, 0.18));
+}
+.delivery-bike-wheel { transform-box: fill-box; transform-origin: center; animation: delivery-bike-spin 0.55s linear infinite; }
+.delivery-bike-speed { animation: delivery-bike-speed 0.42s ease-in-out infinite alternate; }
+.delivery-bike-shadow {
+  position: absolute;
+  left: 18%;
+  right: 12%;
+  bottom: -3px;
+  height: 7px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(60, 24, 68, 0.22), transparent);
+}
+
+@keyframes delivery-bike-ride {
+  0%, 3% { transform: translateX(0); }
+  45%, 53% { transform: translateX(calc(100cqw - var(--bike-width))); }
+  95%, 100% { transform: translateX(0); }
+}
+@keyframes delivery-bike-face {
+  0%, 45% { transform: scaleX(1); }
+  49% { transform: scaleX(0.05); }
+  53%, 95% { transform: scaleX(-1); }
+  99% { transform: scaleX(-0.05); }
+  100% { transform: scaleX(1); }
+}
+@keyframes delivery-bike-bob { from { transform: translateY(0); } to { transform: translateY(-1.6px); } }
+@keyframes delivery-bike-spin { to { transform: rotate(360deg); } }
+@keyframes delivery-bike-speed { from { opacity: 0.25; } to { opacity: 0.75; } }
+
+/* Desktop banner: along the bottom, from just past the trust badges to the right edge. The banner is
+   too narrow for it below 1000px, where the strip under the phone banner shows instead. */
+.delivery-bike-hero { --bike-width: 134px; position: absolute; z-index: 2; left: 440px; right: 14px; bottom: 2px; height: 92px; }
+/* Over the photograph it needs a soft white outline, or the purple and pink sink into the scene. */
+.delivery-bike-hero .delivery-bike-svg { filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 2px #fff) drop-shadow(0 4px 6px rgba(60, 24, 68, 0.22)); }
+@media (max-width: 999px) { .delivery-bike-hero { display: none; } }
+
+/* Phones and small tablets: a slim road of its own under the banner. */
+.delivery-bike-strip {
+  height: 86px;
+  margin: 8px 0 2px;
+  border-radius: 12px;
+  border: 1px solid #f6dfeb;
+  background: linear-gradient(180deg, #fff 0%, #fdf2f7 100%);
+}
+.delivery-bike-strip::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 8px;
+  border-bottom: 2px dashed #ecc7da;
+}
+@media (min-width: 1000px) { .delivery-bike-strip { display: none; } }
+
+/* Less motion asked for: the bike stays parked, facing the way in. */
+@media (prefers-reduced-motion: reduce) {
+  .delivery-bike-rider,
+  .delivery-bike-face,
+  .delivery-bike-svg,
+  .delivery-bike-wheel,
+  .delivery-bike-speed { animation: none; }
+  .delivery-bike-rider { left: 12px; }
+  .delivery-bike-speed { opacity: 0.5; }
+}

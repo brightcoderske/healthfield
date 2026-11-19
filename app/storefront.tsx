@@ -43,6 +43,7 @@ import { planBreaks, ROWS_BETWEEN_BREAKS } from "@/lib/catalogue-breaks";
 import { useGridColumns } from "./use-grid-columns";
 import { useCatalogueRestore } from "./use-catalogue-restore";
 import { HomeBlogGrid } from "./home-blog-grid";
+import { DeliveryBike } from "./delivery-bike";
 import { readStorefrontFilters, writeStorefrontFilters } from "@/lib/storefront-url";
 
 type CatalogProduct = {
@@ -1363,6 +1364,7 @@ export function Storefront({
                   <Sparkles /> Genuine Products
                 </span>
               </div>
+              <DeliveryBike id="hero" variant="hero" />
             </section>
             <PrescriptionHero />
             </HeroRotator>
@@ -1494,6 +1496,8 @@ export function Storefront({
         {!filtering && (
           <PrescriptionHero className="prescription-hero-mobile" priority />
         )}
+        {/* On a phone the banner has no room for the delivery bike, so it gets a road of its own here. */}
+        {!filtering && <DeliveryBike id="strip" variant="strip" />}
         {!filtering && <PrescriptionQuickActions />}
 
         {!filtering && (
