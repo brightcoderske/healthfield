@@ -1100,6 +1100,9 @@ async function smsReportView() {
   };
 }
 
+/** The most unmatched Till receipts the admin screen is sent at once; it shows them 50 to a page. */
+const UNMATCHED_PAYMENTS_LIMIT = 5000;
+
 export async function handleView(request: Request, path: string) {
   const url = new URL(request.url);
   if (path === "walk-in-sale") return posWorkspaceState(request);
@@ -2218,13 +2221,24 @@ export async function handleView(request: Request, path: string) {
       });
     }
     if (view === "unmatched-payments") {
-      const [incoming, candidates, exceptions] = await Promise.all([
+      // Every unmatched receipt up to a generous cap (the screen pages through them 50 at a time), with
+      // only the columns it shows: Safaricom's raw payload stays on the server.
+      const [incoming, candidates, exceptions, [{ unmatchedTotal }]] = await Promise.all([
         db
-          .select()
+          .select({
+            id: mpesaIncomingPayments.id,
+            receiptNumber: mpesaIncomingPayments.receiptNumber,
+            amount: mpesaIncomingPayments.amount,
+            phone: mpesaIncomingPayments.phone,
+            payerName: mpesaIncomingPayments.payerName,
+            accountReference: mpesaIncomingPayments.accountReference,
+            transactionTime: mpesaIncomingPayments.transactionTime,
+            createdAt: mpesaIncomingPayments.createdAt,
+          })
           .from(mpesaIncomingPayments)
           .where(isNull(mpesaIncomingPayments.matchedTransactionId))
           .orderBy(desc(mpesaIncomingPayments.createdAt))
-          .limit(500),
+          .limit(UNMATCHED_PAYMENTS_LIMIT),
         db
           .select({
             orderId: orders.id,
@@ -2282,6 +2296,7 @@ export async function handleView(request: Request, path: string) {
           )
           .orderBy(desc(paymentTransactions.createdAt))
           .limit(200),
+        db.select({ unmatchedTotal: count() }).from(mpesaIncomingPayments).where(isNull(mpesaIncomingPayments.matchedTransactionId)),
       ]);
       const payments = incoming.map((item) => {
         const sameAmountReceiptCount = incoming.filter(
@@ -2308,7 +2323,7 @@ export async function handleView(request: Request, path: string) {
       });
       // Sent with the page so the screen where missing payments are chased can say why
       // they are missing, rather than leaving "M-Pesa is configured" to imply delivery.
-      return json({ payments, exceptions, till: await c2bRegistrationState() });
+      return json({ payments, total: Number(unmatchedTotal), exceptions, till: await c2bRegistrationState() });
     }
     if (view === "settings") {
       // Explicit columns rather than select(): the row still carries unused
