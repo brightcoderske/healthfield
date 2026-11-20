@@ -231,6 +231,8 @@ on_exit() {
     restore_storefront
     report_site
   fi
+  # Defined further down; a failure before that point has nothing to stop.
+  if declare -F stop_resource_log >/dev/null; then stop_resource_log; fi
   rm -rf "${RELEASE_STAGE}" 2>/dev/null
   exit ${status}
 }
@@ -294,14 +296,39 @@ else
   echo "taskset is not usable here; the storefront build will see every CPU and start a large thread pool."
 fi
 account_threads() { ps -eLo pid -u "$(id -un)" 2>/dev/null | tail -n +2 | wc -l | tr -d ' ' || true; }
+
+# While the build runs, a line every 15 seconds: the account's threads (its limit is 100), its memory
+# (the limit is 2 GB) and which programs hold the most threads. When the account fills up, a second SSH
+# window cannot even open to look, so the log is the only place this can be seen afterwards. It only
+# reads; if the account is too full to run ps for a moment, that line is simply skipped.
+RESOURCE_LOG_PID=""
+resource_snapshot() {
+  local user threads memory busiest
+  user="$(id -un)"
+  threads="$(account_threads)"
+  memory="$(ps -u "${user}" -o rss= 2>/dev/null | awk '{ total += $1 } END { printf "%d", total / 1024 }' || true)"
+  busiest="$(ps -eLo comm= -u "${user}" 2>/dev/null | sort | uniq -c | sort -rn | head -5 | awk '{ printf "%s x%s, ", $2, $1 }' || true)"
+  [[ -n "${threads}" ]] && echo "  [resources $(date -u +%H:%M:%S)] threads ${threads}/100, memory ${memory:-?} MB of 2048; most threads: ${busiest%, }"
+}
+start_resource_log() {
+  ( while sleep 15; do resource_snapshot || true; done ) &
+  RESOURCE_LOG_PID=$!
+}
+stop_resource_log() {
+  if [[ -n "${RESOURCE_LOG_PID}" ]]; then kill "${RESOURCE_LOG_PID}" 2>/dev/null || true; wait "${RESOURCE_LOG_PID}" 2>/dev/null || true; RESOURCE_LOG_PID=""; fi
+}
 BUILD_ATTEMPT=1
 echo "Threads in use by this account before the build: $(account_threads) of 100."
+resource_snapshot || true
+start_resource_log
 until LOW_RESOURCE_BUILD=1 RAYON_NUM_THREADS=1 UV_THREADPOOL_SIZE=2 NODE_OPTIONS="--max-old-space-size=${BUILD_MEMORY_MB}" ${PIN_CPU[@]+"${PIN_CPU[@]}"} "${PNPM_COMMAND[@]}" run build; do
   if (( BUILD_ATTEMPT >= 3 )); then echo "deploy: the storefront build failed ${BUILD_ATTEMPT} times." >&2; exit 1; fi
   BUILD_ATTEMPT=$((BUILD_ATTEMPT + 1))
   echo "deploy: the storefront build failed (often a momentary process limit); threads in use by this account now: $(account_threads) of 100; trying again in 20 seconds (attempt ${BUILD_ATTEMPT} of 3)..." >&2
   sleep 20
 done
+stop_resource_log
+resource_snapshot || true
 test -s "${STOREFRONT_BUILD}/BUILD_ID"
 
 # ---------------------------------------------------------------- database
