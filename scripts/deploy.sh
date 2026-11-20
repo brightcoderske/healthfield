@@ -144,6 +144,17 @@ stop_app() {
   echo "No ${label} workers remain."
 }
 
+# The keep-alive cron (curl /health every minute) would wake the app again while it is stopped for the
+# build, so the app and the build would compete for the account's 100 processes and 2 GB. The cron skips
+# its call while this file is fresh (see DEPLOYMENT.md); it is removed whenever this script ends, and a
+# copy left by a deploy that was killed outright is ignored by the cron after 20 minutes.
+DEPLOY_FLAG="${APP_ROOT}/tmp/deploying"
+mkdir -p "${APP_ROOT}/tmp"
+touch "${DEPLOY_FLAG}"
+clear_deploy_flag() { rm -f "${DEPLOY_FLAG}" 2>/dev/null || true; }
+# Until the full exit handler below takes over, any exit still clears the flag.
+trap clear_deploy_flag EXIT
+
 stop_app "Healthfield" "${APP_ROOT}"
 # The retired API-only app can leave a worker behind after it is stopped in cPanel. It runs old code
 # and its own copy of the scheduled jobs, and it uses up the account's process allowance.
@@ -231,6 +242,7 @@ on_exit() {
     restore_storefront
     report_site
   fi
+  clear_deploy_flag
   # Defined further down; a failure before that point has nothing to stop.
   if declare -F stop_resource_log >/dev/null; then stop_resource_log; fi
   rm -rf "${RELEASE_STAGE}" 2>/dev/null
@@ -362,6 +374,7 @@ fi
 # ---------------------------------------------------------------- ask Passenger to start it again
 # Touching tmp/restart.txt is the supported way to make a cPanel Node app restart; it is harmless
 # if the app is not registered yet.
+clear_deploy_flag
 touch "${APP_ROOT}/tmp/restart.txt"
 
 echo "Deployed ${DEPLOY_SHORT_COMMIT} at ${COMPLETED_AT}."

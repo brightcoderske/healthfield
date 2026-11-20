@@ -117,3 +117,14 @@ older release keeps working against a migrated one.
 3. Log in, add to the cart and place an order. The customer and team emails arrive.
 4. Admin: the product table loads, and a product image loads after upload.
 5. A prescription file can be downloaded by a pharmacist but is not publicly addressable.
+
+## Keep-alive cron (cPanel → Cron Jobs, every minute)
+
+The host stops the app when the site is idle, and while it is stopped no SMS retries or M-Pesa
+reconciliation run, so messages can go out hours late. A request every minute keeps it running. It skips
+its request while a deploy is under way (`scripts/deploy.sh` keeps `tmp/deploying` fresh while it builds),
+so it cannot wake the app to compete with the build; a flag older than 20 minutes is ignored.
+
+```bash
+[ -n "$(find ~/health_field/tmp/deploying -mmin -20 2>/dev/null)" ] || curl -fsS -o /dev/null --max-time 30 https://www.healthfieldpharmacy.co.ke/health
+```
