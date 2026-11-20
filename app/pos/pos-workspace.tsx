@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  Banknote, BarChart3, Camera, CheckCircle2, ChevronLeft, ChevronRight, CircleDollarSign,
+  Banknote, BarChart3, Camera, CheckCircle2, ChevronLeft, ChevronRight, CircleDollarSign, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen,
   ClipboardList, CreditCard, FileText, HandCoins, LoaderCircle, Minus, PackagePlus, Pause,
   Percent, Plus, Printer, ReceiptText, RotateCcw, Search, ShoppingCart, Smartphone, Trash2, Truck, UserRound,
   WalletCards, X,
@@ -9,7 +9,7 @@ import {
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { FormEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, Fragment, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createCheckoutToken } from "@/lib/checkout-token";
 import { cashChange, nairobiDateTime, saleTotal, splitPaymentBalances } from "@/lib/pos";
 import { manualTillPollDelay, paymentPollDelay } from "@/lib/payment-poll";
@@ -32,6 +32,28 @@ const money = (value: number) => `KES ${Number(value || 0).toLocaleString("en-KE
 
 /** type="number" still accepts e, E, + and - in most browsers; a till amount never contains them. */
 const digitsOnly = (event: ReactKeyboardEvent<HTMLInputElement>) => { if (["e", "E", "+", "-"].includes(event.key)) event.preventDefault(); };
+
+// Hiding the admin or staff menu beside the till, remembered on this device. Kept outside React state
+// so the server render (menu shown) and the first browser render agree; the class it sets on <html> is
+// what hides the menu (pos.module.css cannot reach the layout around the till).
+const MENU_KEY = "healthfield:pos:menu-hidden";
+const menuListeners = new Set<() => void>();
+function subscribeMenu(listener: () => void) {
+  menuListeners.add(listener);
+  window.addEventListener("storage", listener);
+  return () => { menuListeners.delete(listener); window.removeEventListener("storage", listener); };
+}
+function menuHiddenNow() {
+  try { return window.localStorage.getItem(MENU_KEY) === "true"; } catch { return false; }
+}
+function setMenuHidden(hidden: boolean) {
+  try { window.localStorage.setItem(MENU_KEY, String(hidden)); } catch { /* not remembered, still applied */ }
+  menuListeners.forEach((listener) => listener());
+}
+function subscribeFullscreen(listener: () => void) {
+  document.addEventListener("fullscreenchange", listener);
+  return () => document.removeEventListener("fullscreenchange", listener);
+}
 
 /** Exact amount first, then the notes a customer is most likely to hand over. */
 function tenderOptions(due: number) {
@@ -140,6 +162,18 @@ function ActivePos({ data, backHref, clock, initialPanel = null }: { data: PosWo
   const [editingPrice, setEditingPrice] = useState<number | null>(null);
   const [delivery, setDelivery] = useState<PosDelivery | null>(null);
   const [deliveryOpen, setDeliveryOpen] = useState(false);
+  // More room for the sale: the menu beside the till can be hidden, and the till can go full screen.
+  const menuHidden = useSyncExternalStore(subscribeMenu, menuHiddenNow, () => false);
+  const fullscreen = useSyncExternalStore(subscribeFullscreen, () => Boolean(document.fullscreenElement), () => false);
+  useEffect(() => {
+    document.documentElement.classList.toggle("pos-menu-hidden", menuHidden);
+    // Leaving the till puts the menu back for the rest of the admin.
+    return () => document.documentElement.classList.remove("pos-menu-hidden");
+  }, [menuHidden]);
+  function toggleFullscreen() {
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    else void document.documentElement.requestFullscreen?.().catch(() => setMessage("This browser would not open full screen. Press F11 instead."));
+  }
 
   useEffect(() => { setAutoPrint(window.localStorage.getItem("healthfield:pos:auto-print") === "true"); }, []);
   useEffect(() => { focusSearch(); }, [focusSearch]);
@@ -321,6 +355,8 @@ function ActivePos({ data, backHref, clock, initialPanel = null }: { data: PosWo
       <button onClick={() => setPanel("reports")}><BarChart3/> Reports</button>
       <button className={autoPrint ? styles.printToggleOn : styles.printToggle} aria-pressed={autoPrint} onClick={toggleAutoPrint}><Printer/> Auto-print {autoPrint ? "on" : "off"}</button>
       <button className={showVat ? styles.printToggleOn : undefined} aria-pressed={showVat} disabled={!vatRate} title={vatRate ? "Add VAT to this sale" : "Set a VAT rate in settings first"} onClick={toggleVat}><Percent/> VAT {showVat ? "on" : "off"}</button>
+      <button className={styles.viewToggle} aria-pressed={menuHidden} onClick={() => setMenuHidden(!menuHidden)} title={menuHidden ? "Show the menu beside the till" : "Hide the menu to give the till more room"}>{menuHidden ? <PanelLeftOpen/> : <PanelLeftClose/>} {menuHidden ? "Show menu" : "Hide menu"}</button>
+      <button className={styles.viewToggle} aria-pressed={fullscreen} onClick={toggleFullscreen} title={fullscreen ? "Leave full screen" : "Use the whole screen for the till"}>{fullscreen ? <Minimize2/> : <Maximize2/>} {fullscreen ? "Exit full screen" : "Full screen"}</button>
     </nav>
     <div className={styles.workspace}>
       <section className={styles.catalogue}>
@@ -341,16 +377,25 @@ function ActivePos({ data, backHref, clock, initialPanel = null }: { data: PosWo
       </section>
       <section className={styles.salePanel} ref={salePanelRef}>
         <header><ShoppingCart/><strong>Current sale</strong><b>{cartCount}</b>{rows.length ? <button type="button" className={styles.clearCart} onClick={() => { setCart({}); setDiscount(""); setMessage("Sale cleared."); }}>Clear</button> : null}</header>
-        <div className={styles.cart}>{rows.length ? rows.map((row) => <div className={styles.cartRow} key={row.id}>
+        <div className={styles.cart}>{rows.length ? rows.map((row) => <Fragment key={row.id}><div className={styles.cartRow}>
           <span><strong>{row.name}</strong><small>{money(row.unit)} each{row.unit !== row.shelf ? <em className={styles.wasPrice}> · shelf {money(row.shelf)}</em> : null}</small>{canEditPrices ? <button type="button" className={styles.priceLink} onClick={() => setEditingPrice((current) => current === row.id ? null : row.id)}>{editingPrice === row.id ? "Done" : "Change price"}</button> : null}</span>
           <div><button onClick={() => setQuantity(row.id, row.quantity - 1)}><Minus/></button><input type="number" min="1" max={row.available} value={row.quantity} onChange={(event) => setQuantity(row.id, Number(event.target.value))}/><button onClick={() => setQuantity(row.id, row.quantity + 1)}><Plus/></button></div>
           <strong>{money(row.unit * row.quantity)}</strong><button className={styles.remove} onClick={() => { setQuantity(row.id, 0); setPrices((current) => { const next = { ...current }; delete next[row.id]; return next; }); }}><X/></button>
+        </div>
+          {/* Its own block under the line, not inside it: the line's compact controls are 28px wide. */}
           {canEditPrices && editingPrice === row.id ? <div className={styles.priceEditor}>
-            <label>Price each for this sale (KES)<input type="number" inputMode="decimal" min="0.01" step=".01" autoFocus value={prices[row.id] ?? String(row.shelf)} onKeyDown={digitsOnly} onChange={(event) => { const value = event.target.value; setPrices((current) => ({ ...current, [row.id]: value })); }}/></label>
-            <button type="button" onClick={() => { setPrices((current) => { const next = { ...current }; delete next[row.id]; return next; }); setEditingPrice(null); }}>Use shelf price</button>
-            <small>Only this sale changes. The change is recorded with the shelf price and your name.</small>
+            <label htmlFor={`pos-price-${row.id}`}>New price each for this sale <small>Shelf price {money(row.shelf)}</small></label>
+            <div className={styles.priceEditorRow}>
+              <span>KES</span>
+              <input id={`pos-price-${row.id}`} type="number" inputMode="decimal" min="0.01" step=".01" autoFocus value={prices[row.id] ?? String(row.shelf)} onFocus={(event) => event.currentTarget.select()} onKeyDown={(event) => { digitsOnly(event); if (event.key === "Enter") { event.preventDefault(); setEditingPrice(null); } }} onChange={(event) => { const value = event.target.value; setPrices((current) => ({ ...current, [row.id]: value })); }}/>
+              <button type="button" className={styles.priceDone} onClick={() => setEditingPrice(null)}>Done</button>
+            </div>
+            <div className={styles.priceEditorFoot}>
+              <button type="button" onClick={() => { setPrices((current) => { const next = { ...current }; delete next[row.id]; return next; }); setEditingPrice(null); }}>Use shelf price</button>
+              <small>Only this sale changes. Recorded with the shelf price and your name.</small>
+            </div>
           </div> : null}
-        </div>) : <div className={styles.emptyCart}><ShoppingCart/><strong>Start a new sale</strong><span>Search, scan, or tap a product.</span></div>}</div>
+        </Fragment>) : <div className={styles.emptyCart}><ShoppingCart/><strong>Start a new sale</strong><span>Search, scan, or tap a product.</span></div>}</div>
         <div className={styles.totals}><label>Discount (KES)<input type="number" min="0" max={subtotal} step=".01" value={discount} onChange={(event) => setDiscount(event.target.value)}/></label><p><span>Subtotal</span><b>{money(subtotal)}</b></p><p><span>Discount</span><b>- {money(Number(discount) || 0)}</b></p>{vatAmount !== null ? <p className={styles.vatLine}><span>{vatRateLabel(vatRate)}</span><b>+ {money(vatAmount)}</b></p> : null}{delivery ? <p className={styles.deliveryLine}><span>Delivery{delivery.area ? ` · ${delivery.area}` : ""}</span><b>+ {money(deliveryFee)}</b></p> : null}<p className={styles.grand}><span>Total</span><b>{money(total)}</b></p></div>
         <button type="button" className={delivery ? styles.deliveryChipOn : styles.deliveryChip} disabled={!rows.length} onClick={() => { setMessage(""); setDeliveryOpen(true); }}><Truck/><span><small>Delivery</small><strong>{delivery ? delivery.address : "Collected at the counter — tap to add delivery"}</strong></span><ChevronRight/></button>
         <button type="button" className={customerSummary ? styles.customerChipOn : styles.customerChip} onClick={() => { setMessage(""); setCheckout("DETAILS"); }}><UserRound/><span><small>Customer</small><strong>{customerSummary || "Walk-in — tap to add name, phone or email"}</strong></span><ChevronRight/></button>
